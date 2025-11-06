@@ -35,7 +35,7 @@ CODE_RE_CODEONLY = re.compile(
 # Multipliers: allow '*', 'x', or unicode '×' followed by an arithmetic expression
 # Supports numbers with optional leading dot, chained by * or / (e.g., 5.7/4, .5*2/3)
 MULT_RE = re.compile(
-    r"[*x×]\s*([0-9]*\.?[0-9]+(?:\s*[*/]\s*[0-9]*\.?[0-9]+)*)",
+    r"[*x]\s*([0-9]*\.?[0-9]+(?:\s*[*/]\s*[0-9]*\.?[0-9]+)*)",
     re.IGNORECASE
 )
 # Accept @HH or @HH:MM (24h)
@@ -114,7 +114,7 @@ def parse_selection_to_items(selection):
             items.append({"time": _norm_time(h, m)})
             continue
 
-        # GROUP form: ( ... ) *<mult?>  (also accepts x / ×)
+        # GROUP form: ( ... ) *<mult?>  (also accepts x / )
         if c.startswith("(") and ")" in c:
             close = c.rfind(")")
             inside = c[1:close]
@@ -182,7 +182,7 @@ def _fmt_x(val) -> str:
     Format the quantity for the report's 'x' column to width 4:
     - Right-justify
     - Trim trailing zeros and trailing decimal
-    - Try 0–3 decimals, rounding as needed to fit
+    - Try 0 to 3 decimals, rounding as needed to fit
     """
     try:
         import numpy as np
@@ -284,7 +284,7 @@ def ensure_pending_shape(p):
         # string: could be codes and/or @time; let the parser handle it (returns list)
         if isinstance(it, str):
             return parse_selection_to_items(it)
-        # unknown → drop
+        # unknown, drop
         return None
 
     # List top-level: treat as list of items/strings
@@ -300,7 +300,7 @@ def ensure_pending_shape(p):
                 norm_items.append(ni)
         return {"date": str(date.today()), "items": norm_items}
 
-    # Non-dict → not salvageable
+    # Non-dict, not salvageable
     if not isinstance(p, dict):
         return None
 
@@ -604,7 +604,7 @@ def _eval_mult_expr(expr: str) -> float:
     """
     Evaluate a very small safe subset: NUM (( '*' | '/' ) NUM)*
     Left-to-right. Each NUM may be like '5', '5.7', '.5', '0.25'
-    Whitespace is allowed. No parentheses or +/− supported.
+    Whitespace is allowed. No parentheses or +/- supported.
     """
     if not expr:
         return 1.0
@@ -628,7 +628,7 @@ def _eval_mult_expr(expr: str) -> float:
                 val = val / rhs if rhs != 0 else 0.0
         return val
     except Exception:
-        # Fallback: don’t crash on weird input; behave as 1.0 multiplier
+        # Fallback: don't crash on weird input; behave as 1.0 multiplier
         return 1.0
 
 def _lookup_master_row(code, master, cols):
@@ -696,7 +696,7 @@ def build_report_from_items(items, master):
 def print_report(rows, totals, title="Report", missing=None, display=None):
     """Tabular breakdown + totals. Interleaves time markers if display is provided."""
 
-    # local helper: format multiplier to ≤ 4 chars, right-aligned
+    # local helper: format multiplier to .le. 4 chars, right-aligned
     def _fmt_mult4(v):
         if v in ("", None):
             return ""
@@ -755,7 +755,7 @@ def print_report(rows, totals, title="Report", missing=None, display=None):
                           f"{int(round(r['sugar_g'])):>6} {int(round(r.get('gl',0))):>4}")
         print("-"*78)
 
-    print(f"Totals →  Cal: {int(round(totals['cal']))} | "
+    print(f"Totals =  Cal: {int(round(totals['cal']))} | "
           f"P: {int(round(totals['prot_g']))} g | "
           f"C: {int(round(totals['carbs_g']))} g | "
           f"F: {int(round(totals['fat_g']))} g | "
@@ -1054,7 +1054,7 @@ def make_trend_chart(df: pd.DataFrame, window: int, outfile: str = "meal_plan_tr
         _plot_with_gaps(
             ax, dates, y_ma_masked,
             color="red", linestyle="--", linewidth=2.0,
-            label=f"MA({window})", singleton_label=f"MA({window}) (×1)", singleton_marker="x", markersize=8
+            label=f"MA({window})", singleton_label=f"MA({window}) (x1)", singleton_marker="x", markersize=8
         )
 
         ax.set_ylabel(label)
@@ -1062,7 +1062,7 @@ def make_trend_chart(df: pd.DataFrame, window: int, outfile: str = "meal_plan_tr
         ax.legend(loc="upper left", frameon=False)
 
     axes[-1].set_xlabel("Date")
-    fig.suptitle(f"Daily Totals + Moving Average ({window} days) — gaps broken; singletons marked ('+' daily, 'x' MA)", fontsize=14)
+    fig.suptitle(f"Daily Totals + Moving Average ({window} days) - gaps broken; singletons marked ('+' daily, 'x' MA)", fontsize=14)
 
     fig.savefig(outfile, dpi=150, format="jpg")
     plt.close(fig)
@@ -1115,7 +1115,7 @@ def _build_items_df(items: list, master: pd.DataFrame) -> pd.DataFrame:
         mult = float(it.get("mult", 1.0))
         mrow = _lookup_master_row(code, master, cols)
         if mrow is None:
-            # Unknown code → zero contribution but still list it
+            # Unknown code = zero contribution but still list it
             rows.append({
                 "code": code, "option": "(unknown)", "section": "",
                 "mult": mult,
@@ -1170,15 +1170,15 @@ def _render_report(base_df: pd.DataFrame, kept_df: pd.DataFrame):
 
     print("\nTotals:")
     print(
-        f"  Original → Cal: {t0['cal']:.0f} | P: {t0['prot_g']:.0f} g | "
+        f"  Original = Cal: {t0['cal']:.0f} | P: {t0['prot_g']:.0f} g | "
         f"C: {t0['carbs_g']:.0f} g | F: {t0['fat_g']:.0f} g | Sugars: {t0['sugars_g']:.0f} g | GL: {t0['GL']:.0f}"
     )
     print(
-        f"  Adjusted → Cal: {t1['cal']:.0f} | P: {t1['prot_g']:.0f} g | "
+        f"  Adjusted = Cal: {t1['cal']:.0f} | P: {t1['prot_g']:.0f} g | "
         f"C: {t1['carbs_g']:.0f} g | F: {t1['fat_g']:.0f} g | Sugars: {t1['sugars_g']:.0f} g | GL: {t1['GL']:.0f}"
     )
     print(
-        f"  Delta    → Cal: {fmt_delta(td['cal'])} | P: {fmt_delta(td['prot_g'])} g | "
+        f"  Delta    = Cal: {fmt_delta(td['cal'])} | P: {fmt_delta(td['prot_g'])} g | "
         f"C: {fmt_delta(td['carbs_g'])} g | F: {fmt_delta(td['fat_g'])} g | Sugars: {fmt_delta(td['sugars_g'])} g | GL: {fmt_delta(td['GL'])}"
     )
     print("")
@@ -1744,7 +1744,7 @@ def repl():
 
             n = len(base_items)
             if n == 0:
-                print(f"\nWHAT-IF PREVIEW ({label}) — nothing to show.")
+                print(f"\nWHAT-IF PREVIEW ({label}) - nothing to show.")
                 continue
 
             # parse selectors into 0-based indices using existing helper
@@ -1756,7 +1756,7 @@ def repl():
             excluded = base_df[base_df["idx"].isin(drop_1based)]
             kept = base_df[~base_df["idx"].isin(drop_1based)]
 
-            print(f"\nWHAT-IF PREVIEW (no changes saved) — {label}")
+            print(f"\nWHAT-IF PREVIEW (no changes saved) - {label}")
             if excluded.empty:
                 print("Excluded: (none matched)")
             else:
@@ -1780,7 +1780,7 @@ def repl():
 
         # ---- stash: session-only push/pop ----
         if low == "stash push":
-            # deep-copy the current pending so later edits don’t mutate the stashed copy
+            # deep-copy the current pending so later edits don't mutate the stashed copy
             import copy
             snapshot = copy.deepcopy(pending) if pending else None
             pending_stack.append(snapshot)
