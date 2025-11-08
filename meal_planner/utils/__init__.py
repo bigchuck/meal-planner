@@ -8,6 +8,7 @@ from .columns import (
     get_sugar_column,
     ColumnResolver,
 )
+from .search import hybrid_search, parse_search_query
 
 __all__ = [
     'get_column',
@@ -15,4 +16,6 @@ __all__ = [
     'get_codes_column',
     'get_sugar_column',
     'ColumnResolver',
+    'hybrid_search',
+    'parse_search_query',
 ]
