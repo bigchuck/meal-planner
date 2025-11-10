@@ -94,44 +94,37 @@ class MasterLoader:
             return None
         
         return match.iloc[0].to_dict()
-    
+
     def search(self, term: str) -> pd.DataFrame:
         """
-        Search for meals matching a term (code, section, or option).
-        
+        Search for meals matching a term with boolean logic support.
+
+        Supports:
+        - Quoted phrases: "green beans" (exact phrase)
+        - Boolean operators: AND, OR, NOT
+        - Default: spaces = AND
+        - Code patterns: "fr." matches codes starting with FR.
+    
         Args:
-            term: Search term (case-insensitive)
-        
+            term: Search query (case-insensitive)
+    
         Returns:
             DataFrame of matching rows
-        
-        Example:
-            >>> loader = MasterLoader("master.csv")
-            >>> results = loader.search("chicken")
-            >>> print(f"Found {len(results)} matches")
+    
+        Examples:
+            >>> loader.search("chicken")           # substring match
+            >>> loader.search("green beans")       # both words (AND)
+            >>> loader.search('"green beans"')     # exact phrase
+            >>> loader.search("chicken OR fish")   # either word
+            >>> loader.search("beans NOT green")   # beans but not green
+            >>> loader.search("fr.")               # codes starting with FR.
         """
-        term_lower = term.strip().lower()
-        
-        if not term_lower:
+        from meal_planner.utils.search import hybrid_search
+
+        if not term.strip():
             return pd.DataFrame()
-        
-        cols = self.cols
-        
-        # Create searchable columns (normalized)
-        df = self.df.copy()
-        df['_search_code'] = df[cols.code].astype(str).str.lower()
-        df['_search_section'] = df[cols.section].astype(str).str.lower()
-        df['_search_option'] = df[cols.option].astype(str).str.lower()
-        
-        # Match in any column
-        mask = (
-            df['_search_code'].str.contains(term_lower, na=False) |
-            df['_search_section'].str.contains(term_lower, na=False) |
-            df['_search_option'].str.contains(term_lower, na=False)
-        )
-        
-        # Return original DataFrame rows (without search columns)
-        return self.df[mask].copy()
+    
+        return hybrid_search(self.df, term.strip())    
     
     def get_nutrient_totals(self, code: str, multiplier: float = 1.0) -> Optional[Dict[str, float]]:
         """

@@ -9,6 +9,7 @@ from pathlib import Path
 # ==================== MODE SELECTION ====================
 # Change this to switch between production and development data
 MODE = "DEVELOPMENT"  # Options: "PRODUCTION" or "DEVELOPMENT"
+MODE = "PRODUCTION"
 # ========================================================
 
 # Base paths
@@ -35,9 +36,14 @@ PENDING_FILE = DATA_PATH / "meal_plan_pending.json"
 def verify_data_files():
     """Check that all required data files exist."""
     missing = []
-    for file_path in [MASTER_FILE, LOG_FILE, PENDING_FILE]:
+    
+    # Master and Log are required
+    for file_path in [MASTER_FILE, LOG_FILE]:
         if not file_path.exists():
             missing.append(str(file_path))
+    
+    # Pending file is optional (created on first 'start')
+    # Just check that it's not there, but don't error
     
     if missing:
         raise FileNotFoundError(
