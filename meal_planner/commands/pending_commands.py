@@ -244,8 +244,8 @@ class CloseCommand(Command):
             "prot_g": int(round(totals["prot_g"])),
             "carbs_g": int(round(totals["carbs_g"])),
             "fat_g": int(round(totals["fat_g"])),
-            "gl": int(round(totals["gl"])),
-            "sugar_g": int(round(totals["sugar_g"]))
+            "sugar_g": int(round(totals["sugar_g"])),
+            "gl": int(round(totals["gl"]))
         }
         
         # Append to log

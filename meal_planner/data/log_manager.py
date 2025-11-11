@@ -283,14 +283,14 @@ class LogManager:
             'carbs_g': int(round(df[self.cols.carbs_g].mean())),
             'fat_g': int(round(df[self.cols.fat_g].mean())),
         }
-        
-        if self.cols.gl:
-            totals['gl'] = int(df[self.cols.gl].sum())
-            averages['gl'] = int(round(df[self.cols.gl].mean()))
 
         if self.cols.sugar_g:
             totals['sugar_g'] = int(df[self.cols.sugar_g].sum())
             averages['sugar_g'] = int(round(df[self.cols.sugar_g].mean()))
+        
+        if self.cols.gl:
+            totals['gl'] = int(df[self.cols.gl].sum())
+            averages['gl'] = int(round(df[self.cols.gl].mean()))
 
         return {
             'total_days': total_days,
