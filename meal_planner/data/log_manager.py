@@ -47,15 +47,15 @@ class LogManager:
             existing_lower = {str(c).lower() for c in self._df.columns}
             
             # Add missing columns
-            if 'sugar_g' not in existing_lower:
-                self._df['sugar_g'] = 0
             if 'gl' not in existing_lower:
                 self._df['gl'] = 0
+            if 'sugar_g' not in existing_lower:
+                self._df['sugar_g'] = 0
             
         except FileNotFoundError:
             # Create empty log with proper structure
             self._df = pd.DataFrame(columns=[
-                'date', 'codes', 'cal', 'prot_g', 'carbs_g', 'fat_g', 'sugar_g', 'gl'
+                'date', 'codes', 'cal', 'prot_g', 'carbs_g', 'fat_g', 'gl', 'sugar_g'
             ])
         
         self._cols = ColumnResolver(self._df)
@@ -104,7 +104,7 @@ class LogManager:
         Append a new entry to the log.
         
         Args:
-            entry: Dictionary with keys: date, codes, cal, prot_g, carbs_g, fat_g, sugar_g, gl
+            entry: Dictionary with keys: date, codes, cal, prot_g, carbs_g, fat_g, gl, sugar_g
         
         Example:
             >>> log = LogManager("log.csv")
@@ -115,8 +115,8 @@ class LogManager:
             ...     'prot_g': 30,
             ...     'carbs_g': 50,
             ...     'fat_g': 15,
-            ...     'sugar_g': 10,
             ...     'gl': 20
+            ...     'sugar_g': 10,
             ... })
             >>> log.save()
         """
@@ -143,7 +143,7 @@ class LogManager:
         Args:
             query_date: Date to update (YYYY-MM-DD)
             codes: New codes string
-            totals: Dictionary with cal, prot_g, carbs_g, fat_g, sugar_g, gl
+            totals: Dictionary with cal, prot_g, carbs_g, fat_g, gl, sugar_g
         
         Returns:
             True if entry was found and updated, False otherwise
@@ -151,7 +151,7 @@ class LogManager:
         Example:
             >>> log.update_date('2025-01-15', 'B.1 x2', {
             ...     'cal': 600, 'prot_g': 40, 'carbs_g': 60,
-            ...     'fat_g': 20, 'sugar_g': 15, 'gl': 25
+            ...     'fat_g': 20, 'gl': 25, 'sugar_g': 15
             ... })
         """
         date_col = self.cols.date
@@ -173,13 +173,13 @@ class LogManager:
         self._df.at[idx, self.cols.fat_g] = int(round(totals.get('fat_g', 0)))
         
         # Handle sugar_g and gl (may not exist in older logs)
+        gl_col = self.cols.gl
+        if gl_col:
+            self._df.at[idx, gl_col] = int(round(totals.get('gl', 0)))
         sugar_col = self.cols.sugar_g
         if sugar_col:
             self._df.at[idx, sugar_col] = int(round(totals.get('sugar_g', 0)))
         
-        gl_col = self.cols.gl
-        if gl_col:
-            self._df.at[idx, gl_col] = int(round(totals.get('gl', 0)))
         
         return True
     
@@ -284,14 +284,14 @@ class LogManager:
             'fat_g': int(round(df[self.cols.fat_g].mean())),
         }
         
-        if self.cols.sugar_g:
-            totals['sugar_g'] = int(df[self.cols.sugar_g].sum())
-            averages['sugar_g'] = int(round(df[self.cols.sugar_g].mean()))
-        
         if self.cols.gl:
             totals['gl'] = int(df[self.cols.gl].sum())
             averages['gl'] = int(round(df[self.cols.gl].mean()))
-        
+
+        if self.cols.sugar_g:
+            totals['sugar_g'] = int(df[self.cols.sugar_g].sum())
+            averages['sugar_g'] = int(round(df[self.cols.sugar_g].mean()))
+
         return {
             'total_days': total_days,
             'totals': totals,

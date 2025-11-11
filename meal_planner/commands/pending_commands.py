@@ -244,11 +244,12 @@ class CloseCommand(Command):
             "prot_g": int(round(totals["prot_g"])),
             "carbs_g": int(round(totals["carbs_g"])),
             "fat_g": int(round(totals["fat_g"])),
-            "sugar_g": int(round(totals["sugar_g"])),
-            "gl": int(round(totals["gl"]))
+            "gl": int(round(totals["gl"])),
+            "sugar_g": int(round(totals["sugar_g"]))
         }
         
         # Append to log
+        self.ctx.log.load()
         self.ctx.log.append_entry(entry)
         self.ctx.log.save()
         
