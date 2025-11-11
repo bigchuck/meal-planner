@@ -1,0 +1,51 @@
+"""
+Recipe command - show ingredient list for a code.
+"""
+from .base import Command, register_command
+
+
+@register_command
+class RecipeCommand(Command):
+    """Show recipe/ingredients for a code."""
+    
+    name = "recipe"
+    help_text = "Show recipe for code (recipe SO.11)"
+    
+    def execute(self, args: str) -> None:
+        """
+        Show recipe for a code.
+        
+        Args:
+            args: Code to look up
+        """
+        if not args.strip():
+            print("Usage: recipe <code>")
+            print("Example: recipe SO.11")
+            return
+        
+        if not self.ctx.recipes:
+            print("Recipes not available.")
+            return
+        
+        code = args.strip().upper()
+        
+        # Show the recipe
+        formatted = self.ctx.recipes.format_recipe(code)
+        
+        if formatted:
+            print()
+            print(formatted)
+        else:
+            print(f"\nNo recipe found for code '{code}'.")
+            
+            # Also show master info if code exists
+            master_row = self.ctx.master.lookup_code(code)
+            if master_row:
+                cols = self.ctx.master.cols
+                option = master_row.get(cols.option, "")
+                print(f"Code '{code}' exists in master: {option}")
+                print("But no recipe/ingredients are defined.")
+            else:
+                print(f"Code '{code}' not found in master database.")
+            
+            print()

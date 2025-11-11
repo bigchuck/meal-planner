@@ -9,13 +9,16 @@ from pathlib import Path
 # ==================== MODE SELECTION ====================
 # Change this to switch between production and development data
 MODE = "DEVELOPMENT"  # Options: "PRODUCTION" or "DEVELOPMENT"
-MODE = "PRODUCTION"
+#MODE = "PRODUCTION"
 # ========================================================
 
 # Base paths
 PROJECT_ROOT = Path(__file__).parent
 PRODUCTION_DATA_PATH = Path(r"C:\data\mealplan")
 DEVELOPMENT_DATA_PATH = PROJECT_ROOT / "data"
+
+print(PROJECT_ROOT)
+print(DEVELOPMENT_DATA_PATH)
 
 # Select data path based on mode
 if MODE == "PRODUCTION":
@@ -31,6 +34,10 @@ else:
 MASTER_FILE = DATA_PATH / "meal_plan_master.csv"
 LOG_FILE = DATA_PATH / "meal_plan_daily_log.csv"
 PENDING_FILE = DATA_PATH / "meal_plan_pending.json"
+NUTRIENTS_FILE = DATA_PATH / "meal_plan_nutrients.csv"
+RECIPES_FILE = DATA_PATH / "meal_plan_recipes.csv"
+
+print(RECIPES_FILE)
 
 # Verify files exist
 def verify_data_files():

@@ -17,16 +17,22 @@ class MasterLoader:
     
     The master file contains all available meal codes with their
     nutritional information (calories, protein, carbs, fat, etc.).
+    
+    Optionally joins micronutrients and recipes from separate files.
     """
     
-    def __init__(self, filepath: Path):
+    def __init__(self, filepath: Path, nutrients_file: Path = None, recipes_file: Path = None):
         """
         Initialize loader with path to master CSV file.
         
         Args:
             filepath: Path to master CSV file
+            nutrients_file: Optional path to nutrients CSV
+            recipes_file: Optional path to recipes CSV (not joined, just stored)
         """
         self.filepath = filepath
+        self.nutrients_file = nutrients_file
+        self.recipes_file = recipes_file
         self._df = None
         self._cols = None
     
@@ -94,23 +100,23 @@ class MasterLoader:
             return None
         
         return match.iloc[0].to_dict()
-
+    
     def search(self, term: str) -> pd.DataFrame:
         """
         Search for meals matching a term with boolean logic support.
-
+        
         Supports:
         - Quoted phrases: "green beans" (exact phrase)
         - Boolean operators: AND, OR, NOT
         - Default: spaces = AND
         - Code patterns: "fr." matches codes starting with FR.
-    
+        
         Args:
             term: Search query (case-insensitive)
-    
+        
         Returns:
             DataFrame of matching rows
-    
+        
         Examples:
             >>> loader.search("chicken")           # substring match
             >>> loader.search("green beans")       # both words (AND)
@@ -120,11 +126,11 @@ class MasterLoader:
             >>> loader.search("fr.")               # codes starting with FR.
         """
         from meal_planner.utils.search import hybrid_search
-
+        
         if not term.strip():
             return pd.DataFrame()
-    
-        return hybrid_search(self.df, term.strip())    
+        
+        return hybrid_search(self.df, term.strip())
     
     def get_nutrient_totals(self, code: str, multiplier: float = 1.0) -> Optional[Dict[str, float]]:
         """

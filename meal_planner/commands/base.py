@@ -15,7 +15,8 @@ class CommandContext:
     Provides access to data managers and configuration.
     """
     
-    def __init__(self, master_file: Path, log_file: Path, pending_file: Path):
+    def __init__(self, master_file: Path, log_file: Path, pending_file: Path,
+                 nutrients_file: Path = None, recipes_file: Path = None):
         """
         Initialize command context.
         
@@ -23,10 +24,17 @@ class CommandContext:
             master_file: Path to master CSV
             log_file: Path to log CSV
             pending_file: Path to pending JSON
+            nutrients_file: Path to nutrients CSV (optional)
+            recipes_file: Path to recipes CSV (optional)
         """
-        self.master = MasterLoader(master_file)
+        from meal_planner.data.nutrients_manager import NutrientsManager
+        from meal_planner.data.recipes_manager import RecipesManager
+        
+        self.master = MasterLoader(master_file, nutrients_file, recipes_file)
         self.log = LogManager(log_file)
         self.pending_mgr = PendingManager(pending_file)
+        self.nutrients = NutrientsManager(nutrients_file) if nutrients_file else None
+        self.recipes = RecipesManager(recipes_file) if recipes_file else None
         
         # Session-only stash for undo/redo operations
         self.pending_stack: List = []
