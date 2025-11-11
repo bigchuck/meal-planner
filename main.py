@@ -34,7 +34,9 @@ def repl():
     print_welcome()
     
     # Create command context (shared state for all commands)
-    ctx = CommandContext(MASTER_FILE, LOG_FILE, PENDING_FILE)
+    from config import NUTRIENTS_FILE, RECIPES_FILE
+    ctx = CommandContext(MASTER_FILE, LOG_FILE, PENDING_FILE, 
+                        NUTRIENTS_FILE, RECIPES_FILE)
     
     # Get command registry
     registry = get_registry()
