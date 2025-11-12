@@ -66,7 +66,7 @@ def verify_data_files():
     return True
 
 # Chart output
-CHART_OUTPUT_FILE = PROJECT_ROOT / "meal_plan_trend.jpg"
+CHART_OUTPUT_FILE = DATA_PATH / "meal_plan_trend.jpg"
 
 # Application settings
 DEFAULT_CHART_WINDOW = 7  # days for moving average
