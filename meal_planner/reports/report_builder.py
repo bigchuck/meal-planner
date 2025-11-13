@@ -230,3 +230,131 @@ class Report:
         # Fallback: just round and truncate
         s = f"{mult:.1f}"
         return s[:4]
+    
+    def get_meal_breakdown(self):
+        """
+        Analyze meal breakdown from time markers.
+        
+        Returns:
+            List of tuples: (meal_name, first_time, DailyTotals)
+            Returns None if no time markers present
+        """
+        if not self.display:
+            return None
+        
+        # Check if any time markers exist
+        has_time_markers = any(kind == "time" for kind, _ in self.display)
+        if not has_time_markers:
+            return None
+        
+        # Group items by time segments
+        segments = []  # List of (time_str, [row_indices])
+        current_time = None
+        current_rows = []
+        
+        for kind, val in self.display:
+            if kind == "time":
+                # Save previous segment if exists
+                if current_time is not None or current_rows:
+                    segments.append((current_time, current_rows))
+                # Start new segment
+                current_time = val
+                current_rows = []
+            elif kind == "row":
+                current_rows.append(val)
+        
+        # Don't forget last segment
+        if current_time is not None or current_rows:
+            segments.append((current_time, current_rows))
+        
+        # If first segment has no time, assign to breakfast
+        if segments and segments[0][0] is None:
+            segments[0] = ("05:00", segments[0][1])  # Arbitrary breakfast time
+        
+        # Categorize segments into meals
+        meal_categories = {
+            "BREAKFAST": [],
+            "MORNING SNACK": [],
+            "LUNCH": [],
+            "AFTERNOON SNACK": [],
+            "DINNER": [],
+            "EVENING": []
+        }
+        
+        for time_str, row_indices in segments:
+            if not row_indices:
+                continue
+            
+            meal_name = self._categorize_time(time_str)
+            if meal_name:
+                meal_categories[meal_name].append((time_str, row_indices))
+        
+        # Build result with subtotals
+        result = []
+        canonical_order = [
+            "BREAKFAST", "MORNING SNACK", "LUNCH", 
+            "AFTERNOON SNACK", "DINNER", "EVENING"
+        ]
+        
+        for meal_name in canonical_order:
+            segments_for_meal = meal_categories[meal_name]
+            if not segments_for_meal:
+                continue
+            
+            # Get first time for this meal
+            first_time = segments_for_meal[0][0]
+            
+            # Calculate subtotals for all segments in this meal
+            meal_totals = DailyTotals()
+            for _, row_indices in segments_for_meal:
+                for row_idx in row_indices:
+                    meal_totals = meal_totals + self.rows[row_idx].totals
+            
+            result.append((meal_name, first_time, meal_totals))
+        
+        return result if result else None
+    
+    def _categorize_time(self, time_str: str) -> str:
+        """
+        Categorize time string into meal name.
+        
+        Args:
+            time_str: Time in HH:MM format
+        
+        Returns:
+            Meal name or None
+        """
+        if not time_str:
+            return None
+        
+        try:
+            # Parse HH:MM
+            parts = time_str.split(":")
+            hour = int(parts[0])
+            minute = int(parts[1]) if len(parts) > 1 else 0
+            
+            # Convert to minutes since midnight for easier comparison
+            total_minutes = hour * 60 + minute
+            
+            # Time ranges (in minutes)
+            # Breakfast: 05:00 - 10:29 (300 - 629)
+            # Morning Snack: 10:30 - 11:59 (630 - 719)
+            # Lunch: 12:00 - 14:29 (720 - 869)
+            # Afternoon Snack: 14:30 - 16:59 (870 - 1019)
+            # Dinner: 17:00 - 19:59 (1020 - 1199)
+            # Evening: 20:00 - 04:59 (1200+ or 0-299)
+            
+            if 300 <= total_minutes <= 629:
+                return "BREAKFAST"
+            elif 630 <= total_minutes <= 719:
+                return "MORNING SNACK"
+            elif 720 <= total_minutes <= 869:
+                return "LUNCH"
+            elif 870 <= total_minutes <= 1019:
+                return "AFTERNOON SNACK"
+            elif 1020 <= total_minutes <= 1199:
+                return "DINNER"
+            else:  # 1200+ or 0-299
+                return "EVENING"
+        except:
+            return None
