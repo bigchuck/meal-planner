@@ -11,7 +11,7 @@ class ReportCommand(Command):
     """Show detailed nutrient breakdown."""
     
     name = "report"
-    help_text = "Show detailed breakdown (report [date] [--recipes] [--nutrients])"
+    help_text = "Show detailed breakdown (report [date] [--recipes] [--nutrients] [--meals])"
     
     def execute(self, args: str) -> None:
         """
@@ -25,6 +25,7 @@ class ReportCommand(Command):
         
         show_recipes = "--recipes" in parts or "--recipe" in parts
         show_nutrients = "--nutrients" in parts or "--nutrient" in parts or "--micro" in parts
+        show_meals = "--meals" in parts or "--meal" in parts
         
         # Remove flags from parts
         date_parts = [p for p in parts if not p.startswith("--")]
@@ -38,6 +39,10 @@ class ReportCommand(Command):
             # Report from log date
             query_date = date_parts[0]
             report = self._report_log_date(builder, query_date)
+        
+        # Show meal breakdown if requested
+        if show_meals and report:
+            self._show_meals(report)
         
         # Show micronutrients if requested
         if show_nutrients and report:
@@ -91,6 +96,38 @@ class ReportCommand(Command):
         report = builder.build_from_items(items, title=f"Report for {query_date}")
         report.print()
         return report
+    
+    def _show_meals(self, report):
+        """Show meal breakdown with subtotals."""
+        breakdown = report.get_meal_breakdown()
+        
+        if breakdown is None:
+            print("\n(No time markers present - meal breakdown not available)\n")
+            return
+        
+        print("=== Meal Breakdown ===")
+        
+        # Header
+        print(f"{'':30} {'Cal':>6} {'P':>5} {'C':>5} {'F':>5} {'Sug':>6} {'GL':>4}")
+        
+        # Meal rows
+        for meal_name, first_time, totals in breakdown:
+            t = totals.rounded()
+            label = f"{meal_name} ({first_time})"
+            print(f"{label:30} {int(t.calories):>6} {int(t.protein_g):>5} "
+                  f"{int(t.carbs_g):>5} {int(t.fat_g):>5} "
+                  f"{int(t.sugar_g):>6} {int(t.glycemic_load):>4}")
+        
+        # Separator
+        print("-" * 78)
+        
+        # Daily total
+        t = report.totals.rounded()
+        print(f"{'Daily Total':30} {int(t.calories):>6} {int(t.protein_g):>5} "
+              f"{int(t.carbs_g):>5} {int(t.fat_g):>5} "
+              f"{int(t.sugar_g):>6} {int(t.glycemic_load):>4}")
+        
+        print()
     
     def _show_nutrients(self, report):
         """Show micronutrients for codes in report."""
