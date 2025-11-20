@@ -11,7 +11,7 @@ class ReportCommand(Command):
     """Show detailed nutrient breakdown."""
     
     name = "report"
-    help_text = "Show detailed breakdown (report [date] [--recipes] [--nutrients] [--meals])"
+    help_text = "Show detailed breakdown (report [date] [--recipes] [--nutrients] [--meals] [--risk])"
     
     def execute(self, args: str) -> None:
         """
@@ -26,7 +26,7 @@ class ReportCommand(Command):
         show_recipes = "--recipes" in parts or "--recipe" in parts
         show_nutrients = "--nutrients" in parts or "--nutrient" in parts or "--micro" in parts
         show_meals = "--meals" in parts or "--meal" in parts
-        
+        show_risk = "--risk" in parts        
         # Remove flags from parts
         date_parts = [p for p in parts if not p.startswith("--")]
         
@@ -51,6 +51,9 @@ class ReportCommand(Command):
         # Show recipes if requested
         if show_recipes and report:
             self._show_recipes(report)
+
+        if show_meals and show_risk and report:
+            self._show_risk(report)
     
     def _report_pending(self, builder: ReportBuilder):
         """Report from pending day."""
@@ -212,3 +215,51 @@ class ReportCommand(Command):
             formatted = self.ctx.recipes.format_recipe(code)
             if formatted:
                 print(formatted)
+    
+    def _show_risk(self, report):
+        """Show nutritional risk assessment."""
+        print("=== Risk Assessment ===")
+        print()
+        
+        t = report.totals.rounded()
+        risks = []
+        
+        # High sugar (>50g)
+        if t.sugar_g > 50:
+            risks.append(f"⚠ High sugar: {int(t.sugar_g)}g (>50g)")
+        
+        # High glycemic load (>100)
+        if t.glycemic_load > 100:
+            risks.append(f"⚠ High glycemic load: {int(t.glycemic_load)} (>100)")
+        
+        # Low protein (<100g)
+        if t.protein_g < 100:
+            risks.append(f"⚠ Low protein: {int(t.protein_g)}g (<100g)")
+        
+        # High fat percentage (>35% of calories)
+        fat_cal = t.fat_g * 9
+        fat_pct = (fat_cal / t.calories * 100) if t.calories > 0 else 0
+        if fat_pct > 35:
+            risks.append(f"⚠ High fat: {fat_pct:.0f}% of calories (>35%)")
+        
+        # High carb percentage (>60% of calories)
+        carb_cal = t.carbs_g * 4
+        carb_pct = (carb_cal / t.calories * 100) if t.calories > 0 else 0
+        if carb_pct > 60:
+            risks.append(f"⚠ High carbs: {carb_pct:.0f}% of calories (>60%)")
+        
+        # Very low calories (<1200)
+        if t.calories < 1200:
+            risks.append(f"⚠ Very low calories: {int(t.calories)} (<1200)")
+        
+        # Very high calories (>3000)
+        if t.calories > 3000:
+            risks.append(f"⚠ Very high calories: {int(t.calories)} (>3000)")
+        
+        if risks:
+            for risk in risks:
+                print(risk)
+        else:
+            print("✓ No significant nutritional risks detected")
+        
+        print()
