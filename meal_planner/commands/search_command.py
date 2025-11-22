@@ -1,6 +1,8 @@
 """
 Search/find command for querying the master database.
 """
+from typing import List, Dict, Any, Optional
+
 from .base import Command, register_command
 from meal_planner.utils import ColumnResolver
 
@@ -25,14 +27,25 @@ class FindCommand(Command):
         
         query = args.strip()
         results = self.ctx.master.search(query)
-        
-        if results.empty:
+  
+        # Also search aliases if available
+        alias_results = []
+        if self.ctx.aliases:
+            alias_results = self.ctx.aliases.search(query)
+  
+        if results.empty and not alias_results:
             print(f"\nNo matches found for '{query}'.\n")
             return
         
         # Format results
         print(f"\nSearch results for '{query}':")
-        print(self._format_results(results))
+
+        if not results.empty:
+            print(self._format_results(results))
+    
+        if alias_results:
+            print(self._format_alias_results(alias_results))
+    
         print()
     
     def _format_results(self, df) -> str:
@@ -78,5 +91,18 @@ class FindCommand(Command):
             lines.append(
                 f"  {code:>8} | {section:<7} | {option} [{nutr_str}]"
             )
+        
+        return "\n".join(lines)
+    
+    def _format_alias_results(self, results: List[tuple]) -> str:
+        """Format alias search results."""
+        if not results:
+            return ""
+        
+        lines = []
+        for code, alias_data in results:
+            name = alias_data.get('name', '')
+            codes = alias_data.get('codes', '')
+            lines.append(f"  {code:>8} | ALIAS    | {name} [expands to: {codes}]")
         
         return "\n".join(lines)

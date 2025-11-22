@@ -73,9 +73,10 @@ class AddCommand(Command):
                 "items": []
             }
         
-        # Parse new codes
-        new_items = CodeParser.parse(args.strip())
-        
+        # Parse new codes with alias expansion
+        from meal_planner.parsers.alias_expander import expand_aliases
+        new_items = expand_aliases(args.strip(), self.ctx.aliases)
+           
         if not new_items:
             print("No valid codes found.")
             return
