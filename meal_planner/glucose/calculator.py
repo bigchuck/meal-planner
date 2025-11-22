@@ -40,198 +40,347 @@ class GlucoseCalculator:
         """Initialize calculator."""
         pass
     
-    def calculate_from_meals(self, meals: List[Dict[str, Any]]) -> GlucoseMetrics:
+    """
+    -----------------------------------------------------------------
+    Extracted from ChatGPT discussion 2025-11-20
+    -----------------------------------------------------------------
+    """
+
+    def analyze_meal(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Calculate glucose metrics from meal breakdown.
+        Convenience wrapper:
+        Takes an item list makes a meal (summed values)
+        returns both risk scores and curve-shape classification.
         
-        Args:
-            meals: List of meal dicts with keys:
-                   - 'time': Time string (HH:MM)
-                   - 'gl': Glycemic load value
-                   - 'name': Meal name (optional)
+        Example meal dict:
+        meal = {
+            "carbs_g": 55,
+            "fat_g": 22,
+            "protein_g": 25,
+            "fiber_g": 6,
+            "gi": 62
+        }
+        """
+        # compute meal totals, make dictionary
+        meal_carbs_g = 0
+        meal_fat_g = 0
+        meal_protein_g = 0
+        meal_fiber_g = 0
+        for item in items:
+            meal_carbs_g = float(item.get("carbs_g", 0.0))
+            meal_fat_g = float(item.get("fat_g", 0.0))
+            meal_protein_g = float(item.get("protein_g", 0.0))
+            meal_fiber_g = float(item.get("fiber_g", 0.0))
+        meal_gi = _compute_meal_gi_from_items(items)
+        meal = {"carbs_g":meal_carbs_g, "fat_g":meal_fat_g, "protein_g":meal_protein_g, "fiber_g":meal_fiber_g, "gi":meal_gi}
+
+        risk = self.compute_risk_scores(meal)
+        curve = self.classify_glucose_curve(meal, risk_info=risk)
+        return {
+            "input_meal": meal,
+            "risk": risk,
+            "curve": curve,
+        }
+
+    def compute_risk_scores(self, meal: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Compute a glucose 'risk score' (0–10) and its components.
+        
+        Expected keys in `meal` (all optional, defaults to 0 or neutral):
+        - 'carbs_g'   : grams of carbohydrate
+        - 'fat_g'     : grams of fat
+        - 'protein_g' : grams of protein
+        - 'fiber_g'   : grams of fiber
+        - 'gi'        : glycemic index (0–100, or None)
+        
+        Returns a dict:
+        {
+            "risk_score": float in [0, 10],
+            "risk_rating": "low" | "medium" | "high" | "very_high",
+            "components": {
+                "carb_risk": float,
+                "gi_speed_factor": float,
+                "fat_delay_risk": float,
+                "protein_tail_risk": float,
+                "fiber_buffer": float,
+                "base_carb_risk": float,
+                "raw_score_before_clamp": float
+            }
+        }
+        """
+        carbs_g = _safe_get(meal, "carbs_g", 0.0)
+        fat_g = _safe_get(meal, "fat_g", 0.0)
+        protein_g = _safe_get(meal, "protein_g", 0.0)
+        fiber_g = _safe_get(meal, "fiber_g", 0.0)
+        gi_value_raw = meal.get("gi", None)
+        gi = None
+        if gi_value_raw is not None:
+            try:
+                gi = float(gi_value_raw)
+            except (TypeError, ValueError):
+                gi = None
+
+        carb_risk = _carb_risk_score(carbs_g)
+        gi_factor = _gi_speed_factor(gi)
+        base_carb_risk = min(carb_risk * gi_factor, 10.0)
+
+        fat_delay = _fat_delay_score(fat_g)
+        protein_tail = _protein_tail_score(protein_g)
+        fiber_buffer = _fiber_buffer_score(fiber_g)
+
+        # Weighted combination (you can tweak weights if desired)
+        raw_score = (
+            base_carb_risk
+            + 0.6 * fat_delay       # fat increases late spike risk
+            + 0.5 * protein_tail    # protein adds delayed tail risk
+            - 0.7 * fiber_buffer    # fiber subtracts risk
+        )
+
+        # Clamp to [0, 10]
+        risk_score = max(0.0, min(10.0, raw_score))
+
+        # Convert to categorical rating
+        if risk_score < 3:
+            rating = "low"
+        elif risk_score < 6:
+            rating = "medium"
+        elif risk_score < 8.5:
+            rating = "high"
+        else:
+            rating = "very_high"
+
+        return {
+            "risk_score": risk_score,
+            "risk_rating": rating,
+            "components": {
+                "carb_risk": carb_risk,
+                "gi_speed_factor": gi_factor,
+                "base_carb_risk": base_carb_risk,
+                "fat_delay_risk": fat_delay,
+                "protein_tail_risk": protein_tail,
+                "fiber_buffer": fiber_buffer,
+                "raw_score_before_clamp": raw_score,
+            },
+        }
+
+    def classify_glucose_curve(self, 
+        meal: Dict[str, Any],
+        risk_info: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Classify the expected post-prandial glucose curve shape for the meal.
+        
+        Inputs:
+        meal dict (same expectations as compute_risk_scores).
+        risk_info: optional output from compute_risk_scores() for reuse.
         
         Returns:
-            GlucoseMetrics object
+        {
+            "curve_shape": <string id>,
+            "curve_label": <short human label>,
+            "curve_description": <longer explanation>
+        }
         """
-        if not meals:
-            return GlucoseMetrics(
-                total_gl=0, peak_gl=0, meal_count=0,
-                avg_gl_per_meal=0, time_weighted_gl=0,
-                estimated_peak_time=None, meal_distribution_score=1.0
+        carbs_g = _safe_get(meal, "carbs_g", 0.0)
+        fat_g = _safe_get(meal, "fat_g", 0.0)
+        protein_g = _safe_get(meal, "protein_g", 0.0)
+        fiber_g = _safe_get(meal, "fiber_g", 0.0)
+        gi_value_raw = meal.get("gi", None)
+        gi = None
+        if gi_value_raw is not None:
+            try:
+                gi = float(gi_value_raw)
+            except (TypeError, ValueError):
+                gi = None
+
+        risk_score = float(risk_info.get("risk_score", 0.0))
+
+        # 1) Very low carbs → flat line / minimal rise
+        if carbs_g < 10:
+            shape = "flat_or_minimal_rise"
+            label = "Flat / very low rise"
+            desc = (
+                "Carbohydrate content is very low; CGM is expected to show a flat line "
+                "or only a small bump with no significant spike."
             )
-        
-        # Basic metrics
-        total_gl = sum(m['gl'] for m in meals)
-        peak_gl = max(m['gl'] for m in meals)
-        meal_count = len(meals)
-        avg_gl = total_gl / meal_count if meal_count > 0 else 0
-        
-        # Time-weighted GL (accounts for overlapping glucose responses)
-        time_weighted = self._calculate_time_weighted_gl(meals)
-        
-        # Find estimated peak time
-        peak_time = self._estimate_peak_time(meals)
-        
-        # Calculate distribution score
-        distribution = self._calculate_distribution_score(meals)
-        
-        return GlucoseMetrics(
-            total_gl=total_gl,
-            peak_gl=peak_gl,
-            meal_count=meal_count,
-            avg_gl_per_meal=avg_gl,
-            time_weighted_gl=time_weighted,
-            estimated_peak_time=peak_time,
-            meal_distribution_score=distribution
-        )
-    
-    def _calculate_time_weighted_gl(self, meals: List[Dict[str, Any]]) -> float:
-        """
-        Calculate time-weighted GL considering meal spacing.
-        
-        When meals are close together, glucose responses overlap,
-        potentially creating higher peaks than isolated meals.
-        """
-        if not meals:
-            return 0.0
-        
-        # Sort meals by time
-        sorted_meals = sorted(meals, key=lambda m: self._time_to_minutes(m['time']))
-        
-        # Simulate glucose curve throughout day
-        max_response = 0.0
-        
-        for i, meal in enumerate(sorted_meals):
-            meal_time = self._time_to_minutes(meal['time'])
-            meal_gl = meal['gl']
-            
-            # Peak response for this meal
-            peak_time = meal_time + self.GLUCOSE_PEAK_TIME
-            
-            # Check for overlaps with other meals
-            overlap_factor = 1.0
-            
-            for j, other_meal in enumerate(sorted_meals):
-                if i == j:
-                    continue
-                    
-                other_time = self._time_to_minutes(other_meal['time'])
-                time_diff = abs(peak_time - other_time)
-                
-                # If meals are close, increase impact
-                if time_diff < self.GLUCOSE_CLEAR_TIME:
-                    overlap_boost = 1.0 - (time_diff / self.GLUCOSE_CLEAR_TIME)
-                    overlap_factor += overlap_boost * 0.3  # 30% additional impact
-            
-            meal_response = meal_gl * overlap_factor
-            max_response = max(max_response, meal_response)
-        
-        return max_response
-    
-    def _estimate_peak_time(self, meals: List[Dict[str, Any]]) -> Optional[str]:
-        """
-        Estimate when glucose levels will be highest.
-        
-        Returns time string (HH:MM) of estimated peak.
-        """
-        if not meals:
-            return None
-        
-        # Find meal with highest GL
-        peak_meal = max(meals, key=lambda m: m['gl'])
-        
-        # Add peak time offset
-        peak_minutes = (self._time_to_minutes(peak_meal['time']) + 
-                       self.GLUCOSE_PEAK_TIME)
-        
-        return self._minutes_to_time(peak_minutes)
-    
-    def _calculate_distribution_score(self, meals: List[Dict[str, Any]]) -> float:
-        """
-        Calculate how well-distributed meals are throughout the day.
-        
-        Returns score from 0-1, where 1 is optimal spacing.
-        """
-        if len(meals) <= 1:
-            return 1.0
-        
-        # Sort by time
-        sorted_meals = sorted(meals, key=lambda m: self._time_to_minutes(m['time']))
-        
-        # Calculate gaps between meals
-        gaps = []
-        for i in range(len(sorted_meals) - 1):
-            time1 = self._time_to_minutes(sorted_meals[i]['time'])
-            time2 = self._time_to_minutes(sorted_meals[i + 1]['time'])
-            gap = time2 - time1
-            gaps.append(gap)
-        
-        if not gaps:
-            return 1.0
-        
-        # Score based on how close gaps are to ideal
-        scores = []
-        for gap in gaps:
-            # Perfect score at ideal gap, decreases as gap differs
-            deviation = abs(gap - self.IDEAL_MEAL_GAP) / self.IDEAL_MEAL_GAP
-            score = max(0, 1.0 - deviation * 0.5)
-            scores.append(score)
-        
-        return sum(scores) / len(scores)
-    
-    def _time_to_minutes(self, time_str: str) -> int:
-        """Convert HH:MM to minutes since midnight."""
-        parts = time_str.split(':')
-        return int(parts[0]) * 60 + int(parts[1])
-    
-    def _minutes_to_time(self, minutes: int) -> str:
-        """Convert minutes since midnight to HH:MM."""
-        minutes = minutes % (24 * 60)  # Wrap at midnight
-        h = minutes // 60
-        m = minutes % 60
-        return f"{h:02d}:{m:02d}"
-    
-    def analyze_meal_spacing(self, meals: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Analyze gaps between meals and flag potential issues.
-        
-        Returns list of analysis items with recommendations.
-        """
-        if len(meals) <= 1:
-            return []
-        
-        sorted_meals = sorted(meals, key=lambda m: self._time_to_minutes(m['time']))
-        
-        issues = []
-        
-        for i in range(len(sorted_meals) - 1):
-            meal1 = sorted_meals[i]
-            meal2 = sorted_meals[i + 1]
-            
-            time1 = self._time_to_minutes(meal1['time'])
-            time2 = self._time_to_minutes(meal2['time'])
-            gap = time2 - time1
-            
-            # Too close together
-            if gap < 120:  # Less than 2 hours
-                issues.append({
-                    'type': 'close_spacing',
-                    'severity': 'warning',
-                    'meals': (meal1.get('name', meal1['time']), 
-                             meal2.get('name', meal2['time'])),
-                    'gap_hours': gap / 60,
-                    'message': f"Meals only {gap} min apart - glucose responses may overlap"
-                })
-            
-            # Too far apart
-            elif gap > 360:  # More than 6 hours
-                issues.append({
-                    'type': 'long_gap',
-                    'severity': 'info',
-                    'meals': (meal1.get('name', meal1['time']), 
-                             meal2.get('name', meal2['time'])),
-                    'gap_hours': gap / 60,
-                    'message': f"Large gap ({gap // 60}h {gap % 60}m) - consider snack"
-                })
-        
-        return issues
+
+        # 2) Classic sharp early spike: high GI, low fat, moderate+ carbs
+        elif carbs_g >= 30 and (gi is not None and gi >= 60) and fat_g < 10 and fiber_g < 6:
+            shape = "sharp_early_spike"
+            label = "Sharp early spike"
+            desc = (
+                "High and fast carbohydrates with little fat or fiber buffering. "
+                "Expect a quick rise and early peak within ~20–45 minutes "
+                "followed by a gradual decline."
+            )
+
+        # 3) High carb + high fat → delayed 'pizza' spike
+        elif carbs_g >= 40 and fat_g >= 20:
+            shape = "delayed_high_spike"
+            label = "Delayed high spike (pizza effect)"
+            desc = (
+                "Substantial carbs plus high fat. Fat slows gastric emptying and reduces "
+                "insulin sensitivity, so the initial rise may be modest, but a larger "
+                "spike is expected 90–180 minutes after the meal with a prolonged tail."
+            )
+
+        # 4) Moderate carbs, moderate fat, high protein → double hump
+        elif 20 <= carbs_g <= 40 and 10 <= fat_g <= 25 and protein_g >= 25:
+            shape = "double_hump"
+            label = "Double-hump pattern"
+            desc = (
+                "Mixed meal with moderate carbs, notable fat, and high protein. "
+                "Expect a modest early bump, some decline, and then a second slower "
+                "rise 2–3 hours later as protein is converted to glucose."
+            )
+
+        # 5) Carbs plus high fiber, low-moderate fat → blunted spike
+        elif carbs_g >= 15 and fiber_g >= 8 and fat_g < 20:
+            shape = "blunted_spike"
+            label = "Blunted / smoothed spike"
+            desc = (
+                "Carbohydrates are present but accompanied by high fiber, which slows "
+                "absorption and flattens the curve. Expect a slower, lower peak with "
+                "a smoother rise and fall."
+            )
+
+        # 6) High carb, high GI, low fiber, low fat → spike then dip (reactive)
+        elif carbs_g >= 25 and (gi is not None and gi >= 60) and fat_g < 10 and fiber_g < 4:
+            shape = "spike_then_dip_risk"
+            label = "Spike then possible dip"
+            desc = (
+                'Fast, low-fiber carbohydrates with little fat. Expect a strong early '
+                "spike and higher risk of a subsequent dip (reactive hypoglycemia pattern)."
+            )
+
+        # 7) Default: moderate, single hump
+        else:
+            shape = "moderate_single_spike"
+            label = "Moderate single spike"
+            desc = (
+                "Meal composition suggests a moderate rise with a single main peak "
+                "and no pronounced delay or double-hump. Overall impact follows "
+                "the total carb load and risk score."
+            )
+
+        return {
+            "curve_shape": shape,
+            "curve_label": label,
+            "curve_description": desc,
+            "risk_score_used": risk_score,
+        }
+
+def _compute_meal_gi_from_items(items: List[Dict[str, Any]]) -> Optional[float]:
+    """
+    Each item dict should have:
+    - 'gl'       : Gl for that food
+    - 'carbs_g'  : grams of carb for the portion actually eaten
+    Returns the carb-weighted GI for the meal, or None if total carbs ~ 0.
+
+    meal-gi = 100 x summed GL / summed carbs
+    """
+    num = 0.0
+    denom = 0.0
+
+    for item in items:
+        try:
+            gl = float(item.get("gl", 0.0))
+        except (TypeError, ValueError):
+            continue
+
+        try:
+            carbs = float(item.get("carbs_g", 0.0))
+        except (TypeError, ValueError):
+            carbs = 0.0
+
+        if carbs <= 0:
+            continue
+
+        num += 100 * gl
+        denom += carbs
+
+    if denom <= 0:
+        return None  # effectively no carbs → GI not meaningful
+
+    return num / denom
+
+def _safe_get(meal: Dict[str, Any], key: str, default: float = 0.0) -> float:
+    """Utility to pull numeric fields from the meal dict with a default."""
+    value = meal.get(key, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+def _carb_risk_score(carbs_g: float) -> float:
+    """
+    Map carb grams to a 0–10 risk contribution.
+    Thresholds are based on clinical carb ranges.
+    """
+    if carbs_g <= 5:
+        return 0.0
+    elif carbs_g <= 20:
+        return 2.0
+    elif carbs_g <= 40:
+        return 5.0
+    elif carbs_g <= 70:
+        return 8.0
+    else:
+        return 10.0
+
+def _gi_speed_factor(gi: Optional[float]) -> float:
+    """
+    Convert GI into a speed multiplier on carb risk.
+    """
+    if gi is None or gi <= 0:
+        return 1.0  # unknown: neutral
+    if gi < 40:
+        return 0.8  # slow
+    elif gi < 60:
+        return 1.0  # medium
+    else:
+        return 1.2  # fast
+
+def _fat_delay_score(fat_g: float) -> float:
+    """
+    Score for fat-driven delay and insulin resistance (0–7).
+    """
+    if fat_g <= 5:
+        return 0.0
+    elif fat_g <= 15:
+        return 1.0
+    elif fat_g <= 25:
+        return 3.0
+    elif fat_g <= 35:
+        return 5.0
+    else:
+        return 7.0
+
+def _protein_tail_score(protein_g: float) -> float:
+    """
+    Score for protein-driven delayed glucose via gluconeogenesis (0–4).
+    """
+    if protein_g <= 10:
+        return 0.0
+    elif protein_g <= 20:
+        return 1.0
+    elif protein_g <= 35:
+        return 2.0
+    else:
+        return 4.0
+
+def _fiber_buffer_score(fiber_g: float) -> float:
+    """
+    Score for fiber’s protective, spike-flattening effect (0–5).
+    Higher score = more buffering (subtracts from total risk).
+    """
+    if fiber_g <= 2:
+        return 0.0
+    elif fiber_g <= 6:
+        return 1.0
+    elif fiber_g <= 10:
+        return 3.0
+    else:
+        return 5.0
+
+
