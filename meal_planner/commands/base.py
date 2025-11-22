@@ -16,7 +16,8 @@ class CommandContext:
     """
     
     def __init__(self, master_file: Path, log_file: Path, pending_file: Path,
-                 nutrients_file: Path = None, recipes_file: Path = None):
+                 nutrients_file: Path = None, recipes_file: Path = None,
+                 aliases_file: Path = None):
         """
         Initialize command context.
         
@@ -26,15 +27,18 @@ class CommandContext:
             pending_file: Path to pending JSON
             nutrients_file: Path to nutrients CSV (optional)
             recipes_file: Path to recipes CSV (optional)
+            aliases_file: Path to aliases JSON (optional)
         """
         from meal_planner.data.nutrients_manager import NutrientsManager
         from meal_planner.data.recipes_manager import RecipesManager
+        from meal_planner.data.alias_manager import AliasManager
         
         self.master = MasterLoader(master_file, nutrients_file, recipes_file)
         self.log = LogManager(log_file)
         self.pending_mgr = PendingManager(pending_file)
         self.nutrients = NutrientsManager(nutrients_file) if nutrients_file else None
         self.recipes = RecipesManager(recipes_file) if recipes_file else None
+        self.aliases = AliasManager(aliases_file) if aliases_file else None
         
         # Session-only stash for undo/redo operations
         self.pending_stack: List = []
