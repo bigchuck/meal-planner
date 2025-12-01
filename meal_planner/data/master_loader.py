@@ -5,11 +5,66 @@ Handles loading and querying the master CSV file containing
 all available meal codes and their nutritional information.
 """
 import pandas as pd
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from pathlib import Path
 
 from meal_planner.utils import ColumnResolver
 
+def _natural_sort_key(code: str) -> Tuple[str, str, int, str]:
+    """
+    Create a sort key for natural ordering of codes.
+    
+    Handles multiple patterns:
+    - SO.1, SO.10, SO.13 -> ('SO.', '', 1, '')
+    - SO.5b, SO.7a -> ('SO.', '', 5, 'b')
+    - VE.T1, VE.T2 -> ('VE.', 'T', 1, '')
+    - VE.MIX -> ('VE.', 'MIX', 0, '')
+    
+    Args:
+        code: Code string to parse
+    
+    Returns:
+        Tuple of (prefix, alpha_part, numeric_part, suffix) for sorting
+    
+    Examples:
+        >>> _natural_sort_key("SO.1")
+        ('SO.', '', 1, '')
+        >>> _natural_sort_key("SO.13")
+        ('SO.', '', 13, '')
+        >>> _natural_sort_key("SO.5b")
+        ('SO.', '', 5, 'b')
+        >>> _natural_sort_key("VE.T1")
+        ('VE.', 'T', 1, '')
+        >>> _natural_sort_key("VE.MIX")
+        ('VE.', 'MIX', 0, '')
+    """
+    import re
+    
+    code_upper = str(code).upper()
+    
+    # Split on the first dot
+    if '.' not in code_upper:
+        return (code_upper, '', 0, '')
+    
+    prefix, rest = code_upper.split('.', 1)
+    prefix_with_dot = prefix + '.'
+    
+    # Match the part after the dot: [ALPHA][NUMBER][ALPHA]
+    # Examples: "1", "10", "5b", "T1", "T2", "MIX"
+    match = re.match(r'^([A-Za-z]*)(\d*)([A-Za-z]*)$', rest)
+    
+    if not match:
+        # Fallback if pattern doesn't match
+        return (prefix_with_dot, rest, 0, '')
+    
+    alpha_part = match.group(1)
+    number_str = match.group(2)
+    suffix_part = match.group(3)
+    
+    # Convert number to int (0 if empty)
+    number = int(number_str) if number_str else 0
+    
+    return (prefix_with_dot, alpha_part, number, suffix_part)
 
 class MasterLoader:
     """
@@ -111,26 +166,33 @@ class MasterLoader:
         - Default: spaces = AND
         - Code patterns: "fr." matches codes starting with FR.
         
+        Results are sorted naturally (SO.1, SO.2, ... SO.10, SO.11).
+        
         Args:
             term: Search query (case-insensitive)
         
         Returns:
-            DataFrame of matching rows
-        
-        Examples:
-            >>> loader.search("chicken")           # substring match
-            >>> loader.search("green beans")       # both words (AND)
-            >>> loader.search('"green beans"')     # exact phrase
-            >>> loader.search("chicken OR fish")   # either word
-            >>> loader.search("beans NOT green")   # beans but not green
-            >>> loader.search("fr.")               # codes starting with FR.
+            DataFrame of matching rows, sorted naturally by code
         """
         from meal_planner.utils.search import hybrid_search
         
         if not term.strip():
             return pd.DataFrame()
         
-        return hybrid_search(self.df, term.strip())
+        results = hybrid_search(self.df, term.strip())
+        
+        # Sort results naturally by code
+        if not results.empty:
+            code_col = self.cols.code
+            results = results.copy()
+            # Create temporary sort key column
+            results['_sort_key'] = results[code_col].apply(_natural_sort_key)
+            # Sort by the key
+            results = results.sort_values('_sort_key')
+            # Drop the temporary column
+            results = results.drop(columns=['_sort_key']).reset_index(drop=True)
+        
+        return results
     
     def get_nutrient_totals(self, code: str, multiplier: float = 1.0) -> Optional[Dict[str, float]]:
         """
