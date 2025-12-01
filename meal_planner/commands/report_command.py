@@ -35,6 +35,7 @@ class ReportCommand(Command):
         show_nutrients = "--nutrients" in parts or "--nutrient" in parts or "--micro" in parts
         show_meals = "--meals" in parts or "--meal" in parts
         show_risk = "--risk" in parts        
+        
         # Remove flags from parts
         date_parts = [p for p in parts if not p.startswith("--")]
         
@@ -73,7 +74,7 @@ class ReportCommand(Command):
             pending = None
         
         if pending is None or not pending.get("items"):
-            print("n(No active day. Use 'start' and 'add' first.)n")
+            print("\n(No active day. Use 'start' and 'add' first.)\n")
             return None
         
         items = pending.get("items", [])
@@ -89,7 +90,7 @@ class ReportCommand(Command):
         entries = self.ctx.log.get_entries_for_date(query_date)
         
         if entries.empty:
-            print(f"nNo log entries found for {query_date}.n")
+            print(f"\nNo log entries found for {query_date}.\n")
             return None
         
         # Parse codes from all entries for this date
@@ -100,7 +101,7 @@ class ReportCommand(Command):
         ])
         
         if not all_codes.strip():
-            print(f"nNo codes found for {query_date}.n")
+            print(f"\nNo codes found for {query_date}.\n")
             return None
         
         # Parse into items
@@ -115,7 +116,7 @@ class ReportCommand(Command):
         breakdown = report.get_meal_breakdown()
         
         if breakdown is None:
-            print("n(No time markers present - meal breakdown not available)n")
+            print("\n(No time markers present - meal breakdown not available)\n")
             return
         
         print("=== Meal Breakdown ===")
@@ -179,13 +180,13 @@ class ReportCommand(Command):
                     seen_codes.add(code)
         
         if not codes_in_order:
-            print("n(No micronutrient data for these items)n")
+            print("\n(No micronutrient data for these items)\n")
             return
         
         # Get available nutrient columns
         available = self.ctx.nutrients.get_available_nutrients()
         if not available:
-            print("n(No micronutrient data available)n")
+            print("\n(No micronutrient data available)\n")
             return
         
         # Show micronutrients
@@ -232,7 +233,7 @@ class ReportCommand(Command):
                     seen_codes.add(code)
         
         if not codes_in_order:
-            print("n(No recipes available for these items)n")
+            print("\n(No recipes available for these items)\n")
             return
         
         # Show recipes
