@@ -9,6 +9,7 @@ from .columns import (
     ColumnResolver,
 )
 from .search import hybrid_search, parse_search_query
+from .usage_tracker import UsageTracker
 
 __all__ = [
     'get_column',
@@ -18,4 +19,5 @@ __all__ = [
     'ColumnResolver',
     'hybrid_search',
     'parse_search_query',
+    'UsageTracker',
 ]

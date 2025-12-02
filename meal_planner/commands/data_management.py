@@ -1,492 +1,410 @@
 """
 Data management commands: addcode, addnutrient, addrecipe.
 
-Allows adding new entries to CSV files from the command line.
-
-Field order for addcode: CODE,SECTION,OPTION,CAL,PROT_G,CARBS_G,FAT_G,GI,GL,SUGARS_G
-Example: addcode VE.T2,Vegetable,"Tomato, beefsteak (182 g)",33,1.5,7,0,15.0,1.5,4.7
+These commands support adding/updating entries in the CSV files with
+intelligent conflict detection and helpful error messages.
 """
-import csv
-import shutil
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
-
 from .base import Command, register_command
 
 
-def parse_csv_input(input_str: str) -> List[str]:
-    """
-    Parse CSV string handling quotes: 'A,"B,C",D' → ['A', 'B,C', 'D']
+def natural_sort_key(code: str):
+    """Generate sort key for natural code ordering (SO.2 before SO.10)."""
+    import re
     
-    Args:
-        input_str: CSV-formatted string
+    match = re.match(r'^([A-Za-z]+)\.(.+)$', code, re.IGNORECASE)
+    if not match:
+        return (code.upper(), 0, '')
     
-    Returns:
-        List of field values
-    """
-    return next(csv.reader([input_str]))
+    prefix = match.group(1).upper()
+    rest = match.group(2)
+    
+    num_match = re.match(r'^(\d+)(.*)$', rest)
+    if num_match:
+        num = int(num_match.group(1))
+        suffix = num_match.group(2).upper()
+        return (prefix, num, suffix)
+    else:
+        return (prefix, 0, rest.upper())
 
 
-def extract_section(code: str) -> str:
-    """
-    Extract section prefix from code: 'SO.11' → 'SO'
+def create_backup(filepath: Path) -> Path:
+    """Create timestamped backup of file."""
+    if not filepath.exists():
+        return None
     
-    Args:
-        code: Meal code
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = filepath.parent / f"{filepath.stem}_backup_{timestamp}{filepath.suffix}"
     
-    Returns:
-        Section prefix (empty string if no dot)
-    """
-    return code.split('.')[0] if '.' in code else ''
+    import shutil
+    shutil.copy2(filepath, backup_path)
+    
+    return backup_path
 
 
-def create_timestamped_backup(filepath: Path) -> Path:
-    """
-    Create timestamped backup: meal_plan_master-2025-12-01-10-15-00.csv.bak
+def parse_csv_line(line: str, expected_columns: list) -> dict:
+    """Parse CSV line into dictionary, handling quoted values."""
+    import csv
+    import io
     
-    Args:
-        filepath: Path to file to backup
-    
-    Returns:
-        Path to backup file
-    """
-    timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    stem = filepath.stem
-    backup = filepath.with_name(f"{stem}-{timestamp}.csv.bak")
-    shutil.copy2(filepath, backup)
-    return backup
-
-
-def atomic_write_csv(df: pd.DataFrame, filepath: Path) -> None:
-    """
-    Write DataFrame to CSV atomically (via temp file + rename).
-    
-    Args:
-        df: DataFrame to write
-        filepath: Destination path
-    """
-    temp = filepath.with_suffix('.tmp')
-    df.to_csv(temp, index=False)
-    temp.replace(filepath)  # Atomic rename
-
-
-def validate_numeric(value: str, field_name: str) -> float:
-    """
-    Validate that a value is numeric.
-    
-    Args:
-        value: String value to validate
-        field_name: Field name for error messages
-    
-    Returns:
-        Float value
-    
-    Raises:
-        ValueError: If not a valid number
-    """
+    # Use csv.reader to properly handle quoted values
+    reader = csv.reader(io.StringIO(line))
     try:
-        return float(value)
-    except ValueError:
-        raise ValueError(f"Field '{field_name}' must be numeric, got: '{value}'")
+        parts = next(reader)
+    except StopIteration:
+        parts = []
+    
+    # Strip whitespace from each part
+    parts = [p.strip() for p in parts]
+    
+    if len(parts) != len(expected_columns):
+        raise ValueError(
+            f"Expected {len(expected_columns)} columns, got {len(parts)}\n"
+            f"Expected: {', '.join(expected_columns)}"
+        )
+    
+    return dict(zip(expected_columns, parts))
 
 
-def validate_code_format(code: str) -> None:
-    """
-    Validate code format (must contain at least one dot).
+def format_csv_line(row: pd.Series, columns: list) -> str:
+    """Format DataFrame row as CSV line with proper quoting."""
+    import csv
+    import io
     
-    Args:
-        code: Code to validate
+    values = [str(row[col]) if col in row and pd.notna(row[col]) else '' for col in columns]
     
-    Raises:
-        ValueError: If invalid format
-    """
-    if '.' not in code:
-        raise ValueError(f"Code '{code}' must contain at least one dot (e.g., 'SO.11')")
+    # Use csv.writer to properly quote values with commas
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(values)
+    return output.getvalue().strip()
+
+
+def show_current_values(code: str, df: pd.DataFrame, columns: list, file_label: str):
+    """Display current values for existing code with headers."""
+    code_col = columns[0]
+    match = df[df[code_col].str.upper() == code.upper()]
+    
+    if match.empty:
+        return
+    
+    row = match.iloc[0]
+    
+    print(f"\nCode '{code}' already exists in {file_label}.")
+    print("Current values (CSV format):")
+    print("  " + ','.join(columns))
+    print("  " + format_csv_line(row, columns))
+    print(f"\nTo update, copy and modify the line above, then add --force:")
+    print(f"  (command) {format_csv_line(row, columns)} --force")
+    print()
 
 
 @register_command
 class AddCodeCommand(Command):
-    """Add new food code to master.csv"""
+    """Add or update master code entry."""
     
     name = "addcode"
-    help_text = "Add food code to master (addcode CODE,SECTION,OPTION,CAL,PROT,CARBS,FAT,GI,GL,SUGAR [--force])"
+    help_text = "Add/update master entry (addcode CODE or CODE,section,... [--force])"
     
     def execute(self, args: str) -> None:
-        """
-        Add new code to master.csv
-        
-        Args:
-            args: CSV input with optional --force flag
-        
-        Format: CODE,SECTION,OPTION,CAL,PROT_G,CARBS_G,FAT_G,GI,GL,SUGARS_G
-        Example: VE.T2,Vegetable,"Tomato, beefsteak (182 g)",33,1.5,7,0,15.0,1.5,4.7
-        """
+        """Add or update master code."""
         if not args.strip():
-            print("Usage: addcode CODE,SECTION,OPTION,CAL,PROT,CARBS,FAT,GI,GL,SUGAR [--force]")
-            print('Example: addcode VE.T2,Vegetable,"Tomato, beefsteak (182 g)",33,1.5,7,0,15.0,1.5,4.7')
+            print("Usage: addcode CODE  (to check existing)")
+            print("   or: addcode CODE,section,option,cal,prot_g,carbs_g,fat_g,GI,GL,sugar_g [--force]")
+            print("\nExample:")
+            print("  addcode VE.38")
+            print("  addcode SO.99,Soup,New soup,150,8,20,3,40,10,5")
             return
         
-        # Check for --force flag
-        force = '--force' in args
-        input_str = args.replace('--force', '').strip()
+        force = args.strip().endswith('--force')
+        if force:
+            args = args.strip()[:-7].strip()
         
-        # Parse CSV input
+        columns = ['code', 'section', 'option', 'cal', 'prot_g', 'carbs_g', 'fat_g', 'GI', 'GL', 'sugar_g']
+        
+        # If no commas, treat as lookup
+        if ',' not in args:
+            code = args.strip().upper()
+            master_df = self.ctx.master.df
+            code_col = self.ctx.master.cols.code
+            existing = master_df[master_df[code_col].str.upper() == code]
+            
+            if existing.empty:
+                print(f"\nCode '{code}' not found in master.csv.")
+                print("To add it, use:")
+                print(f"  addcode {code},section,option,cal,prot_g,carbs_g,fat_g,GI,GL,sugar_g")
+            else:
+                show_current_values(code, master_df, columns, "master.csv")
+            return
+        
+        # Parse CSV line
         try:
-            fields = parse_csv_input(input_str)
-        except Exception as e:
-            print(f"Error parsing CSV input: {e}")
-            return
-        
-        # Validate field count
-        if len(fields) != 10:
-            print(f"Error: Expected 10 fields, got {len(fields)}")
-            print("Required: CODE,SECTION,OPTION,CAL,PROT_G,CARBS_G,FAT_G,GI,GL,SUGARS_G")
-            return
-        
-        # Extract fields
-        code = fields[0].strip().upper()
-        section_input = fields[1].strip()  # User's input (may be ignored)
-        option = fields[2].strip()
-        
-        # Validate code format
-        try:
-            validate_code_format(code)
+            data = parse_csv_line(args, columns)
         except ValueError as e:
             print(f"Error: {e}")
             return
         
-        # Validate numeric fields (correct order: CAL,PROT,CARBS,FAT,GI,GL,SUGAR)
-        try:
-            cal = validate_numeric(fields[3], 'CAL')
-            prot_g = validate_numeric(fields[4], 'PROT_G')
-            carbs_g = validate_numeric(fields[5], 'CARBS_G')
-            fat_g = validate_numeric(fields[6], 'FAT_G')
-            gi = validate_numeric(fields[7], 'GI')
-            gl = validate_numeric(fields[8], 'GL')
-            sugars_g = validate_numeric(fields[9], 'SUGARS_G')
-        except ValueError as e:
-            print(f"Error: {e}")
-            return
-        
-        # Load master
+        code = data['code'].upper()
         master_df = self.ctx.master.df.copy()
-        cols = self.ctx.master.cols
+        code_col = self.ctx.master.cols.code
+        existing = master_df[master_df[code_col].str.upper() == code]
         
-        # Determine correct section name based on code prefix
-        section_prefix = extract_section(code)
+        if not existing.empty and not force:
+            show_current_values(code, master_df, columns, "master.csv")
+            return
         
-        # Look up existing entries with this prefix to get consistent section name
-        matching_prefix = master_df[
-            master_df[cols.code].astype(str).apply(extract_section) == section_prefix
-        ]
+        backup_path = create_backup(self.ctx.master.filepath)
+        if backup_path:
+            print(f"Created backup: {backup_path.name}")
         
-        if not matching_prefix.empty:
-            # Use section name from existing entries with this prefix
-            section = matching_prefix.iloc[0][cols.section]
-            if section_input.lower() != section.lower():
-                print(f"Note: Using section name '{section}' (from existing {section_prefix}.* codes)")
-        else:
-            # New section - capitalize first letter of user input
-            section = section_input[0].upper() + section_input[1:] if len(section_input) > 1 else section_input.upper()
-        
-        # Check if code exists
-        existing = master_df[master_df[cols.code].str.upper() == code]
         if not existing.empty:
-            if not force:
-                print(f"Error: Code '{code}' already exists in master.csv")
-                current = existing.iloc[0]
-                # Extract values explicitly to show in INPUT format order: CAL,PROT,CARBS,FAT,GI,GL,SUGARS
-                curr_code = current[cols.code]
-                curr_section = current[cols.section]
-                curr_option = current[cols.option]
-                curr_cal = current[cols.cal]
-                curr_prot = current[cols.prot_g]
-                curr_carbs = current[cols.carbs_g]
-                curr_fat = current[cols.fat_g]
-                curr_gi = current[cols.gi] if cols.gi and cols.gi in current.index else 0
-                curr_gl = current[cols.gl] if cols.gl and cols.gl in current.index else 0
-                curr_sugar = current[cols.sugar_g] if cols.sugar_g and cols.sugar_g in current.index else 0
-                print(f"  Current: {curr_code},{curr_section},\"{curr_option}\","
-                      f"{curr_cal},{curr_prot},{curr_carbs},{curr_fat},"
-                      f"{curr_gi},{curr_gl},{curr_sugar}")
-                print("Use --force to replace")
-                return
-            else:
-                # Remove existing entry (will be replaced)
-                master_df = master_df[master_df[cols.code].str.upper() != code]
-                print(f"Replacing existing entry for {code}")
+            idx = existing.index[0]
+            for col, value in data.items():
+                actual_col = col if col in master_df.columns else self.ctx.master.cols.__dict__.get(col, col)
+                if actual_col in master_df.columns:
+                    # Convert to proper dtype to avoid warnings
+                    if master_df[actual_col].dtype in ['float64', 'int64']:
+                        try:
+                            master_df.at[idx, actual_col] = float(value) if value else 0.0
+                        except (ValueError, TypeError):
+                            master_df.at[idx, actual_col] = value
+                    else:
+                        master_df.at[idx, actual_col] = value
+            action = "Updated"
+        else:
+            # Convert numeric columns to proper types
+            typed_data = {}
+            for col, value in data.items():
+                actual_col = col if col in master_df.columns else self.ctx.master.cols.__dict__.get(col, col)
+                if actual_col in master_df.columns:
+                    if master_df[actual_col].dtype in ['float64', 'int64']:
+                        try:
+                            typed_data[col] = float(value) if value else 0.0
+                        except (ValueError, TypeError):
+                            typed_data[col] = value
+                    else:
+                        typed_data[col] = value
+                else:
+                    typed_data[col] = value
+            
+            new_row = pd.DataFrame([typed_data])
+            master_df = pd.concat([master_df, new_row], ignore_index=True)
+            action = "Added"
         
-        # Check if this is a new section (already determined above)
-        if matching_prefix.empty:
-            # No existing codes with this prefix
-            if not force:
-                print(f"Warning: Section '{section_prefix}' does not exist in master.csv")
-                print(f"This appears to be a new section. Section name will be: '{section}'")
-                print("Use --force to create it.")
-                return
-            else:
-                print(f"Creating new section: {section_prefix} ('{section}')")
+        # Sort naturally
+        code_col = self.ctx.master.cols.code
+        master_df['_sort_key'] = master_df[code_col].apply(natural_sort_key)
+        master_df = master_df.sort_values('_sort_key').drop('_sort_key', axis=1)
+        master_df = master_df.reset_index(drop=True)
         
-        # Create backup
-        backup_path = create_timestamped_backup(self.ctx.master.filepath)
-        print(f"Backup: {backup_path.name}")
-        
-        # Create new row (column order: code,section,option,cal,prot_g,carbs_g,fat_g,GI,GL,sugars_g)
-        new_row = {
-            cols.code: code,
-            cols.section: section,
-            cols.option: option,
-            cols.cal: cal,
-            cols.prot_g: prot_g,
-            cols.carbs_g: carbs_g,
-            cols.fat_g: fat_g,
-        }
-        
-        # Add optional columns if they exist
-        if cols.gi:
-            new_row[cols.gi] = gi
-        if cols.gl:
-            new_row[cols.gl] = gl
-        if cols.sugar_g:
-            new_row[cols.sugar_g] = sugars_g
-        
-        # Add row
-        master_df = pd.concat([master_df, pd.DataFrame([new_row])], ignore_index=True)
-        
-        # Sort by section prefix, then code
-        master_df['_section'] = master_df[cols.code].astype(str).apply(extract_section)
-        master_df = master_df.sort_values(['_section', cols.code]).reset_index(drop=True)
-        master_df = master_df.drop('_section', axis=1)
-        
-        # Atomic write
-        atomic_write_csv(master_df, self.ctx.master.filepath)
-        
-        # Reload master
+        master_df.to_csv(self.ctx.master.filepath, index=False)
         self.ctx.master.reload()
         
-        print(f"✓ Added code {code} to master.csv")
+        print(f"✓ {action} {code} in master.csv")
 
 
 @register_command
 class AddNutrientCommand(Command):
-    """Add micronutrient data for a code"""
+    """Add or update nutrient entry."""
     
     name = "addnutrient"
-    help_text = "Add nutrients for code (addnutrient CODE,FIBER,SODIUM,POTASSIUM,VITA,VITC,IRON [--force])"
+    help_text = "Add/update nutrients (addnutrient CODE or CODE,fiber_g,... [--force])"
     
     def execute(self, args: str) -> None:
-        """
-        Add nutrient data for a code.
-        
-        Args:
-            args: CSV input with optional --force flag
-        
-        Format: CODE,FIBER_G,SODIUM_MG,POTASSIUM_MG,VITA_MCG,VITC_MG,IRON_MG
-        Example: OT.28,0.0,5,5,0,0.0,0.0
-        """
-        if not args.strip():
-            print("Usage: addnutrient CODE,FIBER_G,SODIUM_MG,POTASSIUM_MG,VITA_MCG,VITC_MG,IRON_MG [--force]")
-            print("Example: addnutrient OT.28,0.0,5,5,0,0.0,0.0")
-            return
-        
+        """Add or update nutrient data."""
         if not self.ctx.nutrients:
-            print("Error: Nutrients file not configured")
+            print("Nutrients file not configured.")
             return
         
-        # Check for --force flag
-        force = '--force' in args
-        input_str = args.replace('--force', '').strip()
+        if not args.strip():
+            available = self.ctx.nutrients.get_available_nutrients()
+            cols_str = ','.join(['code'] + available) if available else 'code,...'
+            print(f"Usage: addnutrient CODE  (to check existing)")
+            print(f"   or: addnutrient {cols_str} [--force]")
+            return
         
-        # Parse CSV input
+        force = args.strip().endswith('--force')
+        if force:
+            args = args.strip()[:-7].strip()
+        
+        nutrients_df = self.ctx.nutrients.df
+        if nutrients_df.empty:
+            print("Nutrients file is empty.")
+            return
+        
+        columns = list(nutrients_df.columns)
+        
+        # If no commas, treat as lookup
+        if ',' not in args:
+            code = args.strip().upper()
+            existing = nutrients_df[nutrients_df['code'].str.upper() == code]
+            
+            if existing.empty:
+                print(f"\nCode '{code}' not found in nutrients.csv.")
+                print("To add it, use:")
+                print(f"  addnutrient {code},{','.join(['...']*len(columns[1:]))}")
+            else:
+                show_current_values(code, nutrients_df, columns, "nutrients.csv")
+            return
+        
         try:
-            fields = parse_csv_input(input_str)
-        except Exception as e:
-            print(f"Error parsing CSV input: {e}")
-            return
-        
-        # Validate field count
-        if len(fields) != 7:
-            print(f"Error: Expected 7 fields, got {len(fields)}")
-            print("Required: CODE,FIBER_G,SODIUM_MG,POTASSIUM_MG,VITA_MCG,VITC_MG,IRON_MG")
-            return
-        
-        # Extract code
-        code = fields[0].strip().upper()
-        
-        # Check if code exists in master
-        if not self.ctx.master.lookup_code(code):
-            print(f"Error: Code '{code}' does not exist in master.csv")
-            print("Add the code to master first using 'addcode'")
-            return
-        
-        # Validate numeric fields
-        try:
-            fiber_g = validate_numeric(fields[1], 'FIBER_G')
-            sodium_mg = validate_numeric(fields[2], 'SODIUM_MG')
-            potassium_mg = validate_numeric(fields[3], 'POTASSIUM_MG')
-            vita_mcg = validate_numeric(fields[4], 'VITA_MCG')
-            vitc_mg = validate_numeric(fields[5], 'VITC_MG')
-            iron_mg = validate_numeric(fields[6], 'IRON_MG')
+            data = parse_csv_line(args, columns)
         except ValueError as e:
             print(f"Error: {e}")
             return
         
-        # Load nutrients
-        nutrients_df = self.ctx.nutrients.df.copy()
+        code = data['code'].upper()
+        existing = nutrients_df[nutrients_df['code'].str.upper() == code]
         
-        # Check if entry exists
-        code_col = None
-        for col in nutrients_df.columns:
-            if str(col).lower() == 'code':
-                code_col = col
-                break
+        if not existing.empty and not force:
+            show_current_values(code, nutrients_df, columns, "nutrients.csv")
+            return
         
-        if code_col:
-            existing = nutrients_df[nutrients_df[code_col].str.upper() == code]
-            if not existing.empty:
-                if not force:
-                    print(f"Error: Nutrient entry for '{code}' already exists")
-                    print("Use --force to replace")
-                    return
+        backup_path = create_backup(self.ctx.nutrients.filepath)
+        if backup_path:
+            print(f"Created backup: {backup_path.name}")
+        
+        if not existing.empty:
+            idx = existing.index[0]
+            for col, value in data.items():
+                if col in nutrients_df.columns:
+                    # Convert to proper dtype
+                    if nutrients_df[col].dtype in ['float64', 'int64']:
+                        try:
+                            nutrients_df.at[idx, col] = float(value) if value else 0.0
+                        except (ValueError, TypeError):
+                            nutrients_df.at[idx, col] = value
+                    else:
+                        nutrients_df.at[idx, col] = value
+            action = "Updated"
+        else:
+            # Convert numeric columns to proper types
+            typed_data = {}
+            for col, value in data.items():
+                if col in nutrients_df.columns:
+                    if nutrients_df[col].dtype in ['float64', 'int64']:
+                        try:
+                            typed_data[col] = float(value) if value else 0.0
+                        except (ValueError, TypeError):
+                            typed_data[col] = value
+                    else:
+                        typed_data[col] = value
                 else:
-                    # Remove existing entry
-                    nutrients_df = nutrients_df[nutrients_df[code_col].str.upper() != code]
-                    print(f"Replacing existing nutrient entry for {code}")
+                    typed_data[col] = value
+            
+            new_row = pd.DataFrame([typed_data])
+            nutrients_df = pd.concat([nutrients_df, new_row], ignore_index=True)
+            action = "Added"
         
-        # Create backup
-        backup_path = create_timestamped_backup(self.ctx.nutrients.filepath)
-        print(f"Backup: {backup_path.name}")
+        nutrients_df['_sort_key'] = nutrients_df['code'].apply(natural_sort_key)
+        nutrients_df = nutrients_df.sort_values('_sort_key').drop('_sort_key', axis=1)
+        nutrients_df = nutrients_df.reset_index(drop=True)
         
-        # Create new row
-        new_row = {
-            'code': code,
-            'fiber_g': fiber_g,
-            'sodium_mg': sodium_mg,
-            'potassium_mg': potassium_mg,
-            'vitA_mcg': vita_mcg,
-            'vitC_mg': vitc_mg,
-            'iron_mg': iron_mg,
-        }
-        
-        # Add row
-        nutrients_df = pd.concat([nutrients_df, pd.DataFrame([new_row])], ignore_index=True)
-        
-        # Sort by code to match master order (optional)
-        nutrients_df = nutrients_df.sort_values('code').reset_index(drop=True)
-        
-        # Atomic write
-        atomic_write_csv(nutrients_df, self.ctx.nutrients.filepath)
-        
-        # Reload nutrients
+        nutrients_df.to_csv(self.ctx.nutrients.filepath, index=False)
         self.ctx.nutrients.load()
         
-        print(f"✓ Added nutrient data for {code}")
+        print(f"✓ {action} {code} in nutrients.csv")
 
 
 @register_command
 class AddRecipeCommand(Command):
-    """Add recipe/ingredient list for a code"""
+    """Add or update recipe entry."""
     
     name = "addrecipe"
-    help_text = "Add recipe for code (addrecipe CODE,\"INGREDIENTS\" [--force])"
+    help_text = "Add/update recipe (addrecipe CODE or CODE,ingredients [--force])"
     
     def execute(self, args: str) -> None:
-        """
-        Add recipe for a code.
-        
-        Args:
-            args: CSV input with optional --force flag
-        
-        Format: CODE,"INGREDIENTS"
-        Example: addrecipe ENT.12,"12oz turkey,1car,6cel,1lg on,1jal,8gar,1Qt K-bone,1Qt BTB,6C water,1 can pinto"
-        """
-        if not args.strip():
-            print("Usage: addrecipe CODE,\"INGREDIENTS\" [--force]")
-            print('Example: addrecipe ENT.12,"12oz turkey,1car,6cel"')
-            return
-        
+        """Add or update recipe."""
         if not self.ctx.recipes:
-            print("Error: Recipes file not configured")
+            print("Recipes file not configured.")
             return
         
-        # Check for --force flag
-        force = '--force' in args
-        input_str = args.replace('--force', '').strip()
+        if not args.strip():
+            print("Usage: addrecipe CODE  (to check existing)")
+            print('   or: addrecipe CODE,"ingredients list" [--force]')
+            print("\nNote: Use quotes around ingredients if they contain commas")
+            print("\nExample:")
+            print('  addrecipe SO.11,"16oz lean steak, 1 lb dry beans, 11oz okra"')
+            print('  addrecipe ZZ.1,"dirt, mud, rocks, oak leaves, slugs" --force')
+            return
         
-        # Parse CSV input
+        force = args.strip().endswith('--force')
+        if force:
+            args = args.strip()[:-7].strip()
+        
+        columns = ['code', 'ingredients']
+        
+        # If no commas, treat as lookup
+        if ',' not in args:
+            code = args.strip().upper()
+            recipes_df = self.ctx.recipes.df
+            existing = recipes_df[recipes_df['code'].str.upper() == code]
+            
+            if existing.empty:
+                print(f"\nCode '{code}' not found in recipes.csv.")
+                print("To add it, use:")
+                print(f"  addrecipe {code},ingredient list here")
+            else:
+                show_current_values(code, recipes_df, columns, "recipes.csv")
+            return
+        
         try:
-            fields = parse_csv_input(input_str)
-        except Exception as e:
-            print(f"Error parsing CSV input: {e}")
+            data = parse_csv_line(args, columns)
+        except ValueError as e:
+            print(f"Error: {e}")
             return
         
-        # Validate field count
-        if len(fields) != 2:
-            print(f"Error: Expected 2 fields (CODE,INGREDIENTS), got {len(fields)}")
-            return
-        
-        # Extract code and ingredients
-        code = fields[0].strip().upper()
-        ingredients = fields[1].strip()
-        
-        # Check if code exists in master
-        if not self.ctx.master.lookup_code(code):
-            print(f"Error: Code '{code}' does not exist in master.csv")
-            print("Add the code to master first using 'addcode'")
-            return
-        
-        # Load recipes
+        code = data['code'].upper()
         recipes_df = self.ctx.recipes.df.copy()
+        existing = recipes_df[recipes_df['code'].str.upper() == code]
         
-        # Check if entry exists
-        code_col = None
-        for col in recipes_df.columns:
-            if str(col).lower() == 'code':
-                code_col = col
-                break
+        if not existing.empty and not force:
+            show_current_values(code, recipes_df, columns, "recipes.csv")
+            return
         
-        if code_col:
-            existing = recipes_df[recipes_df[code_col].str.upper() == code]
-            if not existing.empty:
-                if not force:
-                    print(f"Error: Recipe for '{code}' already exists")
-                    current = existing.iloc[0]
-                    ing_col = None
-                    for col in recipes_df.columns:
-                        if str(col).lower() == 'ingredients':
-                            ing_col = col
-                            break
-                    if ing_col:
-                        print(f"  Current: {current[ing_col]}")
-                    print("Use --force to replace")
-                    return
+        backup_path = create_backup(self.ctx.recipes.filepath)
+        if backup_path:
+            print(f"Created backup: {backup_path.name}")
+        
+        if not existing.empty:
+            idx = existing.index[0]
+            for col, value in data.items():
+                if col in recipes_df.columns:
+                    # Recipes are all strings, but check dtype for consistency
+                    if recipes_df[col].dtype in ['float64', 'int64']:
+                        try:
+                            recipes_df.at[idx, col] = float(value) if value else 0.0
+                        except (ValueError, TypeError):
+                            recipes_df.at[idx, col] = value
+                    else:
+                        recipes_df.at[idx, col] = value
+            action = "Updated"
+        else:
+            # Convert to proper types if needed
+            typed_data = {}
+            for col, value in data.items():
+                if col in recipes_df.columns:
+                    if recipes_df[col].dtype in ['float64', 'int64']:
+                        try:
+                            typed_data[col] = float(value) if value else 0.0
+                        except (ValueError, TypeError):
+                            typed_data[col] = value
+                    else:
+                        typed_data[col] = value
                 else:
-                    # Remove existing entry
-                    recipes_df = recipes_df[recipes_df[code_col].str.upper() != code]
-                    print(f"Replacing existing recipe for {code}")
+                    typed_data[col] = value
+            
+            new_row = pd.DataFrame([typed_data])
+            recipes_df = pd.concat([recipes_df, new_row], ignore_index=True)
+            action = "Added"
         
-        # Create backup
-        backup_path = create_timestamped_backup(self.ctx.recipes.filepath)
-        print(f"Backup: {backup_path.name}")
+        recipes_df['_sort_key'] = recipes_df['code'].apply(natural_sort_key)
+        recipes_df = recipes_df.sort_values('_sort_key').drop('_sort_key', axis=1)
+        recipes_df = recipes_df.reset_index(drop=True)
         
-        # Create new row
-        new_row = {
-            'code': code,
-            'ingredients': ingredients,
-        }
-        
-        # Add row
-        recipes_df = pd.concat([recipes_df, pd.DataFrame([new_row])], ignore_index=True)
-        
-        # Sort by code to match master order (optional)
-        recipes_df = recipes_df.sort_values('code').reset_index(drop=True)
-        
-        # Atomic write
-        atomic_write_csv(recipes_df, self.ctx.recipes.filepath)
-        
-        # Reload recipes
+        recipes_df.to_csv(self.ctx.recipes.filepath, index=False)
         self.ctx.recipes.load()
         
-        print(f"✓ Added recipe for {code}")
+        print(f"✓ {action} {code} in recipes.csv")

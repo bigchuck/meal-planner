@@ -44,6 +44,11 @@ class CommandContext:
         self.pending_stack: List = []
         self.editing_date: Optional[str] = None
     
+        # Usage tracking
+        from config import TRACK_USAGE, USAGE_STATS_FILE
+        from meal_planner.utils import UsageTracker
+        self.usage = UsageTracker(USAGE_STATS_FILE, enabled=TRACK_USAGE)
+
     def reload_master(self):
         """Reload master file from disk."""
         self.master.reload()

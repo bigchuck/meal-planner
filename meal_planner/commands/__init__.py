@@ -15,6 +15,7 @@ from . import chart_command
 from . import recipe_command
 from . import nutrients_command
 from . import data_management
+from . import stats_command
 
 __all__ = [
     'Command',
