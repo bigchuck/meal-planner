@@ -38,6 +38,10 @@ NUTRIENTS_FILE = DATA_PATH / "meal_plan_nutrients.csv"
 RECIPES_FILE = DATA_PATH / "meal_plan_recipes.csv"
 ALIASES_FILE = DATA_PATH / "meal_plan_aliases.json"
 
+# Usage tracking
+TRACK_USAGE = True  # Set to False to disable usage tracking
+USAGE_STATS_FILE = DATA_PATH / "usage_stats.json"
+
 print(f"Using these files: ")
 print(f"  master: {MASTER_FILE}")
 print(f"  log: {LOG_FILE}")
@@ -45,6 +49,7 @@ print(f"  pending: {PENDING_FILE}")
 print(f"  nutrients: {NUTRIENTS_FILE}")
 print(f"  recipes: {RECIPES_FILE}")
 print(f"  aliases: {ALIASES_FILE}")
+print(f"  usage: {USAGE_STATS_FILE}")
 
 # Verify files exist
 def verify_data_files():

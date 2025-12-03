@@ -67,6 +67,10 @@ def repl():
             try:
                 cmd = cmd_class(ctx)
                 cmd.execute(args)
+                # Track usage using canonical name (first alias)
+                canonical_name = cmd.name if isinstance(cmd.name, str) else cmd.name[0]
+                ctx.usage.track(canonical_name)
+ 
             except SystemExit:
                 # Quit command raises SystemExit
                 raise
