@@ -59,14 +59,14 @@ def test_get_sugar_column_variants():
     df1 = pd.DataFrame(columns=['cal', 'sugar_g'])
     assert get_sugar_column(df1) == 'sugar_g'
     
-    df2 = pd.DataFrame(columns=['cal', 'sugars_g'])
-    assert get_sugar_column(df2) == 'sugars_g'
+    df2 = pd.DataFrame(columns=['cal', 'sugar_g'])
+    assert get_sugar_column(df2) == 'sugar_g'
     
     df3 = pd.DataFrame(columns=['cal', 'sugar'])
     assert get_sugar_column(df3) == 'sugar'
     
-    df4 = pd.DataFrame(columns=['cal', 'sugars'])
-    assert get_sugar_column(df4) == 'sugars'
+    df4 = pd.DataFrame(columns=['cal', 'sugar'])
+    assert get_sugar_column(df4) == 'sugar'
 
 
 def test_get_sugar_column_missing():
@@ -102,9 +102,9 @@ def test_column_resolver_sugar_variants():
     cols1 = ColumnResolver(df1)
     assert cols1.sugar_g == 'sugar_g'
     
-    df2 = pd.DataFrame(columns=['cal', 'sugars'])
+    df2 = pd.DataFrame(columns=['cal', 'sugar'])
     cols2 = ColumnResolver(df2)
-    assert cols2.sugar_g == 'sugars'
+    assert cols2.sugar_g == 'sugar'
     
     df3 = pd.DataFrame(columns=['cal'])
     cols3 = ColumnResolver(df3)

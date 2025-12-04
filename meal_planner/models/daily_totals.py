@@ -72,7 +72,7 @@ class DailyTotals:
             protein_g=get_float(("prot_g", "protein_g", "protein")),
             carbs_g=get_float(("carbs_g", "carbohydrates_g", "carbs")),
             fat_g=get_float(("fat_g", "fat")),
-            sugar_g=get_float(("sugar_g", "sugars_g", "sugar", "sugars")),
+            sugar_g=get_float(("sugar_g", "sugar")),
             glycemic_load=get_float(("gl", "glycemic_load", "GL"))
         )
     
