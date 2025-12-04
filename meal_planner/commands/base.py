@@ -2,10 +2,11 @@
 Base command classes and registry.
 """
 from abc import ABC, abstractmethod
-from typing import Dict, Type, Optional, List
+from typing import Dict, Type, Optional, List, Set
 from pathlib import Path
 
 from meal_planner.data import MasterLoader, LogManager, PendingManager
+from datetime import datetime
 
 
 class CommandContext:
@@ -48,6 +49,10 @@ class CommandContext:
         from config import TRACK_USAGE, USAGE_STATS_FILE
         from meal_planner.utils import UsageTracker
         self.usage = UsageTracker(USAGE_STATS_FILE, enabled=TRACK_USAGE)
+
+       # Session state for backups
+        self.session_start = datetime.now()
+        self.backed_up_files: Set[Path] = set()  # Track which files backed up this session
 
     def reload_master(self):
         """Reload master file from disk."""

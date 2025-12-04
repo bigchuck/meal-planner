@@ -4,10 +4,11 @@ Data management commands: addcode, addnutrient, addrecipe.
 These commands support adding/updating entries in the CSV files with
 intelligent conflict detection and helpful error messages.
 """
+from typing import Optional
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
-from .base import Command, register_command
+from .base import Command, register_command, CommandContext
 
 
 def natural_sort_key(code: str):
@@ -30,19 +31,39 @@ def natural_sort_key(code: str):
         return (prefix, 0, rest.upper())
 
 
-def create_backup(filepath: Path) -> Path:
-    """Create timestamped backup of file."""
+def create_backup(filepath: Path, ctx: CommandContext) -> Optional[Path]:
+    """
+    Create timestamped backup of file (once per session per file).
+    
+    Args:
+        filepath: File to back up
+        ctx: Command context (tracks session state)
+    
+    Returns:
+        Backup path if created, None if already backed up or doesn't exist
+    """
+    # Already backed up this session
+    if filepath in ctx.backed_up_files:
+        return None
+    
     if not filepath.exists():
         return None
     
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = filepath.parent / f"{filepath.stem}_backup_{timestamp}{filepath.suffix}"
+    # Create backups subdirectory if needed
+    backup_dir = filepath.parent / "backups"
+    backup_dir.mkdir(exist_ok=True)
+    
+    # Use session start time for all backups in this session
+    timestamp = ctx.session_start.strftime("%Y%m%d_%H%M%S")
+    backup_path = backup_dir / f"{filepath.stem}_backup_{timestamp}{filepath.suffix}"
     
     import shutil
     shutil.copy2(filepath, backup_path)
     
+    # Mark as backed up this session
+    ctx.backed_up_files.add(filepath)
+    
     return backup_path
-
 
 def parse_csv_line(line: str, expected_columns: list) -> dict:
     """Parse CSV line into dictionary, handling quoted values."""
@@ -155,7 +176,7 @@ class AddCodeCommand(Command):
             show_current_values(code, master_df, columns, "master.csv")
             return
         
-        backup_path = create_backup(self.ctx.master.filepath)
+        backup_path = create_backup(self.ctx.master.filepath, self.ctx)
         if backup_path:
             print(f"Created backup: {backup_path.name}")
         
@@ -262,7 +283,7 @@ class AddNutrientCommand(Command):
             show_current_values(code, nutrients_df, columns, "nutrients.csv")
             return
         
-        backup_path = create_backup(self.ctx.nutrients.filepath)
+        backup_path = create_backup(self.ctx.nutrients.filepath, self.ctx)
         if backup_path:
             print(f"Created backup: {backup_path.name}")
         
@@ -364,7 +385,7 @@ class AddRecipeCommand(Command):
             show_current_values(code, recipes_df, columns, "recipes.csv")
             return
         
-        backup_path = create_backup(self.ctx.recipes.filepath)
+        backup_path = create_backup(self.ctx.recipes.filepath, self.ctx)
         if backup_path:
             print(f"Created backup: {backup_path.name}")
         
