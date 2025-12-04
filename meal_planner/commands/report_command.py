@@ -154,11 +154,10 @@ class ReportCommand(Command):
                 f"{int(t.sugar_g):>6} {int(t.glycemic_load):>4}")
         else:
             risk_summary = self._get_risk_summary(t, 1)
-            print(f"{'Daily Total':30} {int(t.calories):>6} {int(t.protein_g):>5}    "
+            print(f"{'Daily Total':30} {int(t.calories):>6} {int(t.protein_g):>5} "
                 f"{int(t.carbs_g):>5} {int(t.fat_g):>5} "
-                f"{int(t.sugar_g):>6} {int(t.glycemic_load):>4} "
+                f"{int(t.sugar_g):>6} {int(t.glycemic_load):>4}    "
                 f"{risk_summary}")
-        
         print()
 
     def _show_nutrients(self, report):
