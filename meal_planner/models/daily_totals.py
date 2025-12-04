@@ -11,6 +11,8 @@ class DailyTotals:
     Represents daily nutrient totals.
     
     Attributes:
+
+        # Macronutrients
         calories: Total calories
         protein_g: Total protein in grams
         carbs_g: Total carbohydrates in grams
@@ -18,6 +20,14 @@ class DailyTotals:
         sugar_g: Total sugar in grams
         glycemic_load: Total glycemic load
     
+        # Micronutrients
+        fiber_g: Total fiber in grams
+        sodium_mg: Total sodium in milligrams
+        potassium_mg: Total potassium in milligrams
+        vitA_mcg: Total vitamin A in micrograms
+        vitC_mg: Total vitamin C in milligrams
+        iron_mg: Total iron in milligrams
+
     Example:
         >>> totals = DailyTotals(calories=2000, protein_g=150, carbs_g=200, fat_g=70)
         >>> print(totals.calories)
@@ -29,6 +39,13 @@ class DailyTotals:
     fat_g: float = 0.0
     sugar_g: float = 0.0
     glycemic_load: float = 0.0
+
+    fiber_g: float = 0.0
+    sodium_mg: float = 0.0
+    potassium_mg: float = 0.0
+    vitA_mcg: float = 0.0
+    vitC_mg: float = 0.0
+    iron_mg: float = 0.0
     
     def to_dict(self) -> Dict[str, float]:
         """
@@ -43,7 +60,13 @@ class DailyTotals:
             "carbs_g": self.carbs_g,
             "fat_g": self.fat_g,
             "sugar_g": self.sugar_g,
-            "gl": self.glycemic_load
+            "gl": self.glycemic_load,
+            "fiber_g": self.fiber_g,
+            "sodium_mg": self.sodium_mg,
+            "potassium_mg": self.potassium_mg,
+            "vitA_mcg": self.vitA_mcg,
+            "vitC_mg": self.vitC_mg,
+            "iron_mg": self.iron_mg
         }
     
     @classmethod
@@ -73,7 +96,13 @@ class DailyTotals:
             carbs_g=get_float(("carbs_g", "carbohydrates_g", "carbs")),
             fat_g=get_float(("fat_g", "fat")),
             sugar_g=get_float(("sugar_g", "sugar")),
-            glycemic_load=get_float(("gl", "glycemic_load", "GL"))
+            glycemic_load=get_float(("gl", "glycemic_load", "GL")),
+            fiber_g=get_float(("fiber_g", "fiber")),
+            sodium_mg=get_float(("sodium_mg", "sodium")),
+            potassium_mg=get_float(("potassium_mg", "potassium")),
+            vitA_mcg=get_float(("vitA_mcg", "vita_mcg", "vitamin_a_mcg", "vitamin_a")),
+            vitC_mg=get_float(("vitC_mg", "vitc_mg", "vitamin_c_mg", "vitamin_c")),
+            iron_mg=get_float(("iron_mg", "iron"))
         )
     
     def add(self, other: 'DailyTotals') -> 'DailyTotals':
@@ -99,7 +128,13 @@ class DailyTotals:
             carbs_g=self.carbs_g + other.carbs_g,
             fat_g=self.fat_g + other.fat_g,
             sugar_g=self.sugar_g + other.sugar_g,
-            glycemic_load=self.glycemic_load + other.glycemic_load
+            glycemic_load=self.glycemic_load + other.glycemic_load,
+            fiber_g=self.fiber_g + other.fiber_g,
+            sodium_mg=self.sodium_mg + other.sodium_mg,
+            potassium_mg=self.potassium_mg + other.potassium_mg,
+            vitA_mcg=self.vitA_mcg + other.vitA_mcg,
+            vitC_mg=self.vitC_mg + other.vitC_mg,
+            iron_mg=self.iron_mg + other.iron_mg
         )
     
     def __add__(self, other: 'DailyTotals') -> 'DailyTotals':
@@ -128,7 +163,13 @@ class DailyTotals:
             carbs_g=self.carbs_g * multiplier,
             fat_g=self.fat_g * multiplier,
             sugar_g=self.sugar_g * multiplier,
-            glycemic_load=self.glycemic_load * multiplier
+            glycemic_load=self.glycemic_load * multiplier,
+            fiber_g=self.fiber_g * multiplier,
+            sodium_mg=self.sodium_mg * multiplier,
+            potassium_mg=self.potassium_mg * multiplier,
+            vitA_mcg=self.vitA_mcg * multiplier,
+            vitC_mg=self.vitC_mg * multiplier,
+            iron_mg=self.iron_mg * multiplier,
         )
     
     def __mul__(self, multiplier: float) -> 'DailyTotals':
@@ -148,7 +189,13 @@ class DailyTotals:
             carbs_g=round(self.carbs_g),
             fat_g=round(self.fat_g),
             sugar_g=round(self.sugar_g),
-            glycemic_load=round(self.glycemic_load)
+            glycemic_load=round(self.glycemic_load),
+            fiber_g=round(self.fiber_g),
+            sodium_mg=round(self.sodium_mg),
+            potassium_mg=round(self.potassium_mg),
+            vitA_mcg=round(self.vitA_mcg),
+            vitC_mg=round(self.vitC_mg),
+            iron_mg=round(self.iron_mg),
         )
     
     def format_summary(self) -> str:
@@ -172,6 +219,28 @@ class DailyTotals:
             f"Sugars: {int(rounded.sugar_g)}g | "
             f"GL: {int(rounded.glycemic_load)}"
         )
+    
+    def format_detailed_summary(self) -> str:
+        """
+        Format with micronutrients included.
+        
+        Returns:
+            Formatted string with macros and micros
+        """
+        rounded = self.rounded()
+        lines = []
+        lines.append(self.format_summary())
+        lines.append(
+            f"Fiber: {int(rounded.fiber_g)}g | "
+            f"Sodium: {int(rounded.sodium_mg)}mg | "
+            f"Potassium: {int(rounded.potassium_mg)}mg"
+        )
+        lines.append(
+            f"Vit A: {int(rounded.vitA_mcg)}mcg | "
+            f"Vit C: {int(rounded.vitC_mg)}mg | "
+            f"Iron: {int(rounded.iron_mg)}mg"
+        )
+        return "\n".join(lines)
     
     def __str__(self) -> str:
         """String representation."""

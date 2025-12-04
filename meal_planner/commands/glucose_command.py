@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from .base import Command, register_command
 from meal_planner.reports.report_builder import ReportBuilder
 from meal_planner.parsers import CodeParser
+from meal_planner.glucose import GlucoseCalculator
 
 
 @register_command
@@ -29,7 +30,7 @@ class GlucoseCommand(Command):
         
         self.show_all_meals = "--all" in parts
 
-        builder = ReportBuilder(self.ctx.master)
+        builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
 
         date_parts = [p for p in parts if not p.startswith("--")]
 
@@ -47,6 +48,7 @@ class GlucoseCommand(Command):
             return
         
         # Show glucose analysis
+        self.glucose_calculator = GlucoseCalculator()
         self._show_glucose_analysis(report, date_label)
     
     def _get_pending_report(self, builder):
@@ -95,175 +97,42 @@ class GlucoseCommand(Command):
 
         for meal_name, first_time, totals in breakdown:
             if self.show_all_meals or "SNACK" not in meal_name: 
-                print(meal_name, first_time)
+                # Format meal header
+                print(f"\n{'=' * 70}")
+                print(f"{meal_name} @ {first_time}")
+                print(f"{'=' * 70}")
+
                 meal_dict = totals.to_dict()
                 meal_dict['calories'] = meal_dict.pop('cal')
                 meal_dict['protein_g'] = meal_dict.pop('prot_g')
-                meal_dict['gi'] = 100 * meal_dict['gl'] / meal_dict['carbs_g']
-                print(meal_dict)
-                risks = self.compute_risk_scores(meal_dict)
-                print(risks)
+                meal_dict['gi'] = 100 * meal_dict['gl'] / meal_dict['carbs_g'] if meal_dict['carbs_g'] > 0 else 0
 
+                # Meal composition table
+                print(f"\nMeal Composition:")
+                print(f"  {'Calories:':<20} {meal_dict['calories']:>6.0f}")
+                print(f"  {'Carbohydrates:':<20} {meal_dict['carbs_g']:>6.1f} g")
+                print(f"  {'  - Sugars:':<20} {meal_dict['sugar_g']:>6.1f} g ({100 * meal_dict['sugar_g'] / meal_dict['carbs_g'] if meal_dict['carbs_g'] > 0 else 0:.0f}%)")
+                print(f"  {'Protein:':<20} {meal_dict['protein_g']:>6.1f} g")
+                print(f"  {'Fat:':<20} {meal_dict['fat_g']:>6.1f} g")
+                print(f"  {'Glycemic Index:':<20} {meal_dict['gi']:>6.0f}")
+                print(f"  {'Glycemic Load:':<20} {meal_dict['gl']:>6.1f}")
 
-    def compute_risk_scores(self, meal: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Compute a glucose 'risk score' (0–10) and its components.
-        
-        Expected keys in `meal` (all optional, defaults to 0 or neutral):
-        - 'carbs_g'   : grams of carbohydrate
-        - 'fat_g'     : grams of fat
-        - 'protein_g' : grams of protein
-        - 'fiber_g'   : grams of fiber
-        - 'gi'        : glycemic index (0–100, or None)
-        
-        Returns a dict:
-        {
-            "risk_score": float in [0, 10],
-            "risk_rating": "low" | "medium" | "high" | "very_high",
-            "components": {
-                "carb_risk": float,
-                "gi_speed_factor": float,
-                "fat_delay_risk": float,
-                "protein_tail_risk": float,
-                "fiber_buffer": float,
-                "base_carb_risk": float,
-                "raw_score_before_clamp": float
-            }
-        }
-        """
-        carbs_g = _safe_get(meal, "carbs_g", 0.0)
-        fat_g = _safe_get(meal, "fat_g", 0.0)
-        protein_g = _safe_get(meal, "protein_g", 0.0)
-        fiber_g = _safe_get(meal, "fiber_g", 0.0)
-        gi_value_raw = meal.get("gi", None)
-        gi = None
-        if gi_value_raw is not None:
-            try:
-                gi = float(gi_value_raw)
-            except (TypeError, ValueError):
-                gi = None
+                risks = self.glucose_calculator.compute_risk_scores(meal_dict)
 
-        carb_risk = _carb_risk_score(carbs_g)
-        gi_factor = _gi_speed_factor(gi)
-        base_carb_risk = min(carb_risk * gi_factor, 10.0)
+                comps = risks['components']
+                # Risk analysis
+                print(f"\nGlucose Risk Analysis:")
+                print(f"  {'Overall Risk Score:':<22} {risks['risk_score']:>5.1f} / 10.0  [{risks['risk_rating'].upper()}]")
 
-        fat_delay = _fat_delay_score(fat_g)
-        protein_tail = _protein_tail_score(protein_g)
-        fiber_buffer = _fiber_buffer_score(fiber_g)
+                print(f"\n  Risk Components:")
+                print(f"    {'Carb Risk:':<24} {comps['carb_risk']:>5.1f}")
+                print(f"    {'GI Speed Factor:':<24} {comps['gi_speed_factor']:>5.2f}x")
+                print(f"    {'Base Carb Risk:':<24} {comps['base_carb_risk']:>5.1f}")
+                print(f"    {'Fat Delay Risk:':<24} +{comps['fat_delay_risk']:>4.1f}")
+                print(f"    {'Protein Tail Risk:':<24} +{comps['protein_tail_risk']:>4.1f}")
+                print(f"    {'Fiber Buffer:':<24} -{comps['fiber_buffer']:>4.1f}")
+                print(f"    {'-' * 32}")
+                print(f"    {'Raw Total:':<24} {comps['raw_score_before_clamp']:>5.1f}")
 
-        # Weighted combination (you can tweak weights if desired)
-        raw_score = (
-            base_carb_risk
-            + 0.6 * fat_delay       # fat increases late spike risk
-            + 0.5 * protein_tail    # protein adds delayed tail risk
-            - 0.7 * fiber_buffer    # fiber subtracts risk
-        )
-
-        # Clamp to [0, 10]
-        risk_score = max(0.0, min(10.0, raw_score))
-
-        # Convert to categorical rating
-        if risk_score < 3:
-            rating = "low"
-        elif risk_score < 6:
-            rating = "medium"
-        elif risk_score < 8.5:
-            rating = "high"
-        else:
-            rating = "very_high"
-
-        return {
-            "risk_score": risk_score,
-            "risk_rating": rating,
-            "components": {
-                "carb_risk": carb_risk,
-                "gi_speed_factor": gi_factor,
-                "base_carb_risk": base_carb_risk,
-                "fat_delay_risk": fat_delay,
-                "protein_tail_risk": protein_tail,
-                "fiber_buffer": fiber_buffer,
-                "raw_score_before_clamp": raw_score,
-            },
-        }
-                
-
-def _safe_get(meal: Dict[str, Any], key: str, default: float = 0.0) -> float:
-    """Utility to pull numeric fields from the meal dict with a default."""
-    value = meal.get(key, default)
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-def _carb_risk_score(carbs_g: float) -> float:
-    """
-    Map carb grams to a 0–10 risk contribution.
-    Thresholds are based on clinical carb ranges.
-    """
-    if carbs_g <= 5:
-        return 0.0
-    elif carbs_g <= 20:
-        return 2.0
-    elif carbs_g <= 40:
-        return 5.0
-    elif carbs_g <= 70:
-        return 8.0
-    else:
-        return 10.0
-
-def _gi_speed_factor(gi: Optional[float]) -> float:
-    """
-    Convert GI into a speed multiplier on carb risk.
-    """
-    if gi is None or gi <= 0:
-        return 1.0  # unknown: neutral
-    if gi < 40:
-        return 0.8  # slow
-    elif gi < 60:
-        return 1.0  # medium
-    else:
-        return 1.2  # fast
-
-def _fat_delay_score(fat_g: float) -> float:
-    """
-    Score for fat-driven delay and insulin resistance (0–7).
-    """
-    if fat_g <= 5:
-        return 0.0
-    elif fat_g <= 15:
-        return 1.0
-    elif fat_g <= 25:
-        return 3.0
-    elif fat_g <= 35:
-        return 5.0
-    else:
-        return 7.0
-
-def _protein_tail_score(protein_g: float) -> float:
-    """
-    Score for protein-driven delayed glucose via gluconeogenesis (0–4).
-    """
-    if protein_g <= 10:
-        return 0.0
-    elif protein_g <= 20:
-        return 1.0
-    elif protein_g <= 35:
-        return 2.0
-    else:
-        return 4.0
-
-def _fiber_buffer_score(fiber_g: float) -> float:
-    """
-    Score for fiber’s protective, spike-flattening effect (0–5).
-    Higher score = more buffering (subtracts from total risk).
-    """
-    if fiber_g <= 2:
-        return 0.0
-    elif fiber_g <= 6:
-        return 1.0
-    elif fiber_g <= 10:
-        return 3.0
-    else:
-        return 5.0
 
             

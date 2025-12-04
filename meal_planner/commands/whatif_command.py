@@ -109,7 +109,7 @@ class WhatIfCommand(Command):
         drop_1based = {i + 1 for i in drop_indices}
         
         # Build reports
-        builder = ReportBuilder(self.ctx.master)
+        builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
         
         # Original report
         original_report = builder.build_from_items(

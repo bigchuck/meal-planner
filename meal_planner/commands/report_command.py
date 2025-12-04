@@ -39,7 +39,7 @@ class ReportCommand(Command):
         # Remove flags from parts
         date_parts = [p for p in parts if not p.startswith("--")]
         
-        builder = ReportBuilder(self.ctx.master)
+        builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
         
         if not date_parts:
             # Report from pending
