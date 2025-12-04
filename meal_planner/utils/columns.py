@@ -65,7 +65,8 @@ def get_sugar_column(df: pd.DataFrame) -> Optional[str]:
     """
     Return the sugar column name among common variants, or None.
     
-    Tries: sugar_g, sugars_g, sugar, sugars
+    Tries: sugars_g, sugar_g, sugars, sugar
+    Note: Prioritizes 'sugars_g' as the canonical column name.
     
     Args:
         df: DataFrame to search
@@ -73,7 +74,9 @@ def get_sugar_column(df: pd.DataFrame) -> Optional[str]:
     Returns:
         Actual column name if found, None otherwise
     """
-    for variant in ["sugar_g", "sugars_g", "sugar", "sugars"]:
+    # IMPORTANT: Try sugars_g FIRST (the correct canonical column name)
+    # sugar_g was mistakenly added to some headers
+    for variant in ["sugars_g", "sugar_g", "sugars", "sugar"]:
         col = get_column(df, variant)
         if col:
             return col
@@ -147,7 +150,12 @@ class ColumnResolver:
     
     @property
     def sugar_g(self) -> Optional[str]:
-        """Sugar column name (may be None if not found)."""
+        """
+        Sugar column name (may be None if not found).
+        
+        Note: This actually looks for sugars_g first, then sugar_g.
+        The property is named sugar_g for backward compatibility.
+        """
         if "sugar_g" not in self._cache:
             self._cache["sugar_g"] = get_sugar_column(self.df)
         return self._cache["sugar_g"]
