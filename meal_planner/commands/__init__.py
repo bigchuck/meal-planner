@@ -18,6 +18,7 @@ from . import glucose_command
 from . import data_management
 from . import stats_command
 from . import explain_command
+from . import order_command
 
 __all__ = [
     'Command',
