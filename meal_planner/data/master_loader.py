@@ -101,7 +101,7 @@ class MasterLoader:
         Raises:
             FileNotFoundError: If master file doesn't exist
         """
-        self._df = pd.read_csv(self.filepath)
+        self._df = pd.read_csv(self.filepath, comment='#')
         self._cols = ColumnResolver(self._df)
         return self._df
     
