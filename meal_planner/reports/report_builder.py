@@ -292,7 +292,7 @@ class Report:
             "LUNCH": [],
             "AFTERNOON SNACK": [],
             "DINNER": [],
-            "EVENING": []
+            "EVENING SNACK": []
         }
         
         for time_str, row_indices in segments:
@@ -307,7 +307,7 @@ class Report:
         result = []
         canonical_order = [
             "BREAKFAST", "MORNING SNACK", "LUNCH", 
-            "AFTERNOON SNACK", "DINNER", "EVENING"
+            "AFTERNOON SNACK", "DINNER", "EVENING SNACK"
         ]
         
         for meal_name in canonical_order:
@@ -356,7 +356,7 @@ class Report:
             # Lunch: 12:00 - 14:29 (720 - 869)
             # Afternoon Snack: 14:30 - 16:59 (870 - 1019)
             # Dinner: 17:00 - 19:59 (1020 - 1199)
-            # Evening: 20:00 - 04:59 (1200+ or 0-299)
+            # Evening Snack: 20:00 - 04:59 (1200+ or 0-299)
             
             if 300 <= total_minutes <= 629:
                 return "BREAKFAST"
@@ -369,6 +369,6 @@ class Report:
             elif 1020 <= total_minutes <= 1199:
                 return "DINNER"
             else:  # 1200+ or 0-299
-                return "EVENING"
+                return "EVENING SNACK"
         except:
             return None

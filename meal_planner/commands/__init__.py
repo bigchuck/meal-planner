@@ -17,6 +17,7 @@ from . import nutrients_command
 from . import glucose_command
 from . import data_management
 from . import stats_command
+from . import explain_command
 
 __all__ = [
     'Command',
@@ -24,5 +25,4 @@ __all__ = [
     'CommandRegistry',
     'register_command',
     'get_registry',
-    'GlucoseCommand',
 ]

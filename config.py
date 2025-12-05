@@ -42,6 +42,11 @@ ALIASES_FILE = DATA_PATH / "meal_plan_aliases.json"
 TRACK_USAGE = True  # Set to False to disable usage tracking
 USAGE_STATS_FILE = DATA_PATH / "usage_stats.json"
 
+# Documentation directory
+DOCS_DIR = Path(__file__).parent / "docs"
+DOCS_TEMPLATES_DIR = DOCS_DIR / "templates"
+DOCS_PERSONAL_DIR = DOCS_DIR / "personal"
+
 print(f"Using these files: ")
 print(f"  master: {MASTER_FILE}")
 print(f"  log: {LOG_FILE}")

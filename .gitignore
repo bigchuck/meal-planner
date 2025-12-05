@@ -37,6 +37,9 @@ data/backups/
 *.jpg
 *.png
 
+# Documentation
+docs/
+
 # OS
 .DS_Store
 Thumbs.db
