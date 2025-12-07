@@ -29,12 +29,13 @@ def normalize_text_for_search(s: pd.Series) -> pd.Series:
 
 def parse_search_query(query: str) -> List[Dict[str, List[str]]]:
     """
-    Parse search query into clauses with boolean logic.
+    Parse search query into clauses with boolean logic and parenthetical grouping.
     
     Returns list of clauses where:
     - Clauses are OR-ed together
     - Within a clause, positive terms are AND-ed, negative terms are NOT-ed
     - Spaces = AND, explicit AND/OR/NOT supported
+    - Parentheses group expressions
     - Quoted strings = exact phrases
     
     Args:
@@ -58,7 +59,13 @@ def parse_search_query(query: str) -> List[Dict[str, List[str]]]:
         
         >>> parse_search_query("beans NOT green")
         [{'pos': ['beans'], 'neg': ['green']}]
+        
+        >>> parse_search_query("ve. and (carrot or celery)")
+        [{'pos': ['ve.', 'carrot'], 'neg': []}, {'pos': ['ve.', 'celery'], 'neg': []}]
     """
+    # CRITICAL: Add spaces around parentheses so they tokenize separately
+    query = query.replace('(', ' ( ').replace(')', ' ) ')
+    
     # Tokenize (handles quoted strings)
     raw_tokens = []
     for match in TOKEN_RE.finditer(query):
@@ -70,8 +77,202 @@ def parse_search_query(query: str) -> List[Dict[str, List[str]]]:
     ops = {"and", "or", "not"}
     tokens = []
     for t in raw_tokens:
-        tokens.append(t.upper() if t.lower() in ops else t)
+        if t.lower() in ops:
+            tokens.append(t.upper())
+        elif t in ("(", ")"):
+            tokens.append(t)  # Keep parentheses as-is
+        else:
+            tokens.append(t)
     
+    # Parse with parenthetical grouping support
+    try:
+        expr, final_pos = _parse_or(tokens, 0)
+        
+        # Verify we consumed all tokens
+        if final_pos != len(tokens):
+            return _parse_simple(tokens)
+        
+        # Convert expression tree to DNF (Disjunctive Normal Form)
+        # Then extract clauses
+        return _expression_to_clauses(expr)
+    except Exception:
+        # Fallback to original simple parsing on error
+        return _parse_simple(tokens)
+
+
+def _parse_or(tokens: List[str], pos: int) -> Tuple[Dict, int]:
+    """Parse OR level (lowest precedence)."""
+    left, pos = _parse_and(tokens, pos)
+    
+    while pos < len(tokens) and tokens[pos] == "OR":
+        pos += 1  # Skip OR
+        right, pos = _parse_and(tokens, pos)
+        left = {'op': 'OR', 'left': left, 'right': right}
+    
+    return left, pos
+
+
+def _parse_and(tokens: List[str], pos: int) -> Tuple[Dict, int]:
+    """Parse AND level."""
+    left, pos = _parse_not(tokens, pos)
+    
+    while pos < len(tokens) and tokens[pos] not in ("OR", ")"):
+        # Check for explicit AND
+        if tokens[pos] == "AND":
+            pos += 1  # Skip explicit AND
+            if pos >= len(tokens):
+                break
+        
+        # Next token should be a term/expression
+        right, pos = _parse_not(tokens, pos)
+        left = {'op': 'AND', 'left': left, 'right': right}
+    
+    return left, pos
+
+
+def _parse_not(tokens: List[str], pos: int) -> Tuple[Dict, int]:
+    """Parse NOT level."""
+    if pos < len(tokens) and tokens[pos] == "NOT":
+        pos += 1  # Skip NOT
+        expr, pos = _parse_primary(tokens, pos)
+        return {'op': 'NOT', 'expr': expr}, pos
+    
+    return _parse_primary(tokens, pos)
+
+
+def _parse_primary(tokens: List[str], pos: int) -> Tuple[Dict, int]:
+    """Parse primary expression (term or parenthesized expression)."""
+    if pos >= len(tokens):
+        raise ValueError("Unexpected end of expression")
+    
+    token = tokens[pos]
+    
+    if token == "(":
+        # Parenthesized expression
+        pos += 1  # Skip (
+        expr, pos = _parse_or(tokens, pos)
+        if pos >= len(tokens) or tokens[pos] != ")":
+            raise ValueError("Missing closing parenthesis")
+        pos += 1  # Skip )
+        return expr, pos
+    elif token in (")", "OR", "AND", "NOT"):
+        raise ValueError(f"Unexpected token: {token}")
+    else:
+        # Regular term
+        return {'op': 'TERM', 'term': token}, pos + 1
+
+
+def _expression_to_clauses(expr: Dict) -> List[Dict[str, List[str]]]:
+    """
+    Convert expression tree to list of clauses (DNF - Disjunctive Normal Form).
+    
+    Each clause is {'pos': [...], 'neg': [...]}
+    Clauses are OR-ed together, terms within are AND-ed.
+    """
+    # Convert to DNF (distribute ANDs over ORs)
+    dnf = _to_dnf(expr)
+    
+    # Extract clauses
+    if dnf['op'] == 'OR':
+        # Multiple clauses
+        clauses = []
+        _collect_or_clauses(dnf, clauses)
+        return [_clause_from_and_expr(c) for c in clauses]
+    else:
+        # Single clause
+        return [_clause_from_and_expr(dnf)]
+
+
+def _to_dnf(expr: Dict) -> Dict:
+    """Convert expression to Disjunctive Normal Form."""
+    op = expr['op']
+    
+    if op == 'TERM':
+        return expr
+    
+    elif op == 'NOT':
+        # Push NOT down to terms (De Morgan's laws)
+        inner = _to_dnf(expr['expr'])
+        if inner['op'] == 'TERM':
+            return {'op': 'NOT_TERM', 'term': inner['term']}
+        elif inner['op'] == 'NOT_TERM':
+            return {'op': 'TERM', 'term': inner['term']}
+        elif inner['op'] == 'AND':
+            # NOT (A AND B) = (NOT A) OR (NOT B)
+            left = _to_dnf({'op': 'NOT', 'expr': inner['left']})
+            right = _to_dnf({'op': 'NOT', 'expr': inner['right']})
+            return _to_dnf({'op': 'OR', 'left': left, 'right': right})
+        elif inner['op'] == 'OR':
+            # NOT (A OR B) = (NOT A) AND (NOT B)
+            left = _to_dnf({'op': 'NOT', 'expr': inner['left']})
+            right = _to_dnf({'op': 'NOT', 'expr': inner['right']})
+            return _to_dnf({'op': 'AND', 'left': left, 'right': right})
+        return inner
+    
+    elif op == 'AND':
+        left = _to_dnf(expr['left'])
+        right = _to_dnf(expr['right'])
+        
+        # Distribute over OR: A AND (B OR C) = (A AND B) OR (A AND C)
+        if right['op'] == 'OR':
+            # A AND (B OR C) = (A AND B) OR (A AND C)
+            l_and_rl = {'op': 'AND', 'left': left, 'right': right['left']}
+            l_and_rr = {'op': 'AND', 'left': left, 'right': right['right']}
+            # Recursively convert the distributed parts
+            return _to_dnf({'op': 'OR', 'left': _to_dnf(l_and_rl), 'right': _to_dnf(l_and_rr)})
+        elif left['op'] == 'OR':
+            # (A OR B) AND C = (A AND C) OR (B AND C)
+            ll_and_r = {'op': 'AND', 'left': left['left'], 'right': right}
+            lr_and_r = {'op': 'AND', 'left': left['right'], 'right': right}
+            # Recursively convert the distributed parts
+            return _to_dnf({'op': 'OR', 'left': _to_dnf(ll_and_r), 'right': _to_dnf(lr_and_r)})
+        else:
+            return {'op': 'AND', 'left': left, 'right': right}
+    
+    elif op == 'OR':
+        left = _to_dnf(expr['left'])
+        right = _to_dnf(expr['right'])
+        return {'op': 'OR', 'left': left, 'right': right}
+    
+    return expr
+
+
+def _collect_or_clauses(expr: Dict, clauses: List[Dict]) -> None:
+    """Collect OR-separated clauses."""
+    if expr['op'] == 'OR':
+        _collect_or_clauses(expr['left'], clauses)
+        _collect_or_clauses(expr['right'], clauses)
+    else:
+        clauses.append(expr)
+
+
+def _clause_from_and_expr(expr: Dict) -> Dict[str, List[str]]:
+    """Extract clause (pos/neg lists) from AND expression."""
+    pos = []
+    neg = []
+    _collect_and_terms(expr, pos, neg)
+    return {'pos': pos, 'neg': neg}
+
+
+def _collect_and_terms(expr: Dict, pos: List[str], neg: List[str]) -> None:
+    """Collect AND-ed terms."""
+    op = expr['op']
+    
+    if op == 'TERM':
+        pos.append(expr['term'])
+    elif op == 'NOT_TERM':
+        neg.append(expr['term'])
+    elif op == 'AND':
+        _collect_and_terms(expr['left'], pos, neg)
+        _collect_and_terms(expr['right'], pos, neg)
+    # OR at this level shouldn't happen in DNF, but ignore if it does
+
+
+def _parse_simple(tokens: List[str]) -> List[Dict[str, List[str]]]:
+    """
+    Fallback simple parser (original behavior without parentheses).
+    Used if expression parsing fails.
+    """
     # Split on OR into clauses
     clauses = []
     current = {"pos": [], "neg": []}
@@ -97,6 +298,11 @@ def parse_search_query(query: str) -> List[Dict[str, List[str]]]:
         
         elif t == "NOT":
             negate_next = True
+            i += 1
+            continue
+        
+        elif t in ("(", ")"):
+            # Ignore parentheses in fallback mode
             i += 1
             continue
         
@@ -176,6 +382,7 @@ def hybrid_search(df: pd.DataFrame, query: str) -> pd.DataFrame:
         >>> hybrid_search(master, "chicken OR fish")
         >>> hybrid_search(master, "beans NOT green")
         >>> hybrid_search(master, "fr.")  # code prefix
+        >>> hybrid_search(master, "ve. and (carrot or celery)")  # grouped
     """
     if df.empty:
         return df
