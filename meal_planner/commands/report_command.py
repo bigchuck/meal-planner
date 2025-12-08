@@ -2,11 +2,13 @@
 Report command - detailed nutrient breakdown.
 """
 from typing import List, Dict, Any, Optional, Tuple
+import shlex
 
 from .base import Command, register_command
 from meal_planner.reports.report_builder import ReportBuilder
 from meal_planner.parsers import CodeParser
 from meal_planner.glucose import GlucoseCalculator
+from meal_planner.utils.time_utils import categorize_time, normalize_meal_name
 
 
 @register_command
@@ -14,7 +16,7 @@ class ReportCommand(Command):
     """Show detailed nutrient breakdown."""
     
     name = "report"
-    help_text = "Show detailed breakdown (report [date] [--recipes] [--nutrients] [--meals] [--risk])"
+    help_text = "Show detailed breakdown (report [date] [--recipes] [--nutrients] [--meals] [--meal <n>] [--risk])"
 
     def __init__(self, context):
         super().__init__(context)
@@ -28,32 +30,82 @@ class ReportCommand(Command):
         Args:
             args: Optional date (YYYY-MM-DD) and/or flags
         """
-        # Parse arguments
-        parts = args.strip().split() if args.strip() else []
+        # Parse arguments (handles quotes properly)
+        try:
+            parts = shlex.split(args.strip()) if args.strip() else []
+        except ValueError:
+            # Fallback to simple split if shlex fails
+            parts = args.strip().split() if args.strip() else []
         
         show_recipes = "--recipes" in parts or "--recipe" in parts
         show_nutrients = "--nutrients" in parts or "--nutrient" in parts or "--micro" in parts
-        show_meals = "--meals" in parts or "--meal" in parts
-        show_risk = "--risk" in parts        
+        show_meals = "--meals" in parts
+        show_risk = "--risk" in parts
         
-        # Remove flags from parts
-        date_parts = [p for p in parts if not p.startswith("--")]
+        # Check for --meal <n> (can be multi-word)
+        meal_name = None
+        if "--meal" in parts:
+            meal_idx = parts.index("--meal")
+            if meal_idx + 1 < len(parts):
+                # Collect all parts until next flag or end
+                meal_parts = []
+                for i in range(meal_idx + 1, len(parts)):
+                    if parts[i].startswith("--"):
+                        break
+                    meal_parts.append(parts[i])
+                
+                if meal_parts:
+                    # Join and normalize
+                    meal_name = normalize_meal_name(" ".join(meal_parts))
+        
+        # Remove flags and meal name from parts
+        date_parts = []
+        skip_count = 0
+        for i, p in enumerate(parts):
+            if skip_count > 0:
+                skip_count -= 1
+                continue
+            if p.startswith("--"):
+                if p == "--meal":
+                    # Skip the --meal and all following non-flag parts
+                    j = i + 1
+                    while j < len(parts) and not parts[j].startswith("--"):
+                        j += 1
+                    skip_count = j - i - 1
+                continue
+            date_parts.append(p)
         
         builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
         
+        # Get items first
         if not date_parts:
-            # Report from pending
-            report = self._report_pending(builder)
+            items, date = self._get_pending_items()
         else:
-            # Report from log date
             query_date = date_parts[0]
-            report = self._report_log_date(builder, query_date)
+            items, date = self._get_log_items(query_date)
         
-        # Show meal breakdown if requested
-        if show_meals and show_risk and report:
-            self._show_meals(report, True)        
-        elif show_meals and report:
-            self._show_meals(report)
+        if items is None:
+            return
+        
+        # Filter to specific meal if requested
+        if meal_name:
+            items = self._filter_to_meal(items, meal_name)
+            if not items:
+                print(f"\nNo items found for meal '{meal_name}'\n")
+                return
+            report = builder.build_from_items(items, title=f"Report for {date} - {meal_name}")
+        else:
+            report = builder.build_from_items(items, title=f"Report for {date}")
+        
+        # Show main report
+        report.print()
+        
+        # Show meal breakdown if requested (not shown for single meal filter)
+        if show_meals and not meal_name:
+            if show_risk:
+                self._show_meals(report, True)
+            else:
+                self._show_meals(report)
         
         # Show micronutrients if requested
         if show_nutrients and report:
@@ -63,8 +115,64 @@ class ReportCommand(Command):
         if show_recipes and report:
             self._show_recipes(report)
 
-        if show_risk and not show_meals and report:
+        if show_risk and not show_meals and not meal_name and report:
             self._show_risk(report)
+    
+    def _get_pending_items(self) -> Tuple[Optional[List], str]:
+        """Get items from pending day."""
+        try:
+            pending = self.ctx.pending_mgr.load()
+        except Exception:
+            pending = None
+        
+        if pending is None or not pending.get("items"):
+            print("\n(No active day. Use 'start' and 'add' first.)\n")
+            return None, ""
+        
+        items = pending.get("items", [])
+        date = pending.get("date", "unknown")
+        return items, date
+    
+    def _get_log_items(self, query_date: str) -> Tuple[Optional[List], str]:
+        """Get items from log date."""
+        # Get all entries for this date
+        entries = self.ctx.log.get_entries_for_date(query_date)
+        
+        if entries.empty:
+            print(f"\nNo log entries found for {query_date}.\n")
+            return None, ""
+        
+        # Parse codes from all entries for this date
+        codes_col = self.ctx.log.cols.codes
+        all_codes = ", ".join([
+            str(v) for v in entries[codes_col].fillna("") 
+            if str(v).strip()
+        ])
+        
+        if not all_codes.strip():
+            print(f"\nNo codes found for {query_date}.\n")
+            return None, ""
+        
+        # Parse into items
+        items = CodeParser.parse(all_codes)
+        return items, query_date
+    
+    def _filter_to_meal(self, items: List, meal_name: str) -> List:
+        """Filter items to only those in the specified meal."""
+        filtered = []
+        current_meal = None
+        
+        for item in items:
+            # Check if this is a time marker (has 'time' key but no 'code' key)
+            if isinstance(item, dict) and 'time' in item and 'code' not in item:
+                # Categorize meal name from time
+                time_str = item.get('time', '')
+                current_meal = categorize_time(time_str)
+            elif current_meal == meal_name:
+                # Include this item if we're in the target meal
+                filtered.append(item)
+        
+        return filtered
     
     def _report_pending(self, builder: ReportBuilder):
         """Report from pending day."""

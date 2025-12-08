@@ -7,6 +7,7 @@ from typing import Optional
 from .base import Command, register_command
 from config import DOCS_DIR
 from meal_planner.models import DailyTotals
+from meal_planner.utils.time_utils import MEAL_NAMES
 
 
 @register_command
@@ -31,10 +32,8 @@ class ExplainCommand(Command):
         
         # Check if first part is a meal name
         potential_meal = parts[0].upper()
-        meal_names = ["BREAKFAST", "LUNCH", "DINNER", "MORNING SNACK", 
-                     "AFTERNOON SNACK", "EVENING"]
         
-        if potential_meal in meal_names and len(parts) > 1:
+        if potential_meal in MEAL_NAMES and len(parts) > 1:
             # explain <MEAL> <topic>
             meal = potential_meal
             topic = self._normalize_topic(parts[1])

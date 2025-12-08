@@ -9,7 +9,7 @@ import pandas as pd
 from meal_planner.models import DailyTotals, NutrientRow
 from meal_planner.data import MasterLoader
 from meal_planner.utils import ColumnResolver
-
+from meal_planner.utils.time_utils import categorize_time, normalize_meal_name, MEAL_NAMES
 
 class ReportBuilder:
     """
@@ -286,29 +286,19 @@ class Report:
             segments[0] = ("05:00", segments[0][1])  # Arbitrary breakfast time
         
         # Categorize segments into meals
-        meal_categories = {
-            "BREAKFAST": [],
-            "MORNING SNACK": [],
-            "LUNCH": [],
-            "AFTERNOON SNACK": [],
-            "DINNER": [],
-            "EVENING SNACK": []
-        }
-        
+        meal_categories = {meal: [] for meal in MEAL_NAMES}
+
         for time_str, row_indices in segments:
             if not row_indices:
                 continue
             
-            meal_name = self._categorize_time(time_str)
+            meal_name = categorize_time(time_str)
             if meal_name:
                 meal_categories[meal_name].append((time_str, row_indices))
         
         # Build result with subtotals
         result = []
-        canonical_order = [
-            "BREAKFAST", "MORNING SNACK", "LUNCH", 
-            "AFTERNOON SNACK", "DINNER", "EVENING SNACK"
-        ]
+        canonical_order = MEAL_NAMES
         
         for meal_name in canonical_order:
             segments_for_meal = meal_categories[meal_name]
@@ -328,47 +318,3 @@ class Report:
         
         return result if result else None
     
-    def _categorize_time(self, time_str: str) -> str:
-        """
-        Categorize time string into meal name.
-        
-        Args:
-            time_str: Time in HH:MM format
-        
-        Returns:
-            Meal name or None
-        """
-        if not time_str:
-            return None
-        
-        try:
-            # Parse HH:MM
-            parts = time_str.split(":")
-            hour = int(parts[0])
-            minute = int(parts[1]) if len(parts) > 1 else 0
-            
-            # Convert to minutes since midnight for easier comparison
-            total_minutes = hour * 60 + minute
-            
-            # Time ranges (in minutes)
-            # Breakfast: 05:00 - 10:29 (300 - 629)
-            # Morning Snack: 10:30 - 11:59 (630 - 719)
-            # Lunch: 12:00 - 14:29 (720 - 869)
-            # Afternoon Snack: 14:30 - 16:59 (870 - 1019)
-            # Dinner: 17:00 - 19:59 (1020 - 1199)
-            # Evening Snack: 20:00 - 04:59 (1200+ or 0-299)
-            
-            if 300 <= total_minutes <= 629:
-                return "BREAKFAST"
-            elif 630 <= total_minutes <= 719:
-                return "MORNING SNACK"
-            elif 720 <= total_minutes <= 869:
-                return "LUNCH"
-            elif 870 <= total_minutes <= 1019:
-                return "AFTERNOON SNACK"
-            elif 1020 <= total_minutes <= 1199:
-                return "DINNER"
-            else:  # 1200+ or 0-299
-                return "EVENING SNACK"
-        except:
-            return None

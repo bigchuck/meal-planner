@@ -1,9 +1,12 @@
 """
 Nutrients command - show micronutrients for a code.
 """
+import shlex
+
 from .base import Command, register_command
 from meal_planner.reports.report_builder import ReportBuilder
 from meal_planner.parsers import CodeParser
+from meal_planner.utils.time_utils import normalize_meal_name
 
 
 @register_command
@@ -29,6 +32,7 @@ class NutrientsCommand(Command):
             print("  nutrients --meals")
             print("  nutrients --meals 2025-01-15")
             print("  nutrients --meal BREAKFAST")
+            print('  nutrients --meal "EVENING SNACK"')
             print("  nutrients --meal LUNCH 2025-01-15")
             return
         
@@ -36,7 +40,12 @@ class NutrientsCommand(Command):
             print("Micronutrients not available.")
             return
         
-        parts = args.strip().split()
+        # Parse arguments (handles quotes properly)
+        try:
+            parts = shlex.split(args.strip())
+        except ValueError:
+            # Fallback to simple split if shlex fails
+            parts = args.strip().split()
         
         # Check for --meals flag (all meals)
         if parts[0] == "--meals":
@@ -48,11 +57,26 @@ class NutrientsCommand(Command):
         if parts[0] == "--meal":
             if len(parts) < 2:
                 print("Error: --meal requires a meal name")
-                print("Example: nutrients --meal BREAKFAST")
+                print('Example: nutrients --meal BREAKFAST')
+                print('Example: nutrients --meal "EVENING SNACK"')
                 return
             
-            meal_name = parts[1].upper()
-            date_arg = parts[2] if len(parts) > 2 else None
+            # Collect meal name parts (can be multi-word)
+            meal_parts = []
+            date_arg = None
+            for i in range(1, len(parts)):
+                # Check if this looks like a date (YYYY-MM-DD format)
+                if len(parts[i]) == 10 and parts[i][4] == '-' and parts[i][7] == '-':
+                    date_arg = parts[i]
+                    break
+                meal_parts.append(parts[i])
+            
+            if not meal_parts:
+                print("Error: --meal requires a meal name")
+                return
+            
+            # Join and normalize meal name
+            meal_name = normalize_meal_name(" ".join(meal_parts))
             self._show_meal_nutrients(meal_name, date_arg)
             return
         
