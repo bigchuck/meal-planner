@@ -2,12 +2,13 @@
 """
 Explain command - show educational content about concepts.
 """
+import shlex
 from pathlib import Path
 from typing import Optional
 from .base import Command, register_command
 from config import DOCS_DIR
 from meal_planner.models import DailyTotals
-from meal_planner.utils.time_utils import MEAL_NAMES
+from meal_planner.utils.time_utils import normalize_meal_name
 
 
 @register_command
@@ -15,42 +16,51 @@ class ExplainCommand(Command):
     """Show explanation of a concept."""
     
     name = "explain"
-    help_text = "Explain a concept (explain gi, explain DINNER risk-scoring)"
+    help_text = "Explain a concept (explain gi, explain \"MORNING SNACK\" risk-scoring)"
     
     def execute(self, args: str) -> None:
         """
         Show explanation from docs or contextualized from data.
         
         Args:
-            args: "<topic>" or "<MEAL> <topic>"
+            args: "<topic>" or "<MEAL> <topic>" (use quotes for multi-word meal names)
         """
         if not args.strip():
             self._list_topics()
             return
         
-        parts = args.strip().split(maxsplit=1)
+        # Parse arguments (handles quotes properly)
+        try:
+            parts = shlex.split(args.strip())
+        except ValueError:
+            # Fallback to simple split if shlex fails
+            parts = args.strip().split()
         
         # Check if first part is a meal name
-        potential_meal = parts[0].upper()
+        if len(parts) >= 2:
+            potential_meal = normalize_meal_name(parts[0])
+            meal_names = ["BREAKFAST", "LUNCH", "DINNER", "MORNING SNACK", 
+                         "AFTERNOON SNACK", "EVENING SNACK", "EVENING"]
+            
+            if potential_meal in meal_names:
+                # explain <MEAL> <topic>
+                meal = potential_meal
+                topic = self._normalize_topic(parts[1])
+                
+                # Check if we can provide contextualized explanation
+                if topic == "risk-scoring":
+                    meal_data = self._get_meal_data(meal)
+                    if meal_data:
+                        self._show_personalized_risk_explanation(meal, meal_data)
+                        return
+                
+                # Fall back to file-based
+                self._show_meal_explanation(meal, topic)
+                return
         
-        if potential_meal in MEAL_NAMES and len(parts) > 1:
-            # explain <MEAL> <topic>
-            meal = potential_meal
-            topic = self._normalize_topic(parts[1])
-            
-            # Check if we can provide contextualized explanation
-            if topic == "risk-scoring":
-                meal_data = self._get_meal_data(meal)
-                if meal_data:
-                    self._show_personalized_risk_explanation(meal, meal_data)
-                    return
-            
-            # Fall back to file-based
-            self._show_meal_explanation(meal, topic)
-        else:
-            # explain <topic>
-            topic = self._normalize_topic(args.strip())
-            self._show_general_explanation(topic)
+        # explain <topic>
+        topic = self._normalize_topic(args.strip())
+        self._show_general_explanation(topic)
     
     def _normalize_topic(self, topic: str) -> str:
         """Normalize topic to filename format."""
@@ -149,9 +159,9 @@ class ExplainCommand(Command):
         risk_score = max(0.0, min(10.0, raw_score))
         
         # Display personalized explanation
-        print(f"\n{'═' * 70}")
+        print(f"\n{'=' * 70}")
         print(f"Risk Scoring Explanation for {meal_name}")
-        print(f"{'═' * 70}\n")
+        print(f"{'=' * 70}\n")
         
         print(f"Your {meal_name.lower()} meal composition:")
         print(f"  Carbs:   {totals.carbs_g:6.1f}g")
@@ -175,7 +185,7 @@ class ExplainCommand(Command):
         if gi:
             print(f"2. GI Speed Factor: {gi_factor:.1f}x")
             self._explain_gi_factor(gi, gi_factor)
-            print(f"   → Base risk after GI: {base_carb_risk:.1f}")
+            print(f"   -> Base risk after GI: {base_carb_risk:.1f}")
             print()
         
         # Fat delay
@@ -197,7 +207,7 @@ class ExplainCommand(Command):
             print()
         
         # Summary
-        print(f"{'─' * 70}")
+        print(f"{'-' * 70}")
         print(f"Total Risk Score: {risk_score:.1f} / 10")
         print()
         

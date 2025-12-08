@@ -14,26 +14,26 @@ class NutrientsCommand(Command):
     """Show micronutrients for a code."""
     
     name = ("nutrients", "nutrient")
-    help_text = "Show micronutrients (nutrients SO.11 or --meals [date] or --meal BREAKFAST)"
+    help_text = "Show micronutrients (nutrients SO.11 or [date] --meals or [date] --meal \"MEAL NAME\")"
     
     def execute(self, args: str) -> None:
         """
         Show micronutrients for a code, all meals, or specific meal.
         
         Args:
-            args: Code to look up, --meals [date], or --meal MEALNAME [date]
+            args: Code to look up, [date] --meals, or [date] --meal MEALNAME
         """
         if not args.strip():
             print("Usage: nutrients <code>")
-            print("   or: nutrients --meals [date]")
-            print("   or: nutrients --meal <MEALNAME> [date]")
+            print("   or: nutrients [date] --meals")
+            print("   or: nutrients [date] --meal <MEALNAME>")
             print("\nExamples:")
             print("  nutrients SO.11")
             print("  nutrients --meals")
-            print("  nutrients --meals 2025-01-15")
+            print("  nutrients 2025-01-15 --meals")
             print("  nutrients --meal BREAKFAST")
-            print('  nutrients --meal "EVENING SNACK"')
-            print("  nutrients --meal LUNCH 2025-01-15")
+            print("  nutrients --meal \"MORNING SNACK\"")
+            print("  nutrients 2025-01-15 --meal LUNCH")
             return
         
         if not self.ctx.nutrients:
@@ -47,37 +47,46 @@ class NutrientsCommand(Command):
             # Fallback to simple split if shlex fails
             parts = args.strip().split()
         
+        # Check if first part is a date (YYYY-MM-DD format)
+        date_arg = None
+        start_idx = 0
+        if len(parts) > 0 and len(parts[0]) == 10 and parts[0][4] == '-' and parts[0][7] == '-':
+            date_arg = parts[0]
+            start_idx = 1
+        
         # Check for --meals flag (all meals)
-        if parts[0] == "--meals":
-            date_arg = parts[1] if len(parts) > 1 else None
+        if start_idx < len(parts) and parts[start_idx] == "--meals":
+            # Validate no extra tokens
+            if len(parts) > start_idx + 1:
+                print("Error: Incorrect number of arguments")
+                return
             self._show_all_meals_nutrients(date_arg)
             return
         
         # Check for --meal flag (specific meal)
-        if parts[0] == "--meal":
-            if len(parts) < 2:
+        if start_idx < len(parts) and parts[start_idx] == "--meal":
+            if start_idx + 1 >= len(parts):
                 print("Error: --meal requires a meal name")
-                print('Example: nutrients --meal BREAKFAST')
-                print('Example: nutrients --meal "EVENING SNACK"')
+                print("Example: nutrients --meal BREAKFAST")
+                print("   or: nutrients --meal \"MORNING SNACK\"")
                 return
             
-            # Collect meal name parts (can be multi-word)
-            meal_parts = []
-            date_arg = None
-            for i in range(1, len(parts)):
-                # Check if this looks like a date (YYYY-MM-DD format)
-                if len(parts[i]) == 10 and parts[i][4] == '-' and parts[i][7] == '-':
-                    date_arg = parts[i]
-                    break
-                meal_parts.append(parts[i])
-            
-            if not meal_parts:
-                print("Error: --meal requires a meal name")
+            # Validate no extra tokens after meal name
+            if len(parts) > start_idx + 2:
+                print("Error: Incorrect number of arguments")
                 return
             
-            # Join and normalize meal name
-            meal_name = normalize_meal_name(" ".join(meal_parts))
+            # Take only the next argument (use quotes for multi-word names)
+            meal_name = normalize_meal_name(parts[start_idx + 1])
             self._show_meal_nutrients(meal_name, date_arg)
+            return
+        
+        # If we have a date and no flag, that's an error
+        if date_arg:
+            print("Error: Date must be followed by --meals or --meal")
+            print("Examples:")
+            print("  nutrients 2025-01-15 --meals")
+            print("  nutrients 2025-01-15 --meal BREAKFAST")
             return
         
         # Single code lookup
@@ -89,7 +98,7 @@ class NutrientsCommand(Command):
         if nutrients:
             print()
             print(f"[{code}] Micronutrients:")
-            print("─" * 60)
+            print("-" * 60)
             
             # Format as table
             for nutrient, value in nutrients.items():
@@ -161,7 +170,7 @@ class NutrientsCommand(Command):
         # Header aligned with report --meals format
         print(f"{'':30} {'Fiber':>6} {'Sodium':>7} {'Potass':>7} {'VitA':>7} {'VitC':>6} {'Iron':>6}")
         print(f"{'':30} {'(g)':>6} {'(mg)':>7} {'(mg)':>7} {'(mcg)':>7} {'(mg)':>6} {'(mg)':>6}")
-        print("─" * 78)
+        print("-" * 78)
         
         # Meal rows
         for meal_name, first_time, meal_totals in breakdown:
@@ -171,7 +180,7 @@ class NutrientsCommand(Command):
                   f"{int(meal_totals.vitC_mg):>6} {int(meal_totals.iron_mg):>6}")
         
         # Separator
-        print("─" * 78)
+        print("-" * 78)
         
         # Daily total
         t = report.totals
@@ -233,7 +242,7 @@ class NutrientsCommand(Command):
         # Header aligned with report --meals format
         print(f"{'':30} {'Fiber':>6} {'Sodium':>7} {'Potass':>7} {'VitA':>7} {'VitC':>6} {'Iron':>6}")
         print(f"{'':30} {'(g)':>6} {'(mg)':>7} {'(mg)':>7} {'(mcg)':>7} {'(mg)':>6} {'(mg)':>6}")
-        print("─" * 78)
+        print("-" * 78)
         
         # Data row
         label = f"{m_name} ({m_time})"

@@ -16,7 +16,7 @@ class ReportCommand(Command):
     """Show detailed nutrient breakdown."""
     
     name = "report"
-    help_text = "Show detailed breakdown (report [date] [--recipes] [--nutrients] [--meals] [--meal <n>] [--risk])"
+    help_text = "Show detailed breakdown (report [date] [--recipes] [--nutrients] [--meals] [--meal \"NAME\"] [--risk])"
 
     def __init__(self, context):
         super().__init__(context)
@@ -42,36 +42,24 @@ class ReportCommand(Command):
         show_meals = "--meals" in parts
         show_risk = "--risk" in parts
         
-        # Check for --meal <n> (can be multi-word)
+        # Check for --meal <n> (requires quotes for multi-word names)
         meal_name = None
         if "--meal" in parts:
             meal_idx = parts.index("--meal")
             if meal_idx + 1 < len(parts):
-                # Collect all parts until next flag or end
-                meal_parts = []
-                for i in range(meal_idx + 1, len(parts)):
-                    if parts[i].startswith("--"):
-                        break
-                    meal_parts.append(parts[i])
-                
-                if meal_parts:
-                    # Join and normalize
-                    meal_name = normalize_meal_name(" ".join(meal_parts))
+                # Take only the next argument (use quotes for multi-word names)
+                meal_name = normalize_meal_name(parts[meal_idx + 1])
         
-        # Remove flags and meal name from parts
+        # Remove flags and their arguments from parts to get date
         date_parts = []
-        skip_count = 0
+        skip_next = False
         for i, p in enumerate(parts):
-            if skip_count > 0:
-                skip_count -= 1
+            if skip_next:
+                skip_next = False
                 continue
             if p.startswith("--"):
                 if p == "--meal":
-                    # Skip the --meal and all following non-flag parts
-                    j = i + 1
-                    while j < len(parts) and not parts[j].startswith("--"):
-                        j += 1
-                    skip_count = j - i - 1
+                    skip_next = True  # Skip the next argument (meal name)
                 continue
             date_parts.append(p)
         
@@ -429,13 +417,13 @@ class ReportCommand(Command):
     Confidence:      High (0.89)
 
     Components:
-    Carb Load:           45.2  → +35 risk
-    Sugar Ratio:          0.38 → +15 risk
-    Fiber Offset:        -5.0  → -8 risk
-    Fat Modulation:      -8.5  → -12 risk
-    Protein Balance:      0.82 → +2 risk
+    Carb Load:           45.2  -> +35 risk
+    Sugar Ratio:          0.38 -> +15 risk
+    Fiber Offset:        -5.0  -> -8 risk
+    Fat Modulation:      -8.5  -> -12 risk
+    Protein Balance:      0.82 -> +2 risk
     [other factors...]
-                        ─────────
+                        ---------
     Total Risk Score:           72
 
 

@@ -2,12 +2,14 @@
 """
 Glucose command - glycemic load analysis with narrative output.
 """
+import shlex
 from typing import List, Dict, Any, Optional
 
 from .base import Command, register_command
 from meal_planner.reports.report_builder import ReportBuilder
 from meal_planner.parsers import CodeParser
 from meal_planner.models import DailyTotals
+from meal_planner.utils.time_utils import normalize_meal_name
 
 
 @register_command
@@ -15,7 +17,7 @@ class GlucoseCommand(Command):
     """Show glycemic load analysis."""
     
     name = "glucose"
-    help_text = "Show glucose analysis (glucose [date] [--meal BREAKFAST] [--detail] [--all])"
+    help_text = "Show glucose analysis (glucose [date] [--meal \"MORNING SNACK\"] [--detail])"
     
     def execute(self, args: str) -> None:
         """
@@ -23,22 +25,34 @@ class GlucoseCommand(Command):
         
         Args:
             args: Optional date (YYYY-MM-DD) and flags
-                  --meal <meal_name>: Show specific meal only
+                  --meal <meal_name>: Show specific meal only (use quotes for multi-word names)
                   --detail: Show component breakdowns
-                  --all: Include snacks
         """
-        parts = args.strip().split() if args.strip() else []
+        # Parse arguments (handles quotes properly)
+        try:
+            parts = shlex.split(args.strip()) if args.strip() else []
+        except ValueError:
+            # Fallback to simple split if shlex fails
+            parts = args.strip().split() if args.strip() else []
         
         # Parse flags
         show_detail = "--detail" in parts
-        show_all = "--all" in parts
         
-        # Parse --meal flag
+        # Parse --meal flag (collect all parts until next flag)
         meal_filter = None
         if "--meal" in parts:
-            idx = parts.index("--meal")
-            if idx + 1 < len(parts):
-                meal_filter = parts[idx + 1].upper()
+            meal_idx = parts.index("--meal")
+            if meal_idx + 1 < len(parts):
+                # Collect all parts until next flag or end
+                meal_parts = []
+                for i in range(meal_idx + 1, len(parts)):
+                    if parts[i].startswith("--"):
+                        break
+                    meal_parts.append(parts[i])
+                
+                if meal_parts:
+                    # Join and normalize
+                    meal_filter = normalize_meal_name(" ".join(meal_parts))
         
         # Get date parts (non-flag arguments)
         date_parts = [p for p in parts 
@@ -72,12 +86,10 @@ class GlucoseCommand(Command):
         # Filter meals
         meals_to_show = []
         for meal_name, first_time, totals in breakdown:
-            # Skip snacks unless --all
-            if "SNACK" in meal_name and not show_all:
-                continue
-            
-            # Filter by --meal if specified
-            if meal_filter and meal_name != meal_filter:
+            # If filtering by specific meal, only check that
+            if meal_filter:
+                if meal_name == meal_filter:
+                    meals_to_show.append((meal_name, first_time, totals))
                 continue
             
             meals_to_show.append((meal_name, first_time, totals))
@@ -157,9 +169,9 @@ class GlucoseCommand(Command):
         curve = self._classify_glucose_curve(meal_dict, risk)
         
         # Format output
-        print(f"{'─' * 70}")
+        print(f"{'-' * 70}")
         print(f"{meal_name} ({first_time})")
-        print(f"{'─' * 70}")
+        print(f"{'-' * 70}")
         print()
         
         # Main narrative
@@ -175,7 +187,7 @@ class GlucoseCommand(Command):
         if concerns:
             print("Key Concerns:")
             for concern in concerns[:3]:  # Top 3 only
-                print(f"  • {concern}")
+                print(f"  * {concern}")
             print()
         
         # Recommendations
@@ -183,7 +195,7 @@ class GlucoseCommand(Command):
         if recs:
             print("Suggestions:")
             for rec in recs[:2]:  # Top 2 only
-                print(f"  → {rec}")
+                print(f"  -> {rec}")
             print()
         
         # Detail breakdown if requested
@@ -252,15 +264,15 @@ class GlucoseCommand(Command):
         comp = risk['components']
         
         print("Detailed Breakdown:")
-        print(f"  Carbs:         {totals.carbs_g:>6.1f}g  → base risk: {comp['carb_risk']:.1f}")
+        print(f"  Carbs:         {totals.carbs_g:>6.1f}g  -> base risk: {comp['carb_risk']:.1f}")
         
         if gi:
-            print(f"  GI:            {gi:>6.0f}     → speed factor: {comp['gi_speed_factor']:.1f}x")
+            print(f"  GI:            {gi:>6.0f}     -> speed factor: {comp['gi_speed_factor']:.1f}x")
         
-        print(f"  Fat:           {totals.fat_g:>6.1f}g  → delay risk: +{comp['fat_delay_risk']:.1f}")
-        print(f"  Protein:       {totals.protein_g:>6.1f}g  → tail risk: +{comp['protein_tail_risk']:.1f}")
-        print(f"  Fiber:         {totals.fiber_g:>6.1f}g  → buffer: -{comp['fiber_buffer']:.1f}")  # CHANGED
-        print(f"  {'─' * 40}")
+        print(f"  Fat:           {totals.fat_g:>6.1f}g  -> delay risk: +{comp['fat_delay_risk']:.1f}")
+        print(f"  Protein:       {totals.protein_g:>6.1f}g  -> tail risk: +{comp['protein_tail_risk']:.1f}")
+        print(f"  Fiber:         {totals.fiber_g:>6.1f}g  -> buffer: -{comp['fiber_buffer']:.1f}")
+        print(f"  {'-' * 40}")
         print(f"  Total Risk:    {risk['risk_score']:>6.1f} / 10")
         print()
 
@@ -338,7 +350,7 @@ class GlucoseCommand(Command):
         if carbs_g >= 30 and gi and gi >= 60 and fat_g < 10 and fiber_g < 6:
             return {
                 "curve_shape": "sharp_early_spike",
-                "curve_label": "Sharp Early Spike ⚠️",
+                "curve_label": "Sharp Early Spike ",
                 "curve_description": (
                     f"High-GI carbs ({int(carbs_g)}g) with minimal fat/fiber buffering. "
                     "Quick rise with peak at 20-45 minutes, followed by gradual decline."
@@ -384,7 +396,7 @@ class GlucoseCommand(Command):
         if carbs_g >= 25 and gi and gi >= 60 and fat_g < 10 and fiber_g < 4:
             return {
                 "curve_shape": "spike_then_dip_risk",
-                "curve_label": "Spike Then Possible Dip ⚠️",
+                "curve_label": "Spike Then Possible Dip ",
                 "curve_description": (
                     "Fast, low-fiber carbs with little fat. Strong early spike with "
                     "higher risk of subsequent dip (reactive hypoglycemia pattern)."
