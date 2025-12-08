@@ -13,6 +13,41 @@ MEAL_NAMES = [
 ]
 
 
+def normalize_meal_name(input_name: str) -> str:
+    """
+    Normalize meal name input to canonical form.
+    Handles various input formats:
+    - "EVENING SNACK" (quoted with spaces)
+    - "EVENING_SNACK" (underscores)
+    - "EVENINGSNACK" (concatenated)
+    - "evening snack" (lowercase)
+    
+    Args:
+        input_name: User input meal name
+    
+    Returns:
+        Canonical meal name or original input if no match
+    """
+    if not input_name:
+        return input_name
+    
+    # Normalize: uppercase, replace underscores with spaces
+    normalized = input_name.upper().replace("_", " ").strip()
+    
+    # Direct match
+    if normalized in MEAL_NAMES:
+        return normalized
+    
+    # Try removing all spaces for concatenated format
+    compact = normalized.replace(" ", "")
+    for meal in MEAL_NAMES:
+        if compact == meal.replace(" ", ""):
+            return meal
+    
+    # No match found, return original
+    return input_name
+
+
 def categorize_time(time_str: str) -> str:
     """
     Categorize time string into meal name.
