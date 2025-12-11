@@ -89,50 +89,58 @@ class NutrientsCommand(Command):
             print("  nutrients 2025-01-15 --meal BREAKFAST")
             return
         
-        # Single code lookup
+        # Single code lookup - align with find command format
         code = args.strip().upper()
+        
+        # Get master data
+        master_row = self.ctx.master.lookup_code(code)
+        
+        if not master_row:
+            print(f"\nCode '{code}' not found in master database.\n")
+            return
         
         # Get nutrients
         nutrients = self.ctx.nutrients.get_nutrients_for_code(code)
         
-        if nutrients:
-            print()
-            print(f"[{code}] Micronutrients:")
-            print("-" * 60)
-            
-            # Format as table
-            for nutrient, value in nutrients.items():
-                # Extract unit from nutrient name
-                # fiber_g -> Fiber (g)
-                # sodium_mg -> Sodium (mg)
-                parts = nutrient.split("_")
-                if len(parts) >= 2:
-                    name = parts[0].capitalize()
-                    unit = parts[1]
-                    label = f"{name} ({unit})"
-                else:
-                    label = nutrient.capitalize()
-                
-                try:
-                    print(f"  {label:<20} {float(value):>8.1f}")
-                except:
-                    print(f"  {label:<20} {str(value):>8}")
-            
-            print()
-        else:
+        if not nutrients:
             print(f"\nNo micronutrient data for code '{code}'.")
-            
-            # Also show master info if code exists
-            master_row = self.ctx.master.lookup_code(code)
-            if master_row:
-                cols = self.ctx.master.cols
-                option = master_row.get(cols.option, "")
-                print(f"Code '{code}' exists in master: {option}")
-                print("But no micronutrient data is defined.")
-            else:
-                print(f"Code '{code}' not found in master database.")
-            
-            print()
+            cols = self.ctx.master.cols
+            option = master_row.get(cols.option, "")
+            print(f"Code '{code}' exists in master: {option}")
+            print("But no micronutrient data is defined.\n")
+            return
+        
+        # Format output like find command
+        cols = self.ctx.master.cols
+        section = str(master_row.get(cols.section, ""))[:7]
+        option = str(master_row.get(cols.option, ""))
+        
+        # Build micronutrients string in CSV file order with abbreviations
+        # Order: fiber_g, sodium_mg, potassium_mg, vitA_mcg, vitC_mg, iron_mg
+        # Abbreviations: fiber, Na, K, VitA, VitC, Fe
+        nutr_map = [
+            ('fiber_g', 'fiber'),
+            ('sodium_mg', 'Na'),
+            ('potassium_mg', 'K'),
+            ('vitA_mcg', 'VitA'),
+            ('vitC_mg', 'VitC'),
+            ('iron_mg', 'Fe')
+        ]
+        
+        nutr_parts = []
+        for key, abbrev in nutr_map:
+            if key in nutrients:
+                try:
+                    value = float(nutrients[key])
+                    nutr_parts.append(f"{abbrev}={value:.1f}")
+                except:
+                    nutr_parts.append(f"{abbrev}={nutrients[key]}")
+        
+        nutr_str = " ".join(nutr_parts)
+        
+        print()
+        print(f"  {code:>8} | {section:<7} | {option} [{nutr_str}]")
+        print()
     
     def _show_all_meals_nutrients(self, date_arg: str = None) -> None:
         """
