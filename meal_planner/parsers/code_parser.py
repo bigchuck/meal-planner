@@ -242,13 +242,13 @@ def parse_selection_to_items(selection: Union[str, List]) -> List[Dict[str, Any]
             continue
         
         # DEBUG: Print what we're trying to match
-        print(f"DEBUG: Trying to parse chunk: '{c}'")
+        # print(f"DEBUG: Trying to parse chunk: '{c}'")
         
         # Time token: @11, @11:30, @11:30 (DINNER), or @11:30 "dinner"
         m_time = TIME_RE.match(c)
         if m_time:
             # DEBUG: Print match groups
-            print(f"DEBUG: TIME_RE matched! Groups: {m_time.groups()}")
+            # print(f"DEBUG: TIME_RE matched! Groups: {m_time.groups()}")
             
             h = int(m_time.group(1))
             m = int(m_time.group(2)) if m_time.group(2) else 0
@@ -257,10 +257,10 @@ def parse_selection_to_items(selection: Union[str, List]) -> List[Dict[str, Any]
             meal_override = m_time.group(3) or m_time.group(4)
             if meal_override:
                 meal_override = meal_override.strip()
-                print(f"DEBUG: Found meal_override: '{meal_override}'")
+                # print(f"DEBUG: Found meal_override: '{meal_override}'")
                 try:
                     meal_override = validate_meal_name(meal_override)
-                    print(f"DEBUG: Validated to: '{meal_override}'")
+                    # print(f"DEBUG: Validated to: '{meal_override}'")
                 except ValueError as e:
                     print(f"Warning: {e}")
                     meal_override = None
@@ -270,7 +270,7 @@ def parse_selection_to_items(selection: Union[str, List]) -> List[Dict[str, Any]
                 if meal_override:
                     time_dict["meal_override"] = meal_override
                 items.append(time_dict)
-                print(f"DEBUG: Added time marker: {time_dict}")
+                # print(f"DEBUG: Added time marker: {time_dict}")
             except ValueError:
                 pass  # Skip invalid times
             continue
@@ -362,7 +362,7 @@ def parse_selection_to_items(selection: Union[str, List]) -> List[Dict[str, Any]
             items.append(one)
     
     # DEBUG: Print final items
-    print(f"DEBUG: Final items: {items}")
+    # print(f"DEBUG: Final items: {items}")
     
     return items
 
