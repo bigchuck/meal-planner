@@ -48,16 +48,21 @@ def normalize_meal_name(input_name: str) -> str:
     return input_name
 
 
-def categorize_time(time_str: str) -> str:
+def categorize_time(time_str: str, meal_override: str = None) -> str:
     """
     Categorize time string into meal name.
     
     Args:
         time_str: Time in HH:MM format
+        meal_override: Optional explicit meal category to use instead of time-based logic
+
     
     Returns:
         Meal name or None
     """
+    if meal_override:
+        return meal_override
+
     if not time_str:
         return None
     

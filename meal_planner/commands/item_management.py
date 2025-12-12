@@ -1,6 +1,8 @@
 """
 Item management commands: rm, move, setmult, ins, items.
 """
+from datetime import date
+
 from .base import Command, register_command
 from meal_planner.parsers import CodeParser, eval_multiplier_expression
 from meal_planner.utils import ColumnResolver
@@ -31,8 +33,13 @@ class ItemsCommand(Command):
         
         for i, item in enumerate(items, 1):
             if "time" in item and item.get("time"):
-                print(f"{i:>3} {'@' + item['time']:>10} {'':>5} {'':<8} time marker")
-                continue
+                time_code = f"@{item['time']}"
+                meal_override = item.get("meal_override")
+                if meal_override:
+                    description = f"time marker ({meal_override})"
+                else:
+                    description = "time marker"
+                print(f"{i:>3} {time_code:>10} {'':>5} {'':<8} {description}")
             
             if "code" not in item:
                 continue

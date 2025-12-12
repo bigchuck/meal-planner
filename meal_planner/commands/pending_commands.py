@@ -156,7 +156,11 @@ class ShowCommand(Command):
         for item in items:
             # Time marker
             if "time" in item and item.get("time"):
-                code_strs.append(f"@{item['time']}")
+                time_str = f"@{item['time']}"
+                meal_override = item.get("meal_override")
+                if meal_override:
+                    time_str += f" ({meal_override})"
+                code_strs.append(time_str)
                 continue
             
             # Code item
@@ -189,7 +193,6 @@ class ShowCommand(Command):
                 )
         
         return totals, missing, code_strs
-
 
 @register_command
 class DiscardCommand(Command):

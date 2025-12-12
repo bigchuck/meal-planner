@@ -88,13 +88,18 @@ class TimeMarker:
     
     Attributes:
         time: Time string in HH:MM format (e.g., "11:30")
+        meal_override: Optional meal category override (e.g., "DINNER")
     
     Example:
         >>> marker = TimeMarker("11:30")
         >>> print(marker)
         @11:30
+        >>> marker = TimeMarker("16:45", "DINNER")
+        >>> print(marker)
+        @16:45 (DINNER)
     """
     time: str
+    meal_override: Optional[str] = None 
     
     def __post_init__(self):
         """Validate time format."""
@@ -118,9 +123,13 @@ class TimeMarker:
         Convert to dictionary format (for JSON serialization).
         
         Returns:
-            Dictionary with 'time' key
+            Dictionary with 'time' key and optional 'meal_override'
         """
-        return {"time": self.time}
+        result = {"time": self.time}
+        if self.meal_override: 
+            result["meal_override"] = self.meal_override  
+
+        return result
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'TimeMarker':
@@ -128,15 +137,21 @@ class TimeMarker:
         Create from dictionary format.
         
         Args:
-            data: Dictionary with 'time' key
+            data: Dictionary with 'time' key and optional 'meal_override'
         
         Returns:
             TimeMarker instance
         """
-        return cls(data.get("time", "00:00"))
+        return cls(
+            data.get("time", "00:00"),
+            data.get("meal_override") 
+        )
     
     def __str__(self) -> str:
         """String representation."""
+        if self.meal_override:  # NEW
+            return f"@{self.time} ({self.meal_override})"  
+
         return f"@{self.time}"
 
 

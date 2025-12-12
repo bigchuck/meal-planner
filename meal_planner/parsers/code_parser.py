@@ -6,7 +6,7 @@ Handles parsing of meal codes with multipliers, time markers, and groupings:
 - With multipliers: "B.1 *1.5", "L.3x2", "FI.9 x5.7/4"
 - Groups: "(FR.1, FR.2) *.5"
 - Subtractions: "D.10-VE.T1", "D.10 - VE.T1*.5"
-- Time markers: "@11", "@11:30"
+- Time markers: "@11", "@11:30", "@11:30 (DINNER)", '@11:30 "dinner"'
 """
 import re
 from typing import List, Dict, Any, Union
@@ -23,8 +23,7 @@ MULT_RE = re.compile(
     re.IGNORECASE
 )
 
-TIME_RE = re.compile(r"^@(\d{1,2})(?::(\d{2}))?$")
-
+TIME_RE = re.compile(r'^@(\d{1,2})(?::(\d{2}))?\s*(?:\(([^)]+)\)|"([^"]+)")?$')
 
 def normalize_time(hour: int, minute: int = 0) -> str:
     """
@@ -44,6 +43,40 @@ def normalize_time(hour: int, minute: int = 0) -> str:
         raise ValueError(f"Invalid time: {hour}:{minute}")
     return f"{hour:02d}:{minute:02d}"
 
+# Add validation function after normalize_time()
+def validate_meal_name(meal_name: str) -> str:
+    """
+    Validate and normalize meal name.
+    
+    Args:
+        meal_name: Meal name to validate (case-insensitive)
+    
+    Returns:
+        Canonical meal name (uppercase)
+    
+    Raises:
+        ValueError: If meal name is not valid
+    
+    Examples:
+        >>> validate_meal_name("afternoon snack")
+        'AFTERNOON SNACK'
+        >>> validate_meal_name("DINNER")
+        'DINNER'
+        >>> validate_meal_name("invalid")
+        ValueError: Invalid meal name 'invalid'
+    """
+    from meal_planner.utils.time_utils import normalize_meal_name, MEAL_NAMES
+    
+    normalized = normalize_meal_name(meal_name)
+    
+    if normalized not in MEAL_NAMES:
+        valid_names = ', '.join(MEAL_NAMES)
+        raise ValueError(
+            f"Invalid meal name '{meal_name}'. "
+            f"Valid names: {valid_names}"
+        )
+    
+    return normalized
 
 def eval_multiplier_expression(expr: str) -> float:
     """
@@ -180,7 +213,7 @@ def parse_selection_to_items(selection: Union[str, List]) -> List[Dict[str, Any]
     - Lists: ["B.1", "S2.4", "@11"]
     - Groups: "(FR.1, FR.2) *.5"
     - Subtractions: "D.10-VE.T1", "D.10 - VE.T1*.5"
-    - Time markers: "@11", "@11:30"
+    - Time markers: "@11", "@11:30", "@11:30 (DINNER)", '@11:30 "dinner"'
     
     Args:
         selection: String or list of meal codes/times
@@ -189,14 +222,7 @@ def parse_selection_to_items(selection: Union[str, List]) -> List[Dict[str, Any]
         List of dicts with either:
         - {"code": "B.1", "mult": 1.5} for meal codes
         - {"time": "HH:MM"} for time markers
-    
-    Example:
-        >>> parse_selection_to_items("B.1 *1.5, @11, S2.4")
-        [
-            {'code': 'B.1', 'mult': 1.5},
-            {'time': '11:00'},
-            {'code': 'S2.4', 'mult': 1.0}
-        ]
+        - {"time": "HH:MM", "meal_override": "DINNER"} for time with meal
     """
     items = []
     
@@ -207,18 +233,44 @@ def parse_selection_to_items(selection: Union[str, List]) -> List[Dict[str, Any]
         s = str(selection).strip()
         chunks = split_top_level(s)
     
+    # DEBUG: Print what chunks we got
+    # print(f"DEBUG: chunks = {chunks}")
+    
     for chunk in chunks:
         c = chunk.strip()
         if not c:
             continue
         
-        # Time token: @11 or @11:30
+        # DEBUG: Print what we're trying to match
+        print(f"DEBUG: Trying to parse chunk: '{c}'")
+        
+        # Time token: @11, @11:30, @11:30 (DINNER), or @11:30 "dinner"
         m_time = TIME_RE.match(c)
         if m_time:
+            # DEBUG: Print match groups
+            print(f"DEBUG: TIME_RE matched! Groups: {m_time.groups()}")
+            
             h = int(m_time.group(1))
             m = int(m_time.group(2)) if m_time.group(2) else 0
+            
+            # Extract meal override from either parentheses or quotes
+            meal_override = m_time.group(3) or m_time.group(4)
+            if meal_override:
+                meal_override = meal_override.strip()
+                print(f"DEBUG: Found meal_override: '{meal_override}'")
+                try:
+                    meal_override = validate_meal_name(meal_override)
+                    print(f"DEBUG: Validated to: '{meal_override}'")
+                except ValueError as e:
+                    print(f"Warning: {e}")
+                    meal_override = None
+            
             try:
-                items.append({"time": normalize_time(h, m)})
+                time_dict = {"time": normalize_time(h, m)}
+                if meal_override:
+                    time_dict["meal_override"] = meal_override
+                items.append(time_dict)
+                print(f"DEBUG: Added time marker: {time_dict}")
             except ValueError:
                 pass  # Skip invalid times
             continue
@@ -255,8 +307,17 @@ def parse_selection_to_items(selection: Union[str, List]) -> List[Dict[str, Any]
             if first_time:
                 h = int(first_time.group(1))
                 m = int(first_time.group(2)) if first_time.group(2) else 0
+                meal_override = first_time.group(3) or first_time.group(4)
+                if meal_override:
+                    try:
+                        meal_override = validate_meal_name(meal_override.strip())
+                    except ValueError:
+                        meal_override = None
                 try:
-                    items.append({"time": normalize_time(h, m)})
+                    time_dict = {"time": normalize_time(h, m)}
+                    if meal_override:
+                        time_dict["meal_override"] = meal_override
+                    items.append(time_dict)
                 except ValueError:
                     pass
             else:
@@ -281,8 +342,17 @@ def parse_selection_to_items(selection: Union[str, List]) -> List[Dict[str, Any]
         if m_time:
             h = int(m_time.group(1))
             m = int(m_time.group(2)) if m_time.group(2) else 0
+            meal_override = m_time.group(3) or m_time.group(4)
+            if meal_override:
+                try:
+                    meal_override = validate_meal_name(meal_override.strip())
+                except ValueError:
+                    meal_override = None
             try:
-                items.append({"time": normalize_time(h, m)})
+                time_dict = {"time": normalize_time(h, m)}
+                if meal_override:
+                    time_dict["meal_override"] = meal_override
+                items.append(time_dict)
             except ValueError:
                 pass
             continue
@@ -291,8 +361,10 @@ def parse_selection_to_items(selection: Union[str, List]) -> List[Dict[str, Any]
         if one:
             items.append(one)
     
+    # DEBUG: Print final items
+    print(f"DEBUG: Final items: {items}")
+    
     return items
-
 
 def items_to_code_string(items: List[Dict[str, Any]]) -> str:
     """
@@ -320,7 +392,12 @@ def items_to_code_string(items: List[Dict[str, Any]]) -> str:
         if "time" in it and it.get("time"):
             t = str(it["time"]).strip()
             if t:
-                parts.append(f"@{t}")
+                meal_override = it.get("meal_override")
+                if meal_override:
+                    # Always output in parentheses format (canonical)
+                    parts.append(f"@{t} ({meal_override})")
+                else:
+                    parts.append(f"@{t}")
             continue
         
         # Code with multiplier

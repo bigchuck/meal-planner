@@ -149,7 +149,12 @@ class PendingManager:
             if isinstance(item, dict) and "time" in item:
                 time_str = str(item["time"]).strip()
                 if time_str:
-                    result.append({"time": time_str})
+                    time_dict = {"time": time_str}
+                    # Preserve meal_override if present
+                    meal_override = item.get("meal_override")
+                    if meal_override:
+                        time_dict["meal_override"] = meal_override
+                    result.append(time_dict)
                 continue
             
             # String or list: parse it

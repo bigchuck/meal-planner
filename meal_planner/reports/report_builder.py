@@ -44,14 +44,14 @@ class ReportBuilder:
         rows = []
         totals = DailyTotals()
         missing = []
-        display = []  # Preserves order: ("row", idx) or ("time", "HH:MM")
+        display = []  # Preserves order: ("row", idx) or ("time", item_dict)
         
         cols = self.master.cols
         
         for item in items:
-            # Time marker
+            # Time marker - store the full item dict
             if "time" in item and item.get("time"):
-                display.append(("time", str(item["time"])))
+                display.append(("time", item))
                 continue
             
             # Skip non-code items
@@ -158,8 +158,13 @@ class Report:
         # Display rows in order (with time markers)
         for kind, val in self.display:
             if kind == "time":
-                # Time marker row
-                print(f"{'':>8} {'':<8} {'':>4} {'time: '+str(val):<21} "
+                # Time marker row - val is the full item dict
+                time_str = val.get("time", "")
+                meal_override = val.get("meal_override")
+                display_str = f"@{time_str}"
+                if meal_override:
+                    display_str += f" ({meal_override})"
+                print(f"{'':>8} {'':<8} {'':>4} {'time: '+display_str:<21} "
                       f"{'':>6} {'':>5} {'':>5} {'':>5} {'':>6} {'':>4}")
             else:
                 # Nutrient row
@@ -262,37 +267,40 @@ class Report:
             return None
         
         # Group items by time segments
-        segments = []  # List of (time_str, [row_indices])
-        current_time = None
+        segments = []  # List of (time_item_dict, [row_indices])
+        current_time_item = None
         current_rows = []
         
         for kind, val in self.display:
             if kind == "time":
                 # Save previous segment if exists
-                if current_time is not None or current_rows:
-                    segments.append((current_time, current_rows))
-                # Start new segment
-                current_time = val
+                if current_time_item is not None or current_rows:
+                    segments.append((current_time_item, current_rows))
+                # Start new segment - val is full item dict
+                current_time_item = val
                 current_rows = []
             elif kind == "row":
                 current_rows.append(val)
         
         # Don't forget last segment
-        if current_time is not None or current_rows:
-            segments.append((current_time, current_rows))
+        if current_time_item is not None or current_rows:
+            segments.append((current_time_item, current_rows))
         
         # If first segment has no time, assign to breakfast
         if segments and segments[0][0] is None:
-            segments[0] = ("05:00", segments[0][1])  # Arbitrary breakfast time
+            segments[0] = ({"time": "05:00"}, segments[0][1])
         
         # Categorize segments into meals
         meal_categories = {meal: [] for meal in MEAL_NAMES}
 
-        for time_str, row_indices in segments:
+        for time_item, row_indices in segments:
             if not row_indices:
                 continue
             
-            meal_name = categorize_time(time_str)
+            time_str = time_item.get("time", "05:00")
+            meal_override = time_item.get("meal_override")
+            
+            meal_name = categorize_time(time_str, meal_override)
             if meal_name:
                 meal_categories[meal_name].append((time_str, row_indices))
         
@@ -317,4 +325,3 @@ class Report:
             result.append((meal_name, first_time, meal_totals))
         
         return result if result else None
-    
