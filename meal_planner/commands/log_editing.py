@@ -162,11 +162,15 @@ class ApplyLogCommand(Command):
         query_date = self.ctx.editing_date
         items = pending.get("items", [])
         
-        # Build codes string from items
+        # Build codes string from items - FIXED to include meal_override
         code_parts = []
         for item in items:
             if "time" in item and item.get("time"):
-                code_parts.append(f"@{item['time']}")
+                time_str = f"@{item['time']}"
+                meal_override = item.get("meal_override")
+                if meal_override:
+                    time_str += f" ({meal_override})"
+                code_parts.append(time_str)
             elif "code" in item:
                 code = item["code"]
                 mult = item.get("mult", 1.0)
