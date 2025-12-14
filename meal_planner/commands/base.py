@@ -53,6 +53,13 @@ class CommandContext:
        # Session state for backups
         self.session_start = datetime.now()
         self.backed_up_files: Set[Path] = set()  # Track which files backed up this session
+    
+        # Planning workspace (session-only, no file backing)
+        self.planning_workspace = {
+            "candidates": [],
+            "next_numeric_id": 1,
+            "next_invented_id": 1
+        }
 
     def reload_master(self):
         """Reload master file from disk."""
