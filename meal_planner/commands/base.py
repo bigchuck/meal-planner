@@ -42,9 +42,14 @@ class CommandContext:
         self.aliases = AliasManager(aliases_file) if aliases_file else None
         
         # Session-only stash for undo/redo operations
-        self.pending_stack: List = []
+        # Each entry: {"pending": {...}, "timestamp": datetime, "auto": bool}
+        self.pending_stack: List[Dict] = []
         self.editing_date: Optional[str] = None
-    
+
+        # Track provenance of current pending to enable smart confirmations
+        # Possible values: "empty", "normal", "stash_pop", "editing"
+        self.pending_source: str = self._determine_initial_pending_source()
+
         # Usage tracking
         from config import TRACK_USAGE, USAGE_STATS_FILE
         from meal_planner.utils import UsageTracker
@@ -60,6 +65,25 @@ class CommandContext:
             "next_numeric_id": 1,
             "next_invented_id": 1
         }
+
+    def _determine_initial_pending_source(self) -> str:
+        """
+        Determine initial pending source state on startup.
+        
+        Any existing pending from previous session is treated as "normal"
+        user work and should be protected.
+        
+        Returns:
+            "empty" if no pending exists, "normal" if pending has items
+        """
+        try:
+            pending = self.pending_mgr.load()
+            if pending and pending.get("items"):
+                return "normal"
+            else:
+                return "empty"
+        except Exception:
+            return "empty"
 
     def reload_master(self):
         """Reload master file from disk."""

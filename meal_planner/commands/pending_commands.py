@@ -40,6 +40,7 @@ class StartCommand(Command):
         }
         
         self.ctx.pending_mgr.save(pending)
+        self.ctx.pending_source = "normal"
         print(f"Pending day started for {target_date}.")
 
 
@@ -61,6 +62,8 @@ class AddCommand(Command):
             print("Usage: add <codes>")
             return
         
+        was_empty = (self.ctx.pending_source == "empty")
+
         # Load or create pending
         try:
             pending = self.ctx.pending_mgr.load()
@@ -72,6 +75,7 @@ class AddCommand(Command):
                 "date": str(date.today()),
                 "items": []
             }
+            was_empty = True
         
         # Parse new codes with alias expansion
         from meal_planner.parsers.alias_expander import expand_aliases
@@ -85,6 +89,10 @@ class AddCommand(Command):
         pending["items"].extend(new_items)
         self.ctx.pending_mgr.save(pending)
         
+        if was_empty:
+            self.ctx.pending_source = "normal"
+        # Otherwise preserve current state (editing, stash_pop, normal)
+
         # Check for fish codes (easter egg)
         has_fish = any(
             isinstance(it, dict) and 
@@ -195,19 +203,6 @@ class ShowCommand(Command):
         return totals, missing, code_strs
 
 @register_command
-class DiscardCommand(Command):
-    """Discard pending day without saving."""
-    
-    name = "discard"
-    help_text = "Discard pending day without saving to log"
-    
-    def execute(self, args: str) -> None:
-        """Clear pending without saving."""
-        self.ctx.pending_mgr.clear()
-        print("Pending day discarded (not saved to log).")
-
-
-@register_command
 class CloseCommand(Command):
     """Finalize pending day and save to log."""
     
@@ -259,5 +254,7 @@ class CloseCommand(Command):
         
         # Clear pending
         self.ctx.pending_mgr.clear()
+
+        self.ctx.pending_source = "empty"
         
         print(f"Closed and saved to log. Pending cleared.")
