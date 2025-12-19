@@ -1,6 +1,8 @@
 # meal_planner/commands/glucose_command.py
 """
 Glucose command - glycemic load analysis with narrative output.
+
+PHASE 3 CHANGES: Updated to use thresholds from JSON for risk scoring and curve classification.
 """
 import shlex
 from typing import List, Dict, Any, Optional
@@ -28,6 +30,10 @@ class GlucoseCommand(Command):
                   --meal <meal_name>: Show specific meal only (use quotes for multi-word names)
                   --detail: Show component breakdowns
         """
+        # PHASE 3: Check thresholds availability - glucose analysis requires them
+        if not self._check_thresholds("Glucose analysis"):
+            return
+        
         # Parse arguments (handles quotes properly)
         try:
             parts = shlex.split(args.strip()) if args.strip() else []
@@ -38,12 +44,11 @@ class GlucoseCommand(Command):
         # Parse flags
         show_detail = "--detail" in parts
         
-        # Parse --meal flag (collect all parts until next flag)
+        # Parse --meal flag
         meal_filter = None
         if "--meal" in parts:
             meal_idx = parts.index("--meal")
             if meal_idx + 1 < len(parts):
-                # Collect all parts until next flag or end
                 meal_parts = []
                 for i in range(meal_idx + 1, len(parts)):
                     if parts[i].startswith("--"):
@@ -51,7 +56,6 @@ class GlucoseCommand(Command):
                     meal_parts.append(parts[i])
                 
                 if meal_parts:
-                    # Join and normalize
                     meal_filter = normalize_meal_name(" ".join(meal_parts))
         
         # Get date parts (non-flag arguments)
@@ -79,37 +83,27 @@ class GlucoseCommand(Command):
         
         if breakdown is None:
             print("\n(No time markers present - glucose analysis requires meal timing)\n")
-            print("Add time markers to your meals using '@HH:MM' format:")
-            print("  Example: add @08:00, B.1, S2.4")
+            print("Add time markers to your meals using format: @HH:MM or @H:MM\n")
             return
         
-        # Filter meals
-        meals_to_show = []
+        # Filter to specific meal if requested
+        if meal_filter:
+            breakdown = [(name, time, totals) for name, time, totals in breakdown 
+                        if name == meal_filter]
+            if not breakdown:
+                print(f"\nMeal '{meal_filter}' not found.\n")
+                return
+        
+        # Show analysis for each meal
+        print(f"\n{'=' * 70}")
+        print(f"Glucose Analysis - {date_label}")
+        print(f"{'=' * 70}\n")
+        
         for meal_name, first_time, totals in breakdown:
-            # If filtering by specific meal, only check that
-            if meal_filter:
-                if meal_name == meal_filter:
-                    meals_to_show.append((meal_name, first_time, totals))
-                continue
-            
-            meals_to_show.append((meal_name, first_time, totals))
-        
-        if not meals_to_show:
-            if meal_filter:
-                print(f"\n(No meal found matching '{meal_filter}')\n")
-            else:
-                print("\n(No meals to analyze)\n")
-            return
-        
-        # Show analysis
-        print(f"\n=== Glucose Analysis ({date_label}) ===\n")
-        
-        for meal_name, first_time, totals in meals_to_show:
-            self._show_meal_analysis(meal_name, first_time, totals, show_detail)
-            print()
+            self._analyze_meal(meal_name, first_time, totals, show_detail)
     
     def _get_pending_report(self, builder):
-        """Get report from pending."""
+        """Get report from pending items."""
         try:
             pending = self.ctx.pending_mgr.load()
         except Exception:
@@ -120,9 +114,9 @@ class GlucoseCommand(Command):
             return None
         
         items = pending.get("items", [])
-        return builder.build_from_items(items, title="Glucose Analysis")
+        return builder.build_from_items(items, title="Pending Analysis")
     
-    def _get_log_report(self, builder, query_date):
+    def _get_log_report(self, builder, query_date: str):
         """Get report from log date."""
         entries = self.ctx.log.get_entries_for_date(query_date)
         
@@ -141,18 +135,17 @@ class GlucoseCommand(Command):
             return None
         
         items = CodeParser.parse(all_codes)
-        return builder.build_from_items(items, title="Glucose Analysis")
+        return builder.build_from_items(items, title=f"Analysis for {query_date}")
     
-    def _show_meal_analysis(self, meal_name: str, first_time: str, 
-                           totals: DailyTotals, show_detail: bool) -> None:
-        """Show narrative analysis for a single meal."""
-        
+    def _analyze_meal(self, meal_name: str, first_time: str, 
+                      totals: DailyTotals, show_detail: bool) -> None:
+        """Analyze and display glucose impact for a single meal."""
         # Calculate GI from GL
         gi = None
         if totals.carbs_g > 0:
             gi = (totals.glycemic_load / totals.carbs_g) * 100
         
-        # Build meal dict for risk calculation (NOW WITH REAL FIBER)
+        # Build meal dict for risk calculation
         meal_dict = {
             'carbs_g': totals.carbs_g,
             'fat_g': totals.fat_g,
@@ -160,12 +153,11 @@ class GlucoseCommand(Command):
             'fiber_g': totals.fiber_g,
             'gi': gi
         }
-
         
-        # Calculate risk
+        # Calculate risk using thresholds
         risk = self._compute_risk_scores(meal_dict)
         
-        # Classify curve
+        # Classify curve using thresholds
         curve = self._classify_glucose_curve(meal_dict, risk)
         
         # Format output
@@ -202,10 +194,154 @@ class GlucoseCommand(Command):
         if show_detail:
             self._show_detail_breakdown(totals, risk, gi)
     
-    def _get_key_concerns(self, totals: DailyTotals, risk: dict, gi: Optional[float]) -> List[str]:
-        """Extract top concerns from risk analysis."""
-        concerns = []
+    def _compute_risk_scores(self, meal: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Compute glucose risk score and components.
         
+        PHASE 3: Now uses thresholds from JSON instead of hardcoded values.
+        """
+        carbs_g = _safe_get(meal, "carbs_g", 0.0)
+        fat_g = _safe_get(meal, "fat_g", 0.0)
+        protein_g = _safe_get(meal, "protein_g", 0.0)
+        fiber_g = _safe_get(meal, "fiber_g", 0.0)
+        gi = meal.get("gi")
+        
+        # PHASE 3: Get scoring configuration from thresholds
+        scoring = self.ctx.thresholds.get_glucose_scoring()
+        
+        # Calculate component scores using thresholds
+        carb_risk = self._get_score_for_value(carbs_g, scoring['carb_risk_ranges'])
+        gi_factor = self._get_factor_for_value(gi, scoring['gi_speed_factors'])
+        base_carb_risk = min(carb_risk * gi_factor, 10.0)
+        
+        fat_delay = self._get_score_for_value(fat_g, scoring['fat_delay_ranges'])
+        protein_tail = self._get_score_for_value(protein_g, scoring['protein_tail_ranges'])
+        fiber_buffer = self._get_score_for_value(fiber_g, scoring['fiber_buffer_ranges'])
+        
+        # PHASE 3: Use weights from thresholds
+        weights = scoring['risk_score_weights']
+        raw_score = (
+            base_carb_risk
+            + weights['fat_delay'] * fat_delay
+            + weights['protein_tail'] * protein_tail
+            - weights['fiber_buffer'] * fiber_buffer
+        )
+        
+        risk_score = max(0.0, min(10.0, raw_score))
+        
+        # PHASE 3: Use rating thresholds from JSON
+        rating = self._get_risk_rating(risk_score, scoring['risk_rating_thresholds'])
+        
+        return {
+            "risk_score": risk_score,
+            "risk_rating": rating,
+            "components": {
+                "carb_risk": carb_risk,
+                "gi_speed_factor": gi_factor,
+                "base_carb_risk": base_carb_risk,
+                "fat_delay_risk": fat_delay,
+                "protein_tail_risk": protein_tail,
+                "fiber_buffer": fiber_buffer,
+                "raw_score_before_clamp": raw_score,
+            },
+        }
+    
+    def _classify_glucose_curve(self, meal: Dict[str, Any], 
+                                risk_info: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Classify expected glucose curve shape.
+        
+        PHASE 3: Now uses curve classification rules from JSON.
+        """
+        carbs_g = _safe_get(meal, "carbs_g", 0.0)
+        fat_g = _safe_get(meal, "fat_g", 0.0)
+        protein_g = _safe_get(meal, "protein_g", 0.0)
+        fiber_g = _safe_get(meal, "fiber_g", 0.0)
+        gi = meal.get("gi")
+        risk_score = risk_info.get("risk_score", 0.0)
+        
+        # PHASE 3: Get curve rules from thresholds
+        curves = self.ctx.thresholds.get_curve_classification()
+        
+        # Check very low carb first
+        if carbs_g < curves['very_low_carb_max']:
+            return {
+                "curve_shape": "flat_or_minimal_rise",
+                "curve_label": "Flat / Minimal Rise",
+                "curve_description": (
+                    "Very low carb content. Expect flat CGM line or small bump "
+                    "with no significant spike."
+                )
+            }
+        
+        # Check delayed spike (pizza effect)
+        delayed = curves['delayed_spike']
+        if (carbs_g >= delayed['min_carbs'] and fat_g >= delayed['min_fat']):
+            return {
+                "curve_shape": "delayed_spike",
+                "curve_label": delayed['label'],
+                "curve_description": delayed['curve_description']
+            }
+        
+        # Check double hump
+        double = curves['double_hump']
+        if (carbs_g >= double['min_carbs'] and 
+            double['min_fat'] <= fat_g <= double['max_fat'] and 
+            protein_g >= double['min_protein']):
+            return {
+                "curve_shape": "double_hump",
+                "curve_label": double['label'],
+                "curve_description": double['curve_description']
+            }
+        
+        # Check blunted spike
+        blunted = curves['blunted_spike']
+        if (carbs_g >= blunted['min_carbs'] and 
+            fiber_g >= blunted['min_fiber'] and 
+            fat_g < blunted['max_fat']):
+            # Use template for description
+            desc = blunted['curve_description_template'].format(
+                carbs=int(carbs_g),
+                fiber=int(fiber_g)
+            )
+            return {
+                "curve_shape": "blunted_spike",
+                "curve_label": blunted['label'],
+                "curve_description": desc
+            }
+        
+        # Check spike then dip
+        spike_dip = curves['spike_then_dip']
+        if (carbs_g >= spike_dip['min_carbs'] and 
+            gi and gi >= spike_dip['min_gi'] and 
+            fat_g < spike_dip['max_fat'] and 
+            fiber_g < spike_dip['max_fiber']):
+            return {
+                "curve_shape": "spike_then_dip",
+                "curve_label": spike_dip['label'],
+                "curve_description": spike_dip['curve_description']
+            }
+        
+        # Default case
+        default = curves['default']
+        desc = default['curve_description_template'].format(
+            carbs=int(carbs_g),
+            risk_score=risk_score
+        )
+        return {
+            "curve_shape": "moderate_single_spike",
+            "curve_label": default['label'],
+            "curve_description": desc
+        }
+    
+    def _get_key_concerns(self, totals: DailyTotals, risk: dict, gi: Optional[float]) -> List[str]:
+        """
+        Extract top concerns from risk analysis.
+        
+        PHASE 3: Uses some thresholds, but concern messages are still somewhat hardcoded.
+        This could be further improved in a future phase.
+        """
+        concerns = []
         components = risk['components']
         
         # High carb load
@@ -245,10 +381,11 @@ class GlucoseCommand(Command):
         if risk['risk_score'] > 7:
             recs.append("Consider reducing portion size or splitting into two smaller meals")
         
-        if curve['curve_shape'] == 'sharp_early_spike':
+        curve_shape = curve.get('curve_shape', '')
+        if curve_shape == 'sharp_early_spike':
             recs.append("Add protein/fat before carbs to slow absorption")
         
-        if curve['curve_shape'] == 'delayed_high_spike':
+        if curve_shape == 'delayed_spike':
             recs.append("Watch for late spike 2-3 hours after eating")
         
         if totals.protein_g < 15 and totals.carbs_g > 30:
@@ -275,146 +412,28 @@ class GlucoseCommand(Command):
         print(f"  {'-' * 40}")
         print(f"  Total Risk:    {risk['risk_score']:>6.1f} / 10")
         print()
-
-    def _compute_risk_scores(self, meal: Dict[str, Any]) -> Dict[str, Any]:
-        """Compute glucose risk score and components."""
-        carbs_g = _safe_get(meal, "carbs_g", 0.0)
-        fat_g = _safe_get(meal, "fat_g", 0.0)
-        protein_g = _safe_get(meal, "protein_g", 0.0)
-        fiber_g = _safe_get(meal, "fiber_g", 0.0)
-        gi = meal.get("gi")
-        
-        carb_risk = _carb_risk_score(carbs_g)
-        gi_factor = _gi_speed_factor(gi)
-        base_carb_risk = min(carb_risk * gi_factor, 10.0)
-        
-        fat_delay = _fat_delay_score(fat_g)
-        protein_tail = _protein_tail_score(protein_g)
-        fiber_buffer = _fiber_buffer_score(fiber_g)
-        
-        raw_score = (
-            base_carb_risk
-            + 0.6 * fat_delay
-            + 0.5 * protein_tail
-            - 0.7 * fiber_buffer
-        )
-        
-        risk_score = max(0.0, min(10.0, raw_score))
-        
-        if risk_score < 3:
-            rating = "low"
-        elif risk_score < 6:
-            rating = "medium"
-        elif risk_score < 8.5:
-            rating = "high"
-        else:
-            rating = "very_high"
-        
-        return {
-            "risk_score": risk_score,
-            "risk_rating": rating,
-            "components": {
-                "carb_risk": carb_risk,
-                "gi_speed_factor": gi_factor,
-                "base_carb_risk": base_carb_risk,
-                "fat_delay_risk": fat_delay,
-                "protein_tail_risk": protein_tail,
-                "fiber_buffer": fiber_buffer,
-                "raw_score_before_clamp": raw_score,
-            },
-        }
     
-    def _classify_glucose_curve(self, meal: Dict[str, Any], 
-                                risk_info: Dict[str, Any]) -> Dict[str, Any]:
-        """Classify expected glucose curve shape."""
-        carbs_g = _safe_get(meal, "carbs_g", 0.0)
-        fat_g = _safe_get(meal, "fat_g", 0.0)
-        protein_g = _safe_get(meal, "protein_g", 0.0)
-        fiber_g = _safe_get(meal, "fiber_g", 0.0)
-        gi = meal.get("gi")
-        
-        risk_score = risk_info.get("risk_score", 0.0)
-        
-        # Very low carbs
-        if carbs_g < 10:
-            return {
-                "curve_shape": "flat_or_minimal_rise",
-                "curve_label": "Flat / Minimal Rise",
-                "curve_description": (
-                    "Very low carb content. Expect flat CGM line or small bump "
-                    "with no significant spike."
-                )
-            }
-        
-        # Sharp early spike: high GI, low fat, moderate+ carbs
-        if carbs_g >= 30 and gi and gi >= 60 and fat_g < 10 and fiber_g < 6:
-            return {
-                "curve_shape": "sharp_early_spike",
-                "curve_label": "Sharp Early Spike ",
-                "curve_description": (
-                    f"High-GI carbs ({int(carbs_g)}g) with minimal fat/fiber buffering. "
-                    "Quick rise with peak at 20-45 minutes, followed by gradual decline."
-                )
-            }
-        
-        # Delayed pizza spike: high carb + high fat
-        if carbs_g >= 40 and fat_g >= 20:
-            return {
-                "curve_shape": "delayed_high_spike",
-                "curve_label": "Delayed High Spike (Pizza Effect)",
-                "curve_description": (
-                    f"Substantial carbs ({int(carbs_g)}g) plus high fat ({int(fat_g)}g). "
-                    "Initial rise modest, but expect larger spike 90-180 minutes later "
-                    "with prolonged tail."
-                )
-            }
-        
-        # Double hump: moderate carbs, moderate fat, high protein
-        if 20 <= carbs_g <= 40 and 10 <= fat_g <= 25 and protein_g >= 25:
-            return {
-                "curve_shape": "double_hump",
-                "curve_label": "Double-Hump Pattern",
-                "curve_description": (
-                    "Mixed meal with moderate carbs, notable fat, and high protein. "
-                    "Modest early bump, some decline, then second slower rise 2-3 hours later "
-                    "as protein converts to glucose."
-                )
-            }
-        
-        # Blunted spike: carbs + high fiber
-        if carbs_g >= 15 and fiber_g >= 8 and fat_g < 20:
-            return {
-                "curve_shape": "blunted_spike",
-                "curve_label": "Blunted / Smoothed Spike",
-                "curve_description": (
-                    f"Carbs present ({int(carbs_g)}g) but high fiber ({int(fiber_g)}g) "
-                    "slows absorption. Expect slower, lower peak with smooth rise and fall."
-                )
-            }
-        
-        # Spike then dip risk
-        if carbs_g >= 25 and gi and gi >= 60 and fat_g < 10 and fiber_g < 4:
-            return {
-                "curve_shape": "spike_then_dip_risk",
-                "curve_label": "Spike Then Possible Dip ",
-                "curve_description": (
-                    "Fast, low-fiber carbs with little fat. Strong early spike with "
-                    "higher risk of subsequent dip (reactive hypoglycemia pattern)."
-                )
-            }
-        
-        # Default: moderate single spike
-        return {
-            "curve_shape": "moderate_single_spike",
-            "curve_label": "Moderate Single Spike",
-            "curve_description": (
-                f"Moderate rise with single main peak. Overall impact follows "
-                f"carb load ({int(carbs_g)}g) and risk score ({risk_score:.1f}/10)."
-            )
-        }
+    # PHASE 3: Helper methods for threshold lookups
+    
+    def _get_score_for_value(self, value: float, ranges: List[Dict]) -> float:
+        """Get score for a value using range definitions from thresholds."""
+        range_def = self.ctx.thresholds.get_value_for_range(value, ranges)
+        return range_def.get('score', 0.0) if range_def else 0.0
+    
+    def _get_factor_for_value(self, value: Optional[float], ranges: List[Dict]) -> float:
+        """Get factor for a value using range definitions from thresholds."""
+        if value is None:
+            return 1.0  # Neutral factor if no value
+        range_def = self.ctx.thresholds.get_value_for_range(value, ranges)
+        return range_def.get('factor', 1.0) if range_def else 1.0
+    
+    def _get_risk_rating(self, score: float, thresholds: List[Dict]) -> str:
+        """Get risk rating for a score using threshold definitions."""
+        rating_def = self.ctx.thresholds.get_value_for_range(score, thresholds)
+        return rating_def.get('rating', 'unknown') if rating_def else 'unknown'
 
 
-# Helper functions
+# Helper function
 def _safe_get(meal: Dict[str, Any], key: str, default: float = 0.0) -> float:
     """Safely extract numeric value from meal dict."""
     value = meal.get(key, default)
@@ -422,67 +441,3 @@ def _safe_get(meal: Dict[str, Any], key: str, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
-
-
-def _carb_risk_score(carbs_g: float) -> float:
-    """Map carb grams to risk contribution (0-10)."""
-    if carbs_g <= 5:
-        return 0.0
-    elif carbs_g <= 20:
-        return 2.0
-    elif carbs_g <= 40:
-        return 5.0
-    elif carbs_g <= 70:
-        return 8.0
-    else:
-        return 10.0
-
-
-def _gi_speed_factor(gi: Optional[float]) -> float:
-    """Convert GI to speed multiplier."""
-    if gi is None or gi <= 0:
-        return 1.0
-    if gi < 40:
-        return 0.8
-    elif gi < 60:
-        return 1.0
-    else:
-        return 1.2
-
-
-def _fat_delay_score(fat_g: float) -> float:
-    """Score for fat-driven delay (0-7)."""
-    if fat_g <= 5:
-        return 0.0
-    elif fat_g <= 15:
-        return 1.0
-    elif fat_g <= 25:
-        return 3.0
-    elif fat_g <= 35:
-        return 5.0
-    else:
-        return 7.0
-
-
-def _protein_tail_score(protein_g: float) -> float:
-    """Score for protein tail effect (0-4)."""
-    if protein_g <= 10:
-        return 0.0
-    elif protein_g <= 20:
-        return 1.0
-    elif protein_g <= 35:
-        return 2.0
-    else:
-        return 4.0
-
-
-def _fiber_buffer_score(fiber_g: float) -> float:
-    """Score for fiber protection (0-5)."""
-    if fiber_g <= 2:
-        return 0.0
-    elif fiber_g <= 6:
-        return 1.0
-    elif fiber_g <= 10:
-        return 3.0
-    else:
-        return 5.0

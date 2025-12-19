@@ -7,6 +7,7 @@ from .master_loader import MasterLoader, load_master, lookup_code_row
 from .log_manager import LogManager, ensure_log, save_log
 from .pending_manager import PendingManager, load_pending, save_pending, clear_pending
 from .alias_manager import AliasManager
+from .thresholds_manager import ThresholdsManager
 
 __all__ = [
     # Classes
@@ -14,6 +15,7 @@ __all__ = [
     'LogManager',
     'PendingManager',
     'AliasManager',
+    'ThresholdsManager',
     # Backward-compatible functions
     'load_master',
     'lookup_code_row',

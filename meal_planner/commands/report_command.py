@@ -41,6 +41,9 @@ class ReportCommand(Command):
         show_nutrients = "--nutrients" in parts or "--nutrient" in parts or "--micro" in parts
         show_meals = "--meals" in parts
         show_risk = "--risk" in parts
+        if show_risk:
+            if not self._check_thresholds("Risk analysis"):
+                show_risk = False
         
         # Check for --meal <n> (requires quotes for multi-word names)
         meal_name = None
@@ -339,6 +342,13 @@ class ReportCommand(Command):
             formatted = self.ctx.recipes.format_recipe(code)
             if formatted:
                 print(formatted)
+
+    def _show_risk(self, report) -> None:
+        """Show daily risk summary."""
+        print("\n=== Nutritional Risk Assessment ===")
+        risk_summary = self._get_risk_summary(report.totals, 1)
+        print(f"Daily: {risk_summary}")
+        print()
     
     """
         -----------------------------------------------------------------
@@ -359,13 +369,15 @@ class ReportCommand(Command):
         if meal_count == 0:
             return risks
         
-        HIGH_SUGAR = int(50/meal_count)
-        HIGH_GL = int(100/meal_count)
-        LOW_PROTEIN = int(100/meal_count)
-        HIGH_FAT = int(35/meal_count)
-        HIGH_CARBS = int(60/meal_count)
-        VLOW_CALORIES = int(1200/meal_count)
-        VHIGH_CALORIES = int(3000/meal_count)
+        targets = self.ctx.thresholds.get_daily_targets()
+        # Calculate per-meal thresholds
+        HIGH_SUGAR = int(targets['sugar_g'] / meal_count)
+        HIGH_GL = int(targets['glycemic_load'] / meal_count)
+        LOW_PROTEIN = int(targets['protein_g'] / meal_count)
+        HIGH_FAT = int(targets['fat_pct'])  # Percentage, not divided
+        HIGH_CARBS = int(targets['carbs_pct'])  # Percentage, not divided
+        VLOW_CALORIES = int(targets['calories_min'] / meal_count)
+        VHIGH_CALORIES = int(targets['calories_max'] / meal_count)
 
         # High sugar (>50g)
         if totals.sugar_g > HIGH_SUGAR:

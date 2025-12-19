@@ -34,9 +34,9 @@ def repl():
     print_welcome()
     
     # Create command context (shared state for all commands)
-    from config import NUTRIENTS_FILE, RECIPES_FILE, ALIASES_FILE
+    from config import NUTRIENTS_FILE, RECIPES_FILE, ALIASES_FILE, THRESHOLDS_FILE
     ctx = CommandContext(MASTER_FILE, LOG_FILE, PENDING_FILE, 
-                        NUTRIENTS_FILE, RECIPES_FILE, ALIASES_FILE)
+                        NUTRIENTS_FILE, RECIPES_FILE, ALIASES_FILE, THRESHOLDS_FILE)
     
     # Get command registry
     registry = get_registry()

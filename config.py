@@ -37,6 +37,7 @@ PENDING_FILE = DATA_PATH / "meal_plan_pending.json"
 NUTRIENTS_FILE = DATA_PATH / "meal_plan_nutrients.csv"
 RECIPES_FILE = DATA_PATH / "meal_plan_recipes.csv"
 ALIASES_FILE = DATA_PATH / "meal_plan_aliases.json"
+THRESHOLDS_FILE = DATA_PATH / "meal_plan_thresholds.json"
 
 # Usage tracking
 TRACK_USAGE = True  # Set to False to disable usage tracking
@@ -54,6 +55,7 @@ print(f"  pending: {PENDING_FILE}")
 print(f"  nutrients: {NUTRIENTS_FILE}")
 print(f"  recipes: {RECIPES_FILE}")
 print(f"  aliases: {ALIASES_FILE}")
+print(f"  thresholds: {THRESHOLDS_FILE}")
 print(f"  usage: {USAGE_STATS_FILE}")
 
 # Verify files exist

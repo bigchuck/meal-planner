@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Type, Optional, List, Set
 from pathlib import Path
 
-from meal_planner.data import MasterLoader, LogManager, PendingManager
+from meal_planner.data import MasterLoader, LogManager, PendingManager, ThresholdsManager
 from datetime import datetime
 
 
@@ -18,7 +18,7 @@ class CommandContext:
     
     def __init__(self, master_file: Path, log_file: Path, pending_file: Path,
                  nutrients_file: Path = None, recipes_file: Path = None,
-                 aliases_file: Path = None):
+                 aliases_file: Path = None, thresholds_file: Path = None):
         """
         Initialize command context.
         
@@ -29,6 +29,7 @@ class CommandContext:
             nutrients_file: Path to nutrients CSV (optional)
             recipes_file: Path to recipes CSV (optional)
             aliases_file: Path to aliases JSON (optional)
+            thresholds_file: Path to thresholds JSON (optional)
         """
         from meal_planner.data.nutrients_manager import NutrientsManager
         from meal_planner.data.recipes_manager import RecipesManager
@@ -40,7 +41,17 @@ class CommandContext:
         self.nutrients = NutrientsManager(nutrients_file) if nutrients_file else None
         self.recipes = RecipesManager(recipes_file) if recipes_file else None
         self.aliases = AliasManager(aliases_file) if aliases_file else None
-        
+
+        self.thresholds = None
+        self.thresholds_error = None
+        if thresholds_file:
+            self.thresholds = ThresholdsManager(thresholds_file)
+            if not self.thresholds.load():
+                # Store error message for commands to display
+                self.thresholds_error = self.thresholds.get_error_message()
+                # Set thresholds to None to disable dependent features
+                self.thresholds = None
+
         # Session-only stash for undo/redo operations
         # Each entry: {"pending": {...}, "timestamp": datetime, "auto": bool}
         self.pending_stack: List[Dict] = []
@@ -143,6 +154,24 @@ class Command(ABC):
             return cmd.lower() == self.name.lower()
         else:
             return cmd.lower() in [n.lower() for n in self.name]
+
+    def _check_thresholds(self, feature_name: str) -> bool:
+        """
+        Check if thresholds are available for a feature.
+        
+        Args:
+            feature_name: Name of feature requiring thresholds
+        
+        Returns:
+            True if available, False if disabled (prints error message)
+        """
+        if self.ctx.thresholds is None:
+            if self.ctx.thresholds_error:
+                print(f"\n{feature_name} unavailable: {self.ctx.thresholds_error}\n")
+            else:
+                print(f"\n{feature_name} unavailable: thresholds file not configured\n")
+            return False
+        return True
 
 
 class CommandRegistry:
