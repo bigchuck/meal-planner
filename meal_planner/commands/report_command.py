@@ -290,27 +290,55 @@ class ReportCommand(Command):
         # Show micronutrients
         print("=== Micronutrients ===")
         print()
-        
+
         # Header
-        print(f"{'Code':<10} {' '.join(f'{n[:6]:>8}' for n in available)}")
-        print("-" * (10 + len(available) * 9))
+        print(f"{'Code':<10} {'x':>4} {'Fiber':>8} {'Sodium':>8} {'Potass':>8} {'VitA':>8} {'VitC':>8} {'Iron':>8}")
+        print(f"{'':10} {'':>4} {'(g)':>8} {'(mg)':>8} {'(mg)':>8} {'(mcg)':>8} {'(mg)':>8} {'(mg)':>8}")
+        print("-" * 78)
+
+        # Data rows - show ALL rows with their multiplied values
+        for row in report.rows:
+            t = row.totals.rounded()
+            mult_str = self._format_mult(row.multiplier)
+            
+            print(f"{row.code:<10} {mult_str:>4} {int(t.fiber_g):>8} {int(t.sodium_mg):>8} "
+                f"{int(t.potassium_mg):>8} {int(t.vitA_mcg):>8} "
+                f"{int(t.vitC_mg):>8} {int(t.iron_mg):>8}")
         
-        # Data rows
-        for code in codes_in_order:
-            nutrients = self.ctx.nutrients.get_nutrients_for_code(code)
-            if nutrients:
-                values = []
-                for nutrient in available:
-                    val = nutrients.get(nutrient, 0)
-                    try:
-                        # Format as number
-                        values.append(f"{float(val):>8.1f}")
-                    except:
-                        values.append(f"{'':>8}")
-                
-                print(f"{code:<10} {' '.join(values)}")
+        # Separator and total
+        print("-" * 78)
+        t = report.totals.rounded()
+        print(f"{'Total':10} {'':>4} {int(t.fiber_g):>8} {int(t.sodium_mg):>8} "
+            f"{int(t.potassium_mg):>8} {int(t.vitA_mcg):>8} "
+            f"{int(t.vitC_mg):>8} {int(t.iron_mg):>8}")
         
         print()
+
+    def _format_mult(self, mult: float) -> str:
+        """Format multiplier (borrowed from ReportBuilder)."""
+        if abs(mult - round(mult)) < 1e-9:
+            s = str(int(round(mult)))
+            if len(s) <= 4:
+                return s
+            return s[:4]
+        
+        for dp in (3, 2, 1, 0):
+            s = f"{mult:.{dp}f}"
+            if '.' in s:
+                s = s.rstrip('0')
+                if s.endswith('.'):
+                    s = s[:-1]
+            if len(s) <= 4:
+                return s
+        
+        if mult < 1:
+            for dp in (3, 2, 1):
+                s = f"{mult:.{dp}f}"[1:]
+                if len(s) <= 4:
+                    return s
+        
+        s = f"{mult:.1f}"
+        return s[:4]
     
     def _show_recipes(self, report):
         """Show recipes for codes in report (once per code, in order)."""
