@@ -141,7 +141,7 @@ class Report:
         self.display = display
         self.title = title
     
-    def print(self) -> None:
+    def print(self, verbose: bool = False) -> None:
         """Print formatted report to console."""
         print(f"\n=== {self.title} ===")
         
@@ -149,11 +149,14 @@ class Report:
             print("(no items)")
             print()
             return
-        
+    
+        opt_width = 41 if verbose else 21
+        line_width = 98 if verbose else 78
+
         # Header
-        print(f"{'CODE':>8} {'Section':<8} {'x':>4} {'Option':<21} "
-              f"{'Cal':>6} {'P':>5} {'C':>5} {'F':>5} {'Sug':>6} {'GL':>4}")
-        print("-" * 78)
+        print(f"{'CODE':>8} {'Section':<8} {'x':>4} {'Option':<{opt_width}} "
+            f"{'Cal':>6} {'P':>5} {'C':>5} {'F':>5} {'Sug':>6} {'GL':>4}")
+        print("-" * line_width)
         
         # Display rows in order (with time markers)
         for kind, val in self.display:
@@ -164,15 +167,15 @@ class Report:
                 display_str = f"@{time_str}"
                 if meal_override:
                     display_str += f" ({meal_override})"
-                print(f"{'':>8} {'':<8} {'':>4} {'time: '+display_str:<21} "
-                      f"{'':>6} {'':>5} {'':>5} {'':>5} {'':>6} {'':>4}")
+                print(f"{'':>8} {'':<8} {'':>4} {'time: '+display_str:<{opt_width}} "
+                    f"{'':>6} {'':>5} {'':>5} {'':>5} {'':>6} {'':>4}")
             else:
                 # Nutrient row
                 row = self.rows[val]
-                self._print_row(row)
+                self._print_row(row, verbose=verbose)
         
         # Totals
-        print("-" * 78)
+        print("-" * line_width)
         rounded = self.totals.rounded()
         print(f"Totals = Cal: {int(rounded.calories)} | "
               f"P: {int(rounded.protein_g)} g | "
@@ -186,14 +189,21 @@ class Report:
         
         print()
     
-    def _print_row(self, row: NutrientRow) -> None:
+    def _print_row(self, row: NutrientRow, verbose: bool = False) -> None:
         """Print a single nutrient row."""
         # Format multiplier (right-aligned, max 4 chars)
         mult_str = self._format_mult(row.multiplier)
         
         # Truncate option if too long
         opt = row.option
-        opt_display = (opt[:20] + "+") if len(opt) > 20 else opt
+        if verbose:
+            # Verbose: 40 chars + "+" if longer
+            opt_display = (opt[:40] + "+") if len(opt) > 40 else opt
+            opt_width = 41
+        else:
+            # Normal: 20 chars + "+" if longer
+            opt_display = (opt[:20] + "+") if len(opt) > 20 else opt
+            opt_width = 21
         
         # Section truncated to 8 chars
         sect = row.section[:8]
@@ -201,7 +211,7 @@ class Report:
         # Rounded totals
         t = row.totals.rounded()
         
-        print(f"{row.code:>8} {sect:<8} {mult_str:>4} {opt_display:<21} "
+        print(f"{row.code:>8} {sect:<8} {mult_str:>4} {opt_display:<{opt_width}} "
               f"{int(t.calories):>6} {int(t.protein_g):>5} "
               f"{int(t.carbs_g):>5} {int(t.fat_g):>5} "
               f"{int(t.sugar_g):>6} {int(t.glycemic_load):>4}")

@@ -16,8 +16,7 @@ class ReportCommand(Command):
     """Show detailed nutrient breakdown."""
     
     name = "report"
-    help_text = "Show detailed breakdown (report [date] [--recipes] [--nutrients] [--meals] [--meal \"NAME\"] [--risk])"
-
+    help_text = "Show detailed breakdown (report [date] [--recipes] [--nutrients] [--meals] [--meal \"NAME\"] [--risk] [--verbose])"
     def __init__(self, context):
         super().__init__(context)
         self.glucose_calc = GlucoseCalculator()
@@ -41,6 +40,7 @@ class ReportCommand(Command):
         show_nutrients = "--nutrients" in parts or "--nutrient" in parts or "--micro" in parts
         show_meals = "--meals" in parts
         show_risk = "--risk" in parts
+        verbose = "--verbose" in parts
         if show_risk:
             if not self._check_thresholds("Risk analysis"):
                 show_risk = False
@@ -89,7 +89,7 @@ class ReportCommand(Command):
             report = builder.build_from_items(items, title=f"Report for {date}")
         
         # Show main report
-        report.print()
+        report.print(verbose=verbose)
         
         # Show meal breakdown if requested (not shown for single meal filter)
         if show_meals and not meal_name:
