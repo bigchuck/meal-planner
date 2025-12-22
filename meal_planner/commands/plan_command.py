@@ -112,8 +112,11 @@ Subcommands:
   ins <id> <idx> <codes>      Insert the codes at the index in the plan (creates variant)
                               Example: plan ins 1 2 SA.3
   
-  promote <id> <HH:MM>        Promote candidate to pending at time
+  promote <id> <HH:MM> [meal] Promote candidate to pending at time
+                              Optional: specify meal name to override time-based categorization
                               Example: plan promote 2 12:30
+                              plan promote 2a 11:00 lunch
+                              plan promote 3 14:00 "afternoon snack"
   
   discard                     Clear entire planning workspace
   
@@ -1109,17 +1112,34 @@ Notes:
         """
         Promote candidate to pending file.
         
-        Usage: plan promote <id> <HH:MM> [--force]
+        Usage: plan promote <id> <HH:MM> [meal_name] [--force]
         Example: plan promote 2a 12:30
+                plan promote 2a 11:00 lunch
+                plan promote 2a 11:00 "afternoon snack"
         """
         if len(args) < 2:
-            print("Usage: plan promote <id> <HH:MM> [--force]")
+            print("Usage: plan promote <id> <HH:MM> [meal_name] [--force]")
             print("Example: plan promote 2a 12:30")
+            print("         plan promote 2a 11:00 lunch")
             return
         
         candidate_id = args[0]
         time_str = args[1]
+        
+        # Check for flags
         force = '--force' in args or '-f' in args
+        
+        # Extract optional meal name (third positional arg, if not a flag)
+        meal_name_override = None
+        if len(args) >= 3 and not args[2].startswith('--') and args[2] not in ['-f']:
+            meal_input = args[2]
+            meal_name_override = normalize_meal_name(meal_input)
+            
+            # Validate meal name
+            if meal_name_override not in MEAL_NAMES:
+                print(f"Invalid meal name: {meal_input}")
+                print(f"Valid names: {', '.join(MEAL_NAMES)}")
+                return
         
         # Validate time format
         if not re.match(r'^\d{1,2}:\d{2}$', time_str):
@@ -1152,7 +1172,7 @@ Notes:
         
         # Check for time collision
         existing_times = [item.get('time') for item in pending.get('items', []) 
-                         if 'time' in item and item.get('time')]
+                        if 'time' in item and item.get('time')]
         
         if time_str in existing_times:
             if not force:
@@ -1162,8 +1182,10 @@ Notes:
             else:
                 print(f"Warning: Pending already has a meal at {time_str}, appending anyway...")
         
-        # Create time marker (no meal_override - HH:MM is sufficient)
+        # Create time marker with optional meal override
         time_marker = {"time": time_str}
+        if meal_name_override:
+            time_marker["meal_override"] = meal_name_override
         
         # Deep copy candidate items
         items_to_add = [time_marker] + copy.deepcopy(candidate['items'])
@@ -1174,10 +1196,14 @@ Notes:
         # Save
         self.ctx.pending_mgr.save(pending)
         
+        # Build output message
         meal_label = candidate.get('meal_name', 'meal')
-        print(f"Promoted #{candidate['id']} ({meal_label}) to pending at {time_str}")
+        if meal_name_override:
+            print(f"Promoted #{candidate['id']} ({meal_label}) to pending at {time_str} as '{meal_name_override}'")
+        else:
+            print(f"Promoted #{candidate['id']} ({meal_label}) to pending at {time_str}")
         print(f"Added {len(candidate['items'])} item(s) to pending")
-    
+
     def _report(self, args: List[str]) -> None:
         """
         Show detailed report for candidate.
