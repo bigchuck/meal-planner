@@ -85,9 +85,13 @@ Subcommands:
                               Options:
                                 --history N (default 10)
                                 --<nutrient> min=X max=Y
+                                --code/--codes <expression>
                               
                               Example:
                                 plan search lunch --history 10 --carbs_g max=50
+                                plan search breakfast --codes "bf.1 and bv.4"
+                                plan search lunch --code mt.10 --cal max=500
+                                plan search "afternoon snack" --codes "mt.11 or mt.12"
 
   show [id]                   Show workspace contents
                               Without id: list all candidates
@@ -125,29 +129,57 @@ Notes:
   - Modifications create variants (2 -> 2a -> 2b)
   - Invented meals use ID format N1, N2, etc.
   - Original item order is preserved throughout
+  - Code filtering: Supports boolean logic (AND, OR, NOT), spaces = AND
+    Use quotes for multi-word meal names or complex expressions
 """)
     
     # =========================================================================
-    # Subcommand implementations (Phase 2+)
+    # Subcommand implementations
     # =========================================================================
 
     def _search(self, args: List[str]) -> None:
         """Search for meals and add to workspace."""
         if not args:
-            print("\nUsage: plan search <meal_name> [--history N] [--<nutrient> min=X max=Y]")
+            print("\nUsage: plan search <meal_name> [--history N] [--code/--codes <expr>] [--<nutrient> min=X max=Y]")
             print("\nExamples:")
             print("  plan search lunch --history 10")
             print("  plan search lunch --carbs_g max=50 --gl max=15 --prot_g min=25")
             print("  plan search dinner --history 5 --cal max=600")
+            print("  plan search breakfast --codes \"bf.1 and bv.4\"")
+            print("  plan search lunch --code mt.10 --cal max=500")
+
+            print()
+            return
+        # Check if first arg is a flag (user forgot meal name)
+        if args[0].startswith("--"):
+            print("\nError: Missing meal name")
+            print("Usage: plan search <meal_name> [options]")
+            print(f"\nValid meal names: {', '.join(MEAL_NAMES)}")
+            print("\nExamples:")
+            print("  plan search breakfast --history 90 --code bv.4")
+            print("  plan search lunch --codes \"mt.10 and ve.t1\"")
+            print("  plan search \"afternoon snack\" --cal max=300")
             print()
             return
         
         # Parse meal name (first arg)
         meal_name = normalize_meal_name(args[0])
-        
+
+        # Validate meal name
+        if meal_name not in MEAL_NAMES:
+            print(f"\nError: Invalid meal name '{args[0]}'")
+            print(f"Valid meal names: {', '.join(MEAL_NAMES)}")
+            print("\nExamples:")
+            print("  plan search breakfast --history 90")
+            print("  plan search lunch --code mt.10")
+            print("  plan search \"afternoon snack\" --cal max=300")
+            print()
+            return
+
         # Parse options
         history_count = 10  # default
         constraints = {}
+        code_filter = None
         
         i = 1
         while i < len(args):
@@ -161,7 +193,12 @@ Notes:
                         continue
                     except ValueError:
                         pass
-            
+            if arg in ("--code", "--codes"):
+                if i + 1 < len(args):
+                    code_filter = args[i + 1]
+                    i += 2
+                    continue
+
             # Nutrient constraint: --<nutrient> min=X max=Y
             if arg.startswith("--"):
                 nutrient = arg[2:]  # Remove --
@@ -189,6 +226,9 @@ Notes:
         # Execute search
         print(f"\n=== Searching for {meal_name} ===")
         print(f"History: Last {history_count} days")
+        if code_filter:
+            print(f"Code filter: {code_filter}")
+
         if constraints:
             constraint_strs = []
             for nutrient, bounds in constraints.items():
@@ -249,7 +289,11 @@ Notes:
                 
                 if has_composite:
                     continue  # Skip composite meals
-                
+
+                if code_filter:
+                    if not self._meal_matches_code_filter(meal_items, code_filter):
+                        continue  # Skip meals that don't match code filter
+
                 # Check constraints
                 meets_constraints = self._check_constraints(meal_totals, constraints)
                 
@@ -466,7 +510,7 @@ Notes:
         print(f"\nCleared {count} candidate(s) from planning workspace.\n")
     
     # =========================================================================
-    # Helper methods for Phase 2
+    # Helper methods
     # =========================================================================
     
     def _get_candidate(self, id_str: str) -> Optional[Dict[str, Any]]:
@@ -1374,3 +1418,44 @@ Notes:
                     pass
         
         return sorted(indices)
+    
+    def _meal_matches_code_filter(self, meal_items: List[Dict], code_filter: str) -> bool:
+        """
+        Check if meal's codes match the boolean code filter.
+        
+        Args:
+            meal_items: List of item dicts with 'code' field
+            code_filter: Boolean expression (e.g., "bf.1 and bv.4", "mt.10 or mt.11")
+        
+        Returns:
+            True if meal matches filter, False otherwise
+        """
+        from meal_planner.utils.search import parse_search_query
+        
+        # Get meal's codes (uppercase, ignore multipliers for matching)
+        meal_codes = {item['code'].upper() for item in meal_items if 'code' in item}
+        
+        # Parse the code filter into clauses
+        try:
+            clauses = parse_search_query(code_filter)
+        except Exception:
+            # If parsing fails, treat as simple code check
+            simple_code = code_filter.upper().strip()
+            return simple_code in meal_codes
+        
+        if not clauses:
+            return True  # Empty filter matches all
+        
+        # Check if any clause matches (OR between clauses)
+        for clause in clauses:
+            # All positive terms must be present (AND within clause)
+            all_pos_match = all(term.upper() in meal_codes for term in clause['pos'])
+            
+            if all_pos_match:
+                # No negative terms can be present (NOT)
+                no_neg_match = not any(term.upper() in meal_codes for term in clause['neg'])
+                
+                if no_neg_match:
+                    return True
+        
+        return False
