@@ -47,19 +47,17 @@ class QuitCommand(Command):
         print("Goodbye!")
         raise SystemExit(0)
 
-
-@register_command
-class ReloadCommand(Command):
-    """Reload master file from disk."""
+# @register_command
+# class ReloadCommand(Command):
+#     """Reload master file from disk."""
     
-    name = "reload"
-    help_text = "Reload master file from disk"
+#     name = "reload"
+#     help_text = "Reload master file from disk"
     
-    def execute(self, args: str) -> None:
-        """Reload master file."""
-        self.ctx.reload_master()
-        print(f"Master reloaded from disk ({len(self.ctx.master.df)} entries).")
-
+#     def execute(self, args: str) -> None:
+#         """Reload master file."""
+#         self.ctx.reload_master()
+#         print(f"Master reloaded from disk ({len(self.ctx.master.df)} entries).")
 
 @register_command
 class StatusCommand(Command):

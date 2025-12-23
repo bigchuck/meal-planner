@@ -163,15 +163,15 @@ class ThresholdsManager:
             'daily_targets',
             'glucose_scoring',
             'curve_classification',
-            'explain_messages'
+            'explain_messages',
+            'meal_templates'
         ]
-        
-        for section in required_sections:
-            if section not in self._thresholds:
-                self._validation_errors.append(
-                    f"Missing required section: '{section}'"
-                )
-        
+        missing = [k for k in required_sections if k not in self._thresholds]
+        if missing:
+            self._validation_errors.append(
+                f"Missing required sections: {', '.join(missing)}"
+            )
+       
         # Validate daily_targets
         if 'daily_targets' in self._thresholds:
             self._validate_daily_targets()
@@ -187,6 +187,19 @@ class ThresholdsManager:
         # Validate explain_messages
         if 'explain_messages' in self._thresholds:
             self._validate_explain_messages()
+
+            # Validate meal categories exist
+        if 'meal_templates' in self._thresholds:
+            meal_templates = self._thresholds['meal_templates']
+            if not isinstance(meal_templates, dict):
+                self._validation_errors.append("meal_templates must be a dictionary")
+            else:
+                required_meals = ['breakfast', 'lunch', 'dinner', 
+                                'morning snack', 'afternoon snack', 'evening snack']
+                missing_meals = [m for m in required_meals if m not in meal_templates]
+                if missing_meals:
+                    # Warning only - don't fail validation
+                    print(f"Warning: Missing meal template categories: {', '.join(missing_meals)}")
     
     def _validate_daily_targets(self) -> None:
         """Validate daily_targets section."""

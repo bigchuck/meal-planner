@@ -1,0 +1,200 @@
+{
+  "version": "1.0",
+  "description": "Nutritional thresholds and risk scoring parameters for meal plan analysis",
+  
+  "daily_targets": {
+    "description": "Per-day thresholds for report risk summary (divided by meal_count for per-meal thresholds)",
+    "sugar_g": 50,
+    "glycemic_load": 100,
+    "protein_g": 100,
+    "fat_pct": 35,
+    "carbs_pct": 60,
+    "calories_min": 1200,
+    "calories_max": 3000
+  },
+  
+  "glucose_scoring": {
+    "description": "Thresholds for glucose risk calculations",
+    
+    "carb_risk_ranges": [
+      {"max": 5, "score": 0.0, "label": "negligible"},
+      {"max": 20, "score": 2.0, "label": "low"},
+      {"max": 40, "score": 5.0, "label": "moderate"},
+      {"max": 70, "score": 8.0, "label": "high"},
+      {"max": null, "score": 10.0, "label": "very_high"}
+    ],
+    
+    "gi_speed_factors": [
+      {"max": 40, "factor": 0.8, "label": "slow"},
+      {"max": 60, "factor": 1.0, "label": "medium"},
+      {"max": null, "factor": 1.2, "label": "fast"}
+    ],
+    
+    "fat_delay_ranges": [
+      {"max": 5, "score": 0.0},
+      {"max": 15, "score": 1.0},
+      {"max": 25, "score": 3.0},
+      {"max": 35, "score": 5.0},
+      {"max": null, "score": 7.0}
+    ],
+    
+    "protein_tail_ranges": [
+      {"max": 10, "score": 0.0},
+      {"max": 20, "score": 1.0},
+      {"max": 35, "score": 2.0},
+      {"max": null, "score": 4.0}
+    ],
+    
+    "fiber_buffer_ranges": [
+      {"max": 2, "score": 0.0},
+      {"max": 6, "score": 2.0},
+      {"max": 10, "score": 4.0},
+      {"max": null, "score": 5.0}
+    ],
+    
+    "risk_score_weights": {
+      "description": "Weights applied to component scores in final risk calculation",
+      "fat_delay": 0.6,
+      "protein_tail": 0.5,
+      "fiber_buffer": 0.7
+    },
+    
+    "risk_rating_thresholds": [
+      {"max": 3, "rating": "low"},
+      {"max": 6, "rating": "medium"},
+      {"max": 8.5, "rating": "high"},
+      {"max": null, "rating": "very_high"}
+    ]
+  },
+  
+  "curve_classification": {
+    "description": "Rules for classifying expected glucose curve shapes based on meal composition",
+    
+    "very_low_carb_max": 10,
+    
+    "delayed_spike": {
+      "description": "High fat delays carb absorption (pizza effect)",
+      "min_carbs": 25,
+      "min_fat": 25,
+      "label": "Delayed Spike (Fat-Driven)",
+      "curve_description": "High fat content delays carb absorption. Expect delayed, sustained rise peaking 2-3 hours post-meal (pizza effect)."
+    },
+    
+    "double_hump": {
+      "description": "Moderate fat + protein causes two-phase response",
+      "min_carbs": 30,
+      "min_fat": 20,
+      "max_fat": 50,
+      "min_protein": 20,
+      "label": "Double Hump Pattern",
+      "curve_description": "Mixed macros create two-phase response: initial carb spike followed by delayed protein-driven rise."
+    },
+    
+    "blunted_spike": {
+      "description": "High fiber slows absorption",
+      "min_carbs": 15,
+      "min_fiber": 8,
+      "max_fat": 20,
+      "label": "Blunted / Smoothed Spike",
+      "curve_description_template": "Carbs present ({carbs}g) but high fiber ({fiber}g) slows absorption. Expect slower, lower peak with smooth rise and fall."
+    },
+    
+    "spike_then_dip": {
+      "description": "Fast carbs with low fiber/fat risk reactive hypoglycemia",
+      "min_carbs": 25,
+      "min_gi": 60,
+      "max_fat": 10,
+      "max_fiber": 4,
+      "label": "Spike Then Possible Dip",
+      "curve_description": "Fast, low-fiber carbs with little fat. Strong early spike with higher risk of subsequent dip (reactive hypoglycemia pattern)."
+    },
+    
+    "default": {
+      "label": "Moderate Single Spike",
+      "curve_description_template": "Moderate rise with single main peak. Overall impact follows carb load ({carbs}g) and risk score ({risk_score}/10)."
+    }
+  },
+
+  "explain_messages": {
+    "carb_risk_messages": [
+      {"max": 5, "message": "Negligible carb load - minimal impact"},
+      {"max": 20, "message": "Low carb load - small impact"},
+      {"max": 40, "message": "Moderate carb load - noticeable impact"},
+      {"max": 70, "message": "High carb load - significant impact"},
+      {"max": null, "message": "Very high carb load - major impact"}
+    ],
+    "gi_factor_messages": [
+      {"max": 40, "message": "Low GI means slow absorption (reduces risk by 20%)"},
+      {"max": 60, "message": "Medium GI means moderate absorption (neutral)"},
+      {"max": null, "message": "High GI means fast absorption (increases risk by 20%)"}
+    ],
+    "fat_delay_messages": [
+      {"max": 5, "message": "Minimal fat - no delay effect"},
+      {"max": 15, "message": "Low fat - slight delay in absorption"},
+      {"max": 25, "message": "Moderate fat - noticeable delay (watch for late spike)"},
+      {"max": 35, "message": "High fat - significant delay (pizza effect likely)"},
+      {"max": null, "message": "Very high fat - major delay and potential insulin resistance"}
+    ],
+    "protein_tail_messages": [
+      {"max": 10, "message": "Low protein - minimal tail effect"},
+      {"max": 20, "message": "Moderate protein - slight extended curve"},
+      {"max": 35, "message": "Good protein - noticeable tail (second rise possible)"},
+      {"max": null, "message": "High protein - significant tail effect (watch 3-4 hours later)"}
+    ],
+    "fiber_buffer_messages": [
+      {"max": 2, "message": "Minimal fiber - little spike protection"},
+      {"max": 6, "message": "Some fiber - moderate spike blunting"},
+      {"max": 10, "message": "Good fiber - significant spike reduction"},
+      {"max": null, "message": "Excellent fiber - strong spike protection"}
+    ],
+    "risk_score_interpretation": [
+      {"max": 3, "message": "Minimal glucose impact expected"},
+      {"max": 6, "message": "Moderate spike likely"},
+      {"max": 8.5, "message": "Significant spike expected"},
+      {"max": null, "message": "Large spike very likely"}
+    ]
+  },
+  "meal_templates" : {
+    "breakfast": {
+      "protein_low_carb": {
+        "display_name": "Breakfast (Protein-First, Low-Carb)",
+        "targets": {
+          "protein": {"min": 25, "max": 35, "unit": "g"},
+          "carbs": {"max": 25, "unit": "g"},
+          "fat": {"min": 15, "max": 20, "unit": "g"},
+          "gl": {"max": 12, "unit": ""}
+        },
+        "guidelines": [
+          "Eggs (2) or egg + lean meat",
+          "Spinach / greens / onion / tomato",
+          "Optional dairy (cheese or yogurt, not both)",
+          "Coffee / almond milk"
+        ],
+        "examples": [
+          "Eggs + spinach + turkey",
+          "Greek yogurt (nonfat) + flax",
+          "Almond-flour pancake (no starch stacking)"
+        ],
+        "rationale": [
+          "Blunts morning glucose",
+          "Reduces hunger carryover into lunch"
+        ]
+      }
+    },
+    "morning snack": {
+
+    },
+    "lunch": {
+
+    },
+    "afternoon snack": {
+
+    },
+    "dinner": {
+
+    },
+    "evening snack": {
+
+    }
+  }
+}

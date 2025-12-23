@@ -9,7 +9,12 @@ from pathlib import Path
 # ==================== MODE SELECTION ====================
 # Change this to switch between production and development data
 MODE = "DEVELOPMENT"  # Options: "PRODUCTION" or "DEVELOPMENT"
-#MODE = "PRODUCTION"
+try:
+    from config_local import MODE  # overrides MODE if present
+except ImportError:
+    pass
+
+
 # ========================================================
 
 # Base paths

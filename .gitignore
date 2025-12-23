@@ -34,8 +34,12 @@ data/backups/
 # Data files (keep development copies tracked, ignore production)
 /data/*.csv
 /data/*.json
+!/data/meal_plan_thresholds.json
 *.jpg
 *.png
+
+# Config switch
+config_local.py
 
 # Documentation
 docs/

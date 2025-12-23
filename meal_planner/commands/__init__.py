@@ -20,6 +20,7 @@ from . import stats_command
 from . import explain_command
 from . import order_command
 from . import plan_command
+from . import threshold_command
 
 __all__ = [
     'Command',
