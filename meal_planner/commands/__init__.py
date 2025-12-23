@@ -21,6 +21,7 @@ from . import explain_command
 from . import order_command
 from . import plan_command
 from . import threshold_command
+from . import analyze_command
 
 __all__ = [
     'Command',
