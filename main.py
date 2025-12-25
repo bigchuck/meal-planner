@@ -3,7 +3,7 @@ Meal Planner - Main Entry Point
 
 A refactored, modular meal planning and nutrition tracking application.
 """
-from config import MASTER_FILE, LOG_FILE, PENDING_FILE, verify_data_files, MODE
+from config import MASTER_FILE, LOG_FILE, PENDING_FILE, USER_PREFS_FILE, verify_data_files, MODE
 from meal_planner.commands import CommandContext, get_registry
 
 
@@ -34,10 +34,19 @@ def repl():
     print_welcome()
     
     # Create command context (shared state for all commands)
-    from config import NUTRIENTS_FILE, RECIPES_FILE, ALIASES_FILE, THRESHOLDS_FILE
+    from config import NUTRIENTS_FILE, RECIPES_FILE, ALIASES_FILE, THRESHOLDS_FILE, WORKSPACE_FILE
     ctx = CommandContext(MASTER_FILE, LOG_FILE, PENDING_FILE, 
-                        NUTRIENTS_FILE, RECIPES_FILE, ALIASES_FILE, THRESHOLDS_FILE)
-    
+                        NUTRIENTS_FILE, RECIPES_FILE, ALIASES_FILE, 
+                        THRESHOLDS_FILE, USER_PREFS_FILE, WORKSPACE_FILE)
+
+    import atexit
+    # Register auto-save on exit
+    def save_on_exit():
+        """Save workspace before program exits."""
+        ctx.save_workspace()
+
+    atexit.register(save_on_exit)
+
     # Get command registry
     registry = get_registry()
     

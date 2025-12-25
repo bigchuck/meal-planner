@@ -154,7 +154,7 @@
       {"max": null, "message": "Large spike very likely"}
     ]
   },
-  "meal_templates" : {
+  "meal_templates": {
     "breakfast": {
       "protein_low_carb": {
         "display_name": "Breakfast (Protein-First, Low-Carb)",
@@ -185,16 +185,131 @@
 
     },
     "lunch": {
-
+      "primary_carb_window": {
+        "display_name": "Lunch (Primary Carb Window)",
+        "targets": {
+          "protein": { "min": 30, "max": 45, "unit": "g" },
+          "carbs": { "min": 30, "max": 45, "unit": "g" },
+          "fat": { "min": 20, "max": 25, "unit": "g" },
+          "gl": { "max": 20, "unit": "" }
+        },
+        "guidelines": [
+          "One starch maximum (soup counts as starch)",
+          "Lean protein anchor",
+          "Vegetables included",
+          "Avoid stacking bread + potato"
+        ],
+        "examples": [
+          "Beef or turkey bean soup (2C)",
+          "Potato (1/2–3/4C) + chicken + salad",
+          "Beans + meat + vegetables"
+        ],
+        "rationale": [
+          "Best insulin sensitivity window",
+          "Allows controlled starch intake",
+          "Supports afternoon energy without glucose spikes"
+        ]
+      }
     },
+
     "afternoon snack": {
-
+      "stability_bridge": {
+        "display_name": "Afternoon Snack (Stability Bridge)",
+        "targets": {
+          "protein": { "min": 15, "max": 25, "unit": "g" },
+          "carbs": { "max": 15, "unit": "g" },
+          "fat": { "max": 10, "unit": "g" },
+          "gl": { "max": 5, "unit": "" }
+        },
+        "guidelines": [
+          "Protein-first snack",
+          "Minimal starch",
+          "Fiber preferred",
+          "Avoid refined carbs"
+        ],
+        "examples": [
+          "Cottage cheese + berries",
+          "Greek yogurt + flax",
+          "Jerky + vegetables"
+        ],
+        "rationale": [
+          "Prevents dinner overeating",
+          "Maintains glucose stability",
+          "Protects protein intake"
+        ]
+      }
     },
+
     "dinner": {
-
+      "low_gl_satiating": {
+        "display_name": "Dinner (Low-GL, Satiating)",
+        "targets": {
+          "protein": { "min": 35, "max": 50, "unit": "g" },
+          "carbs": { "min": 20, "max": 35, "unit": "g" },
+          "fat": { "min": 20, "max": 25, "unit": "g" },
+          "gl": { "max": 15, "unit": "" }
+        },
+        "guidelines": [
+          "Whole protein anchor (fish or meat)",
+          "Large vegetable volume",
+          "Beans or root vegetables in moderation",
+          "Avoid fries, noodles, and bread stacking"
+        ],
+        "examples": [
+          "Salmon + asparagus + beans",
+          "Halibut + green beans + salad",
+          "Ground meat + mixed vegetables"
+        ],
+        "rationale": [
+          "Limits evening glucose exposure",
+          "Promotes satiety and recovery",
+          "Supports overnight metabolic stability"
+        ]
+      }
     },
-    "evening snack": {
 
+    "evening snack": {
+      "protein_dominant": {
+        "targets": {
+          "protein": { "min": 18, "max": 30, "unit": "g" },
+          "carbs": { "max": 15, "unit": "g" },
+          "fat": { "max": 8, "unit": "g" },
+          "gl": { "max": 5, "unit": "" }
+        },
+        "guidelines": [
+          "Protein-dominant snack required",
+          "Very low starch and refined carbs",
+          "Fiber preferred when carbs are present",
+          "Avoid crunchy or carb-forward snacks",
+          "Keep portions small and controlled"
+        ],
+        "allowed_patterns": [
+          "Protein + fiber (e.g., yogurt + flax)",
+          "Protein + vegetables (e.g., jerky + celery)",
+          "Protein + small berries (<=1/2C)",
+          "Protein + minimal fat"
+        ],
+        "discouraged_patterns": [
+          "Carb-forward snacks",
+          "Crunch-driven refined carbs (e.g., popcorn)",
+          "Dried fruit as a primary component",
+          "Starch combined with added fat",
+          "Late-night grazing or multiple snacks"
+        ],
+        "examples": [
+          "Greek yogurt (nonfat) + flaxseed",
+          "Greek yogurt + flax + whey isolate",
+          "Cottage cheese + berries",
+          "Jerky + vegetables"
+        ],
+        "rationale": [
+          "Minimizes overnight glucose exposure",
+          "Supports muscle protein synthesis during fasting window",
+          "Improves satiety without excess calories",
+          "Reduces late-evening carb cravings",
+          "Promotes stable morning glucose levels"
+        ]
+      }
     }
   }
 }

@@ -42,7 +42,10 @@ PENDING_FILE = DATA_PATH / "meal_plan_pending.json"
 NUTRIENTS_FILE = DATA_PATH / "meal_plan_nutrients.csv"
 RECIPES_FILE = DATA_PATH / "meal_plan_recipes.csv"
 ALIASES_FILE = DATA_PATH / "meal_plan_aliases.json"
-THRESHOLDS_FILE = DATA_PATH / "meal_plan_thresholds.json"
+THRESHOLDS_FILE = DATA_PATH / "meal_plan_config.json"
+WORKSPACE_FILE = DATA_PATH / "meal_plan_workspace.json"
+USER_PREFS_FILE = DATA_PATH / "meal_plan_user_preferences.json"
+CONFIG_FILE = DATA_PATH / "meal_planning_config.json"
 
 # Usage tracking
 TRACK_USAGE = True  # Set to False to disable usage tracking

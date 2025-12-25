@@ -6,6 +6,7 @@ from typing import Dict, Type, Optional, List, Set
 from pathlib import Path
 
 from meal_planner.data import MasterLoader, LogManager, PendingManager, ThresholdsManager
+from meal_planner.data.user_preferences_manager import UserPreferencesManager
 from datetime import datetime
 
 
@@ -18,7 +19,8 @@ class CommandContext:
     
     def __init__(self, master_file: Path, log_file: Path, pending_file: Path,
                  nutrients_file: Path = None, recipes_file: Path = None,
-                 aliases_file: Path = None, thresholds_file: Path = None):
+                 aliases_file: Path = None, thresholds_file: Path = None,
+                 user_prefs_file: Path = None, workspace_file: Path = None):
         """
         Initialize command context.
         
@@ -34,6 +36,7 @@ class CommandContext:
         from meal_planner.data.nutrients_manager import NutrientsManager
         from meal_planner.data.recipes_manager import RecipesManager
         from meal_planner.data.alias_manager import AliasManager
+        from meal_planner.data.workspace_manager import WorkspaceManager
         
         self.master = MasterLoader(master_file, nutrients_file, recipes_file)
         self.log = LogManager(log_file)
@@ -51,6 +54,14 @@ class CommandContext:
                 self.thresholds_error = self.thresholds.get_error_message()
                 # Set thresholds to None to disable dependent features
                 self.thresholds = None
+
+        self.user_prefs = None
+        self.user_prefs_error = None
+        if user_prefs_file:
+            self.user_prefs = UserPreferencesManager(user_prefs_file)
+            if not self.user_prefs.load():
+                self.user_prefs_error = self.user_prefs.get_error_message()
+                # Don't fail - user prefs are optional
 
         # Session-only stash for undo/redo operations
         # Each entry: {"pending": {...}, "timestamp": datetime, "auto": bool}
@@ -70,12 +81,18 @@ class CommandContext:
         self.session_start = datetime.now()
         self.backed_up_files: Set[Path] = set()  # Track which files backed up this session
     
-        # Planning workspace (session-only, no file backing)
-        self.planning_workspace = {
-            "candidates": [],
-            "next_numeric_id": 1,
-            "next_invented_id": 1
-        }
+        if workspace_file:
+            self.workspace_mgr = WorkspaceManager(workspace_file)
+            # Load workspace and convert to planning_workspace format
+            workspace_data = self.workspace_mgr.load()
+            self.planning_workspace = self.workspace_mgr.convert_to_planning_workspace(workspace_data)
+        else:
+            self.workspace_mgr = None
+            self.planning_workspace = {
+                "candidates": [],
+                "next_numeric_id": 1,
+                "next_invented_id": 1
+            }
 
     def _determine_initial_pending_source(self) -> str:
         """
@@ -104,6 +121,11 @@ class CommandContext:
         """Reload log file from disk."""
         self.log.reload()
 
+    def save_workspace(self):
+        """Save planning workspace to disk (auto-save)."""
+        if self.workspace_mgr:
+            workspace_data = self.workspace_mgr.convert_from_planning_workspace(self.planning_workspace)
+            self.workspace_mgr.save(workspace_data)
 
 class Command(ABC):
     """

@@ -2,14 +2,18 @@
 """
 Analyze command for template-based meal nutrition analysis.
 
-Compares consumed meals against nutritional targets defined in templates.
+Compares meals against nutritional targets defined in templates.
+Supports workspace meals, pending meals, and log dates.
 """
 import shlex
+import re
 from datetime import date as date_type
 from typing import Optional, Dict, Any, List, Tuple
 from .base import Command, register_command
-from meal_planner.parsers import parse_selection_to_items
-from meal_planner.utils.time_utils import categorize_time
+from meal_planner.parsers import parse_selection_to_items, CodeParser
+from meal_planner.utils.time_utils import categorize_time, normalize_meal_name
+from meal_planner.analyzers.meal_analyzer import MealAnalyzer
+from meal_planner.models.analysis_result import AnalysisResult, DailyContext
 
 
 @register_command
@@ -17,19 +21,24 @@ class AnalyzeCommand(Command):
     """Analyze meals against nutritional templates."""
     
     name = "analyze"
-    help_text = "Analyze meals against template (analyze [date] --template <key>)"
+    help_text = "Analyze meals against template (analyze [date|id] --template <key>)"
     
     def execute(self, args: str) -> None:
         """
         Analyze meals against a nutritional template.
         
+        Supports three modes:
+        1. Workspace meal: analyze <id> --template <template>
+        2. Pending meal: analyze --template <template>
+        3. Log date: analyze <date> --template <template>
+        
         Args:
             args: Command arguments
         
         Examples:
-            analyze --template meal_templates.breakfast.protein_low_carb
-            analyze 2024-12-20 --template meal_templates.breakfast.protein_low_carb
-            analyze 2024-12-20 --template "meal_templates.morning snack.low_cal"
+            analyze 123a --template breakfast.protein_low_carb
+            analyze --template breakfast.protein_low_carb
+            analyze 2024-12-20 --template lunch.balanced
         """
         if not self._check_thresholds("analyze"):
             return
@@ -38,15 +47,15 @@ class AnalyzeCommand(Command):
         args_list = shlex.split(args) if args else []
         
         if not args_list:
-            print("Usage: analyze [date] --template <template_key>")
+            print("Usage: analyze [date|workspace_id] --template <template_key>")
             print("\nExamples:")
-            print("  analyze --template meal_templates.breakfast.protein_low_carb")
-            print("  analyze 2024-12-20 --template meal_templates.lunch.balanced")
-            print('  analyze 2024-12-20 --template "meal_templates.morning snack.low_cal"')
+            print("  analyze 123a --template breakfast.protein_low_carb")
+            print("  analyze --template breakfast.protein_low_carb")
+            print("  analyze 2024-12-20 --template lunch.balanced")
             return
         
-        # Extract date and template
-        target_date = None
+        # Extract target and template
+        target = None
         template_key = None
         
         i = 0
@@ -61,9 +70,9 @@ class AnalyzeCommand(Command):
                     print("Error: --template requires a key path")
                     return
             else:
-                # Assume it's a date
-                if target_date is None:
-                    target_date = arg
+                # First non-flag arg is the target
+                if target is None:
+                    target = arg
                     i += 1
                 else:
                     print(f"Error: Unexpected argument '{arg}'")
@@ -71,188 +80,237 @@ class AnalyzeCommand(Command):
         
         if not template_key:
             print("Error: --template is required")
-            print("Example: analyze --template meal_templates.breakfast.protein_low_carb")
+            print("Example: analyze --template breakfast.protein_low_carb")
             return
         
-        # Load template
-        template = self._load_template(template_key)
-        if not template:
-            return  # Error already printed
+        # Auto-prepend "meal_templates." if not present
+        if not template_key.startswith("meal_templates."):
+            template_key = f"meal_templates.{template_key}"
         
-        # Extract meal category from template key
-        meal_category = self._extract_meal_category(template_key)
-        if not meal_category:
-            print(f"Error: Could not extract meal category from template key: {template_key}")
-            print("Expected format: meal_templates.<meal_name>.<template_name>")
+        # Determine analysis mode based on target
+        if target is None:
+            # Mode: Pending (today)
+            self._analyze_pending(template_key)
+        elif self._is_date(target):
+            # Mode: Log date
+            self._analyze_log_date(target, template_key)
+        elif self._is_workspace_id(target):
+            # Mode: Workspace meal
+            self._analyze_workspace(target, template_key)
+        else:
+            print(f"Error: Could not determine target type: {target}")
+            print("Expected: workspace ID (e.g., 123a, N1), date (YYYY-MM-DD), or nothing for pending")
+            return
+    
+    def _is_date(self, arg: str) -> bool:
+        """Check if argument is a date (YYYY-MM-DD)."""
+        return bool(re.match(r'^\d{4}-\d{2}-\d{2}$', arg))
+    
+    def _is_workspace_id(self, arg: str) -> bool:
+        """Check if argument looks like a workspace ID."""
+        # Numeric (1, 2, 123) or numeric with letter (123a, 2b)
+        # or N-prefix (N1, N2, N1a)
+        return bool(re.match(r'^(\d+[a-z]?|N\d+[a-z]?)$', arg, re.IGNORECASE))
+    
+    def _analyze_workspace(self, workspace_id: str, template_path: str) -> None:
+        """Analyze workspace meal against template."""
+        # Find candidate in workspace
+        candidate = self._find_workspace_candidate(workspace_id)
+        if not candidate:
+            print(f"Workspace meal '{workspace_id}' not found.")
+            print("Use 'plan show' to see available meals.")
             return
         
-        # Determine date and source
-        if target_date:
-            # Validate date format (YYYY-MM-DD)
-            if len(target_date) != 10 or target_date[4] != '-' or target_date[7] != '-':
-                print(f"Error: Invalid date format '{target_date}'. Use YYYY-MM-DD")
+        # Check template locking
+        analyzed_as = candidate.get("analyzed_as")
+        meal_type = self._extract_meal_type_from_template(template_path)
+        
+        if analyzed_as:
+            # Meal already analyzed - check if template matches
+            if analyzed_as != meal_type:
+                print(f"Error: Meal {workspace_id} already analyzed as '{analyzed_as}'")
+                print(f"Cannot analyze with '{meal_type}' template")
+                print(f"Use 'plan copy {workspace_id}' to create unlocked variant")
                 return
-            use_pending = False
-            analysis_date = target_date
         else:
-            # No date specified - use pending
-            use_pending = True
-            analysis_date = str(date_type.today())
+            # First analysis - lock it
+            candidate["analyzed_as"] = meal_type
+            self.ctx.save_workspace()
         
-        # Get meals
-        if use_pending:
-            items, meal_totals = self._get_totals_from_pending(meal_category)
-            date_str = "today (pending)"
-        else:
-            items, meal_totals = self._get_totals_from_log(analysis_date, meal_category)
-            date_str = analysis_date
+        # Get meal data
+        items = candidate.get("items", [])
+        meal_name = candidate.get("meal_name", "meal")
+        meal_id = candidate.get("id")
+        meal_description = candidate.get("description")
         
-        if meal_totals is None:
-            print(f"\n=== {meal_category.title()} Analysis ({date_str}) ===")
-            print(f"Template: {template.get('display_name', template_key)}")
-            print(f"\nNo {meal_category} meals found for {date_str}\n")
+        if not items:
+            print(f"Workspace meal {workspace_id} has no items.")
             return
         
-        # Compare against template
-        self._display_analysis(template, template_key, meal_category, date_str, 
-                              items, meal_totals)
+        # Create analyzer
+        analyzer = MealAnalyzer(self.ctx.master, 
+                                self.ctx.nutrients, 
+                                self.ctx.thresholds, 
+                                self.ctx.user_prefs)
+        
+        # Run analysis (no daily context for workspace meals)
+        try:
+            result = analyzer.calculate_analysis(
+                items=items,
+                template_path=template_path,
+                meal_name=meal_name,
+                meal_id=meal_id,
+                meal_description=meal_description,
+                daily_context=None
+            )
+        except ValueError as e:
+            print(f"Error: {e}")
+            return
+        
+        # Display result
+        self._display_analysis(result)
     
-    def _load_template(self, template_key: str) -> Optional[Dict[str, Any]]:
-        """Load template from thresholds using dot-notation key path."""
-        data = self.ctx.thresholds.thresholds
+    def _analyze_pending(self, template_path: str) -> None:
+        """Analyze pending meal against template."""
+        # Get meal type from template
+        meal_type = self._extract_meal_type_from_template(template_path)
+        if not meal_type:
+            print(f"Error: Could not extract meal type from template: {template_path}")
+            return
         
-        if not template_key:
-            print("Error: Template key is required")
-            return None
+        # Get items from pending for this meal
+        items = self._get_pending_meal_items(meal_type)
         
-        # Navigate to template
-        keys = template_key.split('.')
-        current = data
-        
-        for key in keys:
-            if isinstance(current, dict) and key in current:
-                current = current[key]
-            else:
-                print(f"Error: Template not found: {template_key}")
-                return None
-        
-        # Verify it has targets
-        if not isinstance(current, dict) or 'targets' not in current:
-            print(f"Error: Template missing 'targets' section: {template_key}")
-            return None
-        
-        return current
-    
-    def _extract_meal_category(self, template_key: str) -> Optional[str]:
-        """
-        Extract meal category from template key.
-        
-        Expected format: meal_templates.<meal_name>.<template_name>
-        Returns: <meal_name>
-        """
-        parts = template_key.split('.')
-        
-        if len(parts) < 3 or parts[0] != 'meal_templates':
-            return None
-        
-        return parts[1]
-    
-    def _get_totals_from_pending(self, meal_category: str) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, float]]]:
-        """Get nutrient totals for matching meal category from pending."""
-        from meal_planner.reports.report_builder import ReportBuilder
-        
-        pending = self.ctx.pending_mgr.load()
-        if not pending or not pending.get('items'):
-            return [], None
-        
-        items = pending['items']
-        
-        # Build report to get meal breakdown
-        builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
-        report = builder.build_from_items(items, title="Analysis")
-        
-        breakdown = report.get_meal_breakdown()
-        if not breakdown:
-            return [], None
-        
-        # Sum totals for all meals matching the category
-        matching_totals = None
-        matching_items = []
-        
-        for m_name, first_time, meal_totals in breakdown:
-            if m_name.upper() == meal_category.upper():
-                if matching_totals is None:
-                    matching_totals = meal_totals
-                else:
-                    matching_totals = matching_totals + meal_totals
-                
-                # Extract items for this meal
-                meal_items = self._extract_meal_items(items, m_name)
-                matching_items.extend(meal_items)
-        
-        if matching_totals is None:
-            return [], None
-        
-        # Convert DailyTotals to dict
-        nutrient_dict = self._totals_to_dict(matching_totals)
-        
-        return matching_items, nutrient_dict
-    
-    def _get_totals_from_log(self, target_date: str, meal_category: str) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, float]]]:
-        """Get nutrient totals for matching meal category from log."""
-        from meal_planner.reports.report_builder import ReportBuilder
-        from meal_planner.utils.columns import get_codes_column
-        
-        # Get log entries for date
-        entries = self.ctx.log.get_entries_for_date(target_date)
-        if entries.empty:
-            return [], None
-        
-        codes_col = get_codes_column(entries)
-        
-        # Get codes string
-        codes_str = entries.iloc[0][codes_col]
-        if not codes_str or str(codes_str).strip() == '':
-            return [], None
-        
-        # Parse into items
-        items = parse_selection_to_items(str(codes_str))
         if not items:
-            return [], None
+            print(f"\nNo {meal_type} items found in pending.")
+            print("Use 'add' to add items with time markers.")
+            return
         
-        # Build report to get meal breakdown
-        builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
-        report = builder.build_from_items(items, title="Analysis")
+        # Calculate daily context
+        daily_context = self._calculate_daily_context(meal_type)
         
-        breakdown = report.get_meal_breakdown()
-        if not breakdown:
-            return [], None
+        # Create analyzer
+        analyzer = MealAnalyzer(self.ctx.master, self.ctx.nutrients, self.ctx.thresholds)
         
-        # Sum totals for all meals matching the category
-        matching_totals = None
-        matching_items = []
+        # Run analysis
+        try:
+            result = analyzer.calculate_analysis(
+                items=items,
+                template_path=template_path,
+                meal_name=meal_type,
+                meal_id=None,
+                meal_description=None,
+                daily_context=daily_context
+            )
+        except ValueError as e:
+            print(f"Error: {e}")
+            return
         
-        for m_name, first_time, meal_totals in breakdown:
-            if m_name.upper() == meal_category.upper():
-                if matching_totals is None:
-                    matching_totals = meal_totals
-                else:
-                    matching_totals = matching_totals + meal_totals
-                
-                # Extract items for this meal
-                meal_items = self._extract_meal_items(items, m_name)
-                matching_items.extend(meal_items)
-        
-        if matching_totals is None:
-            return [], None
-        
-        # Convert DailyTotals to dict
-        nutrient_dict = self._totals_to_dict(matching_totals)
-        
-        return matching_items, nutrient_dict
+        # Display result
+        self._display_analysis(result)
     
-    def _extract_meal_items(self, items: List[Dict[str, Any]], meal_name: str) -> List[Dict[str, Any]]:
-        """Extract items belonging to a specific meal."""
+    def _analyze_log_date(self, query_date: str, template_path: str) -> None:
+        """Analyze log date meal against template."""
+        # Get meal type from template
+        meal_type = self._extract_meal_type_from_template(template_path)
+        if not meal_type:
+            print(f"Error: Could not extract meal type from template: {template_path}")
+            return
+        
+        # Get items from log for this meal
+        items = self._get_log_meal_items(query_date, meal_type)
+        
+        if not items:
+            print(f"\nNo {meal_type} items found for {query_date}.")
+            return
+        
+        # Create analyzer
+        analyzer = MealAnalyzer(self.ctx.master, self.ctx.nutrients, self.ctx.thresholds)
+        
+        # Run analysis (no daily context for historical dates)
+        try:
+            result = analyzer.calculate_analysis(
+                items=items,
+                template_path=template_path,
+                meal_name=meal_type,
+                meal_id=None,
+                meal_description=None,
+                daily_context=None
+            )
+        except ValueError as e:
+            print(f"Error: {e}")
+            return
+        
+        # Display result
+        self._display_analysis(result)
+    
+    def _find_workspace_candidate(self, workspace_id: str) -> Optional[Dict[str, Any]]:
+        """Find candidate in workspace by ID (case-insensitive)."""
+        ws = self.ctx.planning_workspace
+        workspace_id_upper = workspace_id.upper()
+        
+        for candidate in ws.get("candidates", []):
+            if candidate.get("id", "").upper() == workspace_id_upper:
+                return candidate
+        
+        return None
+    
+    def _extract_meal_type_from_template(self, template_path: str) -> Optional[str]:
+        """
+        Extract meal type from template path.
+        
+        Expected: meal_templates.<meal_type>.<template_name>
+        Returns: <meal_type>
+        """
+        parts = template_path.split(".")
+        
+        if len(parts) >= 3 and parts[0] == "meal_templates":
+            return parts[1]
+        
+        return None
+    
+    def _get_pending_meal_items(self, meal_type: str) -> List[Dict[str, Any]]:
+        """Get items for specific meal from pending."""
+        from meal_planner.reports.report_builder import ReportBuilder
+        
+        try:
+            pending = self.ctx.pending_mgr.load()
+        except Exception:
+            pending = None
+        
+        if not pending or not pending.get("items"):
+            return []
+        
+        items = pending["items"]
+        
+        # Extract items for target meal using time markers
+        return self._extract_meal_items(items, meal_type)
+    
+    def _get_log_meal_items(self, query_date: str, meal_type: str) -> List[Dict[str, Any]]:
+        """Get items for specific meal from log date."""
+        # Get log entries
+        entries = self.ctx.log.get_entries_for_date(query_date)
+        
+        if entries.empty:
+            return []
+        
+        # Parse codes
+        codes_col = self.ctx.log.cols.codes
+        all_codes = ", ".join([
+            str(v) for v in entries[codes_col].fillna("")
+            if str(v).strip()
+        ])
+        
+        if not all_codes.strip():
+            return []
+        
+        items = CodeParser.parse(all_codes)
+        
+        # Extract items for target meal
+        return self._extract_meal_items(items, meal_type)
+    
+    def _extract_meal_items(self, items: List[Dict[str, Any]], meal_type: str) -> List[Dict[str, Any]]:
+        """Extract items belonging to a specific meal from item list."""
         meal_items = []
         current_meal = []
         current_time = None
@@ -261,7 +319,7 @@ class AnalyzeCommand(Command):
         
         for item in items:
             # Time marker
-            if 'time' in item:
+            if 'time' in item and 'code' not in item:
                 # Save previous meal if it was our target
                 if in_target_meal and current_meal:
                     meal_items.extend(current_meal)
@@ -273,7 +331,7 @@ class AnalyzeCommand(Command):
                 
                 # Check if this is our target meal
                 detected_meal = categorize_time(current_time, current_meal_override)
-                in_target_meal = (detected_meal and detected_meal.upper() == meal_name.upper())
+                in_target_meal = (detected_meal and detected_meal.upper() == meal_type.upper())
                 continue
             
             # Regular item
@@ -286,162 +344,102 @@ class AnalyzeCommand(Command):
         
         return meal_items
     
-    def _totals_to_dict(self, totals) -> Dict[str, float]:
-        """Convert DailyTotals object to dict for template comparison."""
-        return {
-            'cal': totals.calories,
-            'protein': totals.protein_g,
-            'carbs': totals.carbs_g,
-            'fat': totals.fat_g,
-            'fiber': totals.fiber_g,
-            'sugar': totals.sugar_g,
-            'gl': totals.glycemic_load,
-            'sodium': totals.sodium_mg,
-            'potassium': totals.potassium_mg,
-        }
+    def _calculate_daily_context(self, current_meal_type: str) -> Optional[DailyContext]:
+        """
+        Calculate daily context from earlier pending meals.
+        
+        For now returns None - will be implemented in phase 3.
+        """
+        # TODO: Implement daily context calculation
+        return None
     
-    def _display_analysis(self, template: Dict[str, Any], template_key: str,
-                         meal_category: str, date_str: str,
-                         items: List[Dict[str, Any]], 
-                         nutrient_totals: Dict[str, float]) -> None:
-        """Display analysis results in ASCII format."""
-        display_name = template.get('display_name', template_key)
+    def _display_analysis(self, result: AnalysisResult) -> None:
+        """Display analysis result in terminal."""
         
-        print(f"\n=== {meal_category.title()} Analysis ({date_str}) ===")
-        print(f"Template: {display_name}")
+        # Header
+        print(f"\n{'=' * 70}")
+        print(f"Analysis: {result.meal_name.title()}")
+        if result.meal_id:
+            print(f"Workspace: {result.meal_id}")
+        if result.meal_description:
+            print(f"Description: {result.meal_description}")
+        print(f"Template: {result.template_name}")
+        print(f"{'=' * 70}\n")
+        
+        # Daily context (if present)
+        if result.daily_context and (result.daily_context.has_deficits() or 
+                                     result.daily_context.has_excesses()):
+            print("Daily Context (from earlier meals):")
+            
+            if result.daily_context.protein_deficit > 0:
+                print(f"  Protein deficit: {result.daily_context.protein_deficit:.1f}g")
+            if result.daily_context.fiber_deficit > 0:
+                print(f"  Fiber deficit: {result.daily_context.fiber_deficit:.1f}g")
+            if result.daily_context.sugar_excess > 0:
+                print(f"  Sugar excess: {result.daily_context.sugar_excess:.1f}g")
+            
+            if result.daily_context.sugar_budget_remaining > 0:
+                print(f"  Sugar budget remaining: {result.daily_context.sugar_budget_remaining:.1f}g")
+            
+            print()
+        
+        # Template targets
+        print("Template Targets:")
+        targets = result.template.get("targets", {})
+        for nutrient, target_def in targets.items():
+            # Special case for GL (glycemic load) - display as all caps
+            display_name = "GL" if nutrient.lower() == "gl" else nutrient.capitalize()
+            
+            unit = target_def.get("unit", "")
+            if "min" in target_def and "max" in target_def:
+                print(f"  {display_name:12} {target_def['min']:.1f}-{target_def['max']:.1f}{unit}")
+            elif "min" in target_def:
+                print(f"  {display_name:12} ≥ {target_def['min']:.1f}{unit}")
+            elif "max" in target_def:
+                print(f"  {display_name:12} ≤ {target_def['max']:.1f}{unit}")        
         print()
         
-        # Show consumed meals summary
-        print("Consumed meals:")
-        codes = []
-        for item in items:
-            if 'code' not in item:
-                continue
-            code = item.get('code', '').upper()
-            mult = item.get('mult', 1.0)
-            if mult == 1.0:
-                codes.append(code)
-            else:
-                codes.append(f"{code} x{mult:g}")
-        
-        if codes:
-            print(f"  {meal_category}: {', '.join(codes)}")
+        # Current totals
+        print("Current Meal:")
+        totals = result.totals
+        print(f"  Calories:    {totals.calories:.1f}")
+        print(f"  Protein:     {totals.protein_g:.1f}g")
+        print(f"  Carbs:       {totals.carbs_g:.1f}g")
+        print(f"  Fat:         {totals.fat_g:.1f}g")
+        print(f"  Fiber:       {totals.fiber_g:.1f}g")
+        print(f"  GL:          {totals.glycemic_load:.1f}")
         print()
         
-        # Analyze nutrients
-        targets = template.get('targets', {})
+        # Gaps (deficits)
+        if result.gaps:
+            print("Gaps (Below Target):")
+            for gap in result.gaps:
+                priority_mark = "***" if gap.priority == 1 else "**" if gap.priority == 2 else "*"
+                print(f"  {priority_mark} {gap}")
+            print()
         
-        print("Nutrient Analysis:")
-        
-        status_summary = []
-        gaps = []
-        
-        for nutrient_name, target in targets.items():
-            # Get actual value
-            actual = nutrient_totals.get(nutrient_name)
-            
-            if actual is None:
-                # Nutrient not available
-                unit = target.get('unit', '')
-                print(f"  {nutrient_name.capitalize():12} N/A        (target data not available)")
-                continue
-            
-            # Compare against target
-            status, gap = self._compare_to_target(actual, target)
-            
-            # Format output
-            unit = target.get('unit', '')
-            target_str = self._format_target(target)
-            
-            if status == "OK":
-                status_mark = "[OK]     "
-            elif status in ["LOW", "HIGH", "EXCEEDED"]:
-                status_mark = f"[{status:8}]"
-                status_summary.append(status)
-                if gap != 0:
-                    gaps.append((nutrient_name, status, gap, unit))
-            
-            print(f"  {nutrient_name.capitalize():12} {actual:6.1f}{unit:2} {status_mark} (target: {target_str})")
-        
-        print()
+        # Excesses (surpluses)
+        if result.excesses:
+            print("Excesses (Above Threshold):")
+            for excess in result.excesses:
+                priority_mark = "***" if excess.priority == 1 else "**" if excess.priority == 2 else "*"
+                print(f"  {priority_mark} {excess}")
+            print()
         
         # Overall status
-        if not status_summary:
-            print("Status: All targets met")
+        if not result.has_issues():
+            print("✓ All targets met")
         else:
-            print(f"Status: {len(status_summary)} target(s) missed")
-            print()
-            print("Suggestions:")
-            for nutrient_name, status, gap, unit in gaps:
-                if status == "LOW":
-                    print(f"  To meet {nutrient_name} target: add {abs(gap):.1f}{unit}")
-                elif status in ["HIGH", "EXCEEDED"]:
-                    print(f"  To meet {nutrient_name} target: reduce by {abs(gap):.1f}{unit}")
-        
-        # Show guidelines and rationale
-        guidelines = template.get('guidelines', [])
-        if guidelines:
-            print()
-            print("Guidelines (from template):")
-            for guideline in guidelines:
-                print(f"  - {guideline}")
-        
-        rationale = template.get('rationale', [])
-        if rationale:
-            print()
-            print("Rationale:")
-            for reason in rationale:
-                print(f"  - {reason}")
+            gap_count = result.get_gap_count()
+            excess_count = result.get_excess_count()
+            
+            issues = []
+            if gap_count > 0:
+                issues.append(f"{gap_count} gap{'s' if gap_count > 1 else ''}")
+            if excess_count > 0:
+                issues.append(f"{excess_count} excess{'es' if excess_count > 1 else ''}")
+            
+            print(f"Status: Found {' and '.join(issues)}")
+            print(f"Use 'recommend {result.meal_id or result.meal_name}' for suggestions")
         
         print()
-    
-    def _compare_to_target(self, actual: float, target: Dict[str, Any]) -> Tuple[str, float]:
-        """
-        Compare actual value to target.
-        
-        Returns:
-            (status, gap) where status is "OK"/"LOW"/"HIGH"/"EXCEEDED" and gap is difference
-        """
-        min_val = target.get('min')
-        max_val = target.get('max')
-        
-        # Range target (min and max)
-        if min_val is not None and max_val is not None:
-            if actual < min_val:
-                return ("LOW", min_val - actual)
-            elif actual > max_val:
-                return ("HIGH", actual - max_val)
-            else:
-                return ("OK", 0.0)
-        
-        # Upper bound only (max, no min)
-        elif max_val is not None:
-            if actual > max_val:
-                return ("EXCEEDED", actual - max_val)
-            else:
-                return ("OK", 0.0)
-        
-        # Lower bound only (min, no max)
-        elif min_val is not None:
-            if actual < min_val:
-                return ("LOW", min_val - actual)
-            else:
-                return ("OK", 0.0)
-        
-        # No bounds defined
-        return ("OK", 0.0)
-    
-    def _format_target(self, target: Dict[str, Any]) -> str:
-        """Format target range for display."""
-        min_val = target.get('min')
-        max_val = target.get('max')
-        unit = target.get('unit', '')
-        
-        if min_val is not None and max_val is not None:
-            return f"{min_val}-{max_val}{unit}"
-        elif max_val is not None:
-            return f"<={max_val}{unit}"
-        elif min_val is not None:
-            return f">={min_val}{unit}"
-        else:
-            return "no target"

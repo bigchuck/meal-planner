@@ -67,6 +67,10 @@ class PlanCommand(Command):
             self._invent(subargs)
         elif subcommand == "report":
             self._report(subargs)
+        elif subcommand == "copy":
+            self._copy(subargs)
+        elif subcommand == "describe":
+            self._describe(subargs)
         else:
             print(f"\nUnknown subcommand: {subcommand}")
             print("Use 'plan help' to see available subcommands\n")
@@ -100,6 +104,12 @@ Subcommands:
   add <id> <codes>            Add items to candidate (creates variant)
                               Example: plan add 2 VE.T1, FR.3
   
+  copy <id>                   Copy meal, strip analyzed_as field
+                              Example: plan copy 123a
+  
+  describe <id> "text"        Set description for meal
+                              Example: plan describe N1 "Tomorrow's breakfast"
+
   rm <id> <indices>           Remove items from candidate (creates variant)
                               Example: plan rm 2 1,3
   
@@ -127,7 +137,8 @@ Subcommands:
                               Example: plan report 2 --nutrients
 
 Notes:
-  - Workspace is session-only (cleared on exit)
+  - Workspace auto-saves after each modification
+  - Workspace auto-loads on program startup
   - Search automatically deduplicates by date/meal and composition
   - Modifications create variants (2 -> 2a -> 2b)
   - Invented meals use ID format N1, N2, etc.
@@ -365,6 +376,7 @@ Notes:
                 print(f"Skipped {len(dup_composition)} duplicate composition(s)")
         
         total = len(self.ctx.planning_workspace['candidates'])
+        self.ctx.save_workspace()
         print(f"\nWorkspace now has {total} total candidate(s)")
         print("Use 'plan show' to review\n")
     
@@ -411,11 +423,14 @@ Notes:
                 
                 tag_str = " " + " ".join(tags) if tags else ""
                 
+                desc = c.get("description", "")
+                desc_str = f" - {desc}" if desc else ""
+
                 source = c.get("source_date", "")
                 if source:
-                    print(f"  #{c['id']} [{source}]{tag_str} {status}")
+                    print(f"  #{c['id']} [{source}]{tag_str} {status}{desc_str}")
                 else:
-                    print(f"  #{c['id']}{tag_str} {status}")
+                    print(f"  #{c['id']}{tag_str} {status}{desc_str}")
             
             print()
         
@@ -442,7 +457,9 @@ Notes:
             print(f"Type: Modified (based on #{parent_id}, original #{ancestor_id})")
         else:
             print(f"Type: Original")
-        
+        desc = candidate.get("description")
+        if desc:
+            print(f"Description: {desc}")
         if candidate.get('source_date'):
             print(f"Source: {candidate['source_date']} @ {candidate.get('original_time', '')}")
         
@@ -509,7 +526,10 @@ Notes:
             "next_numeric_id": 1,
             "next_invented_id": 1
         }
-        
+
+        if self.ctx.workspace_mgr:
+            self.ctx.workspace_mgr.clear()
+
         print(f"\nCleared {count} candidate(s) from planning workspace.\n")
     
     # =========================================================================
@@ -538,6 +558,8 @@ Notes:
         candidate_copy['ancestor_id'] = id_str
     
         ws['candidates'].append(candidate_copy)
+
+        self.ctx.save_workspace()
 
         return id_str
     
@@ -680,76 +702,165 @@ Notes:
     
     
     def _add(self, args: List[str]) -> None:
-            """
-            Add items to existing candidate (creates variant).
-            
-            Usage: plan add <id> <codes>
-            Example: plan add 2 VE.T1, FR.4 x0.5
-            """           
-            if len(args) < 2:
-                print("Usage: plan add <id> <codes>")
-                print("Example: plan add 2 VE.T1, FR.4 x0.5")
-                return
-            
-            candidate_id = args[0]
-            codes_str = ' '.join(args[1:])
-            
-            # Find candidate
-            candidate = self._find_candidate(candidate_id)
-            if not candidate:
-                print(f"Candidate '{candidate_id}' not found.")
-                return
-            
-            # Parse new codes
-            new_items = CodeParser.parse(codes_str)
-            if not new_items:
-                print("No valid codes found.")
-                return
+        """
+        Add items to existing candidate (creates variant).
+        
+        Usage: plan add <id> <codes>
+        Example: plan add 2 VE.T1, FR.4 x0.5
+        """           
+        if len(args) < 2:
+            print("Usage: plan add <id> <codes>")
+            print("Example: plan add 2 VE.T1, FR.4 x0.5")
+            return
+        
+        candidate_id = args[0]
+        codes_str = ' '.join(args[1:])
+        
+        # Find candidate
+        candidate = self._find_candidate(candidate_id)
+        if not candidate:
+            print(f"Candidate '{candidate_id}' not found.")
+            return
+        
+        # Parse new codes
+        new_items = CodeParser.parse(codes_str)
+        if not new_items:
+            print("No valid codes found.")
+            return
 
-            # Check if invented - modify in-place
-            if candidate.get('type') == 'invented':
-                candidate['items'].extend(new_items)
-                candidate['modification_log'].append(f"Added {len(new_items)} item(s)")
-                candidate['totals'] = self._calculate_totals(candidate['items'])
-                
-                print(f"Updated #{candidate['id']} (added {len(new_items)} item(s))")
-                self._show_detail(candidate['id'])
-                return
+        # Check if invented - modify in-place
+        if candidate.get('type') == 'invented':
+            candidate['items'].extend(new_items)
+            candidate['modification_log'].append(f"Added {len(new_items)} item(s)")
+            candidate['totals'] = self._calculate_totals(candidate['items'])
+            
+            print(f"Updated #{candidate['id']} (added {len(new_items)} item(s))")
+            self._show_detail(candidate['id'])
+            return
 
-            # Create variant
-            variant = copy.deepcopy(candidate)
-            variant['items'].extend(new_items)
-            
-            # Track modification
-            variant['parent_id'] = candidate['id']
-            variant['ancestor_id'] = candidate.get('ancestor_id', candidate['id'])
-            if 'modification_log' not in variant:
-                variant['modification_log'] = []
-            variant['modification_log'].append(f"Added {len(new_items)} item(s)")
-            
-            # Assign variant ID and add to workspace
-            new_id = self._assign_variant_id(candidate['id'])
-            variant['id'] = new_id
-            
-            ws = self.ctx.planning_workspace
-            ws['candidates'].append(variant)
-            
-            # Recalculate totals
-            variant['totals'] = self._calculate_totals(variant['items'])
-            
-            print(f"Created variant #{new_id} (added {len(new_items)} item(s) to #{candidate_id})")
-            self._show_detail(new_id)
+        # Create variant
+        variant = copy.deepcopy(candidate)
+        variant['items'].extend(new_items)
+        
+        # Track modification
+        variant['parent_id'] = candidate['id']
+        variant['ancestor_id'] = candidate.get('ancestor_id', candidate['id'])
+        if 'modification_log' not in variant:
+            variant['modification_log'] = []
+        variant['modification_log'].append(f"Added {len(new_items)} item(s)")
+        
+        # Assign variant ID and add to workspace
+        new_id = self._assign_variant_id(candidate['id'])
+        variant['id'] = new_id
+        
+        ws = self.ctx.planning_workspace
+        ws['candidates'].append(variant)
+        
+        # Recalculate totals
+        variant['totals'] = self._calculate_totals(variant['items'])
+
+        self.ctx.save_workspace()
+        
+        print(f"Created variant #{new_id} (added {len(new_items)} item(s) to #{candidate_id})")
+        self._show_detail(new_id)
     
     def _rm(self, args: List[str]) -> None:
         """
-        Remove items from candidate (creates variant).
+        Remove candidates from workspace OR items from a candidate.
         
-        Usage: plan rm <id> <indices>
-        Example: plan rm 2 3,5 or plan rm 2 3-5
+        Usage: 
+        plan rm <ids>              Remove candidates from workspace
+        plan rm <id> <indices>     Remove items from candidate
+        
+        Examples:
+        plan rm 7                  Remove candidate #7
+        plan rm 7,8,9              Remove candidates #7, #8, #9
+        plan rm 7-10               Remove candidates #7 through #10
+        plan rm 2 3,5              Remove items at positions 3,5 from candidate #2
         """
-        candidate_id = args[0]
-        indices_str = args[1]
+        if len(args) == 0:
+            print("Usage:")
+            print("  plan rm <ids>              Remove candidates from workspace")
+            print("  plan rm <id> <indices>     Remove items from candidate")
+            print("\nExamples:")
+            print("  plan rm 7                  Remove candidate #7")
+            print("  plan rm 7,8,9              Remove candidates #7, #8, #9")
+            print("  plan rm 7-10               Remove candidates #7 through #10")
+            print("  plan rm 2 3,5              Remove items at positions 3,5 from candidate #2")
+            return
+        
+        if len(args) == 1:
+            # Remove entire candidate(s) from workspace
+            self._rm_candidates(args[0])
+        elif len(args) == 2:
+            # Remove items from within a candidate (existing behavior)
+            self._rm_items_from_candidate(args[0], args[1])
+        else:
+            print("Error: Too many arguments")
+            print("Usage: plan rm <ids> OR plan rm <id> <indices>")
 
+    def _rm_candidates(self, ids_str: str) -> None:
+        """Remove entire candidates from workspace."""
+        
+        # Parse IDs
+        ids_to_remove = self._parse_candidate_ids(ids_str)
+        
+        if not ids_to_remove:
+            print("No valid IDs provided")
+            return
+        
+        # Find candidates
+        ws = self.ctx.planning_workspace
+        found_candidates = []
+        not_found = []
+        
+        for candidate_id in ids_to_remove:
+            candidate = self._find_candidate(candidate_id)
+            if candidate:
+                found_candidates.append(candidate)
+            else:
+                not_found.append(candidate_id)
+        
+        if not_found:
+            print(f"Not found: {', '.join(not_found)}")
+        
+        if not found_candidates:
+            print("No candidates to remove")
+            return
+        
+        # Confirm if removing multiple
+        if len(found_candidates) > 1:
+            print(f"Remove {len(found_candidates)} candidates from workspace?")
+            for c in found_candidates:
+                desc = c.get("description", "")
+                desc_str = f" - {desc}" if desc else ""
+                print(f"  #{c['id']} ({c.get('meal_name', 'meal')}){desc_str}")
+            
+            response = input("Continue? (y/n): ").strip().lower()
+            if response not in ('y', 'yes'):
+                print("Cancelled")
+                return
+        
+        # Remove candidates
+        removed_ids = []
+        for candidate in found_candidates:
+            ws["candidates"].remove(candidate)
+            removed_ids.append(candidate["id"])
+        
+        # Auto-save
+        self.ctx.save_workspace()
+        
+        if len(removed_ids) == 1:
+            print(f"Removed candidate #{removed_ids[0]}")
+        else:
+            print(f"Removed {len(removed_ids)} candidates: {', '.join(f'#{id}' for id in removed_ids)}")
+
+    def _rm_items_from_candidate(self, candidate_id: str, indices_str: str) -> None:
+        """
+        Remove items from candidate (creates variant or modifies in-place for invented).
+        
+        This is the existing _rm behavior - moved to separate method.
+        """
         # Find candidate
         candidate = self._find_candidate(candidate_id)
         if not candidate:
@@ -775,11 +886,14 @@ Notes:
             candidate['modification_log'].append(f"Removed {len(indices)} item(s)")
             candidate['totals'] = self._calculate_totals(candidate['items'])
             
+            self.ctx.save_workspace()
+            
             print(f"Updated #{candidate['id']} (removed {len(indices)} item(s))")
             self._show_detail(candidate['id'])
             return
         
         # Create variant
+        import copy
         variant = copy.deepcopy(candidate)
         
         # Remove items in reverse order
@@ -803,8 +917,48 @@ Notes:
         # Recalculate totals
         variant['totals'] = self._calculate_totals(variant['items'])
         
+        self.ctx.save_workspace()
+        
         print(f"Created variant #{new_id} (removed {len(indices)} item(s) from #{candidate_id})")
         self._show_detail(new_id)
+
+    def _parse_candidate_ids(self, ids_str: str) -> List[str]:
+        """
+        Parse candidate IDs from string.
+        
+        Supports:
+        - Single: "7"
+        - Comma-separated: "7,8,9" or "123a,N1,2b"
+        - Numeric ranges: "7-10" (expands to 7,8,9,10)
+        
+        Returns:
+            List of candidate ID strings
+        """
+        ids = []
+        
+        for part in ids_str.split(","):
+            part = part.strip()
+            
+            if "-" in part and not part.startswith("N"):
+                # Potential range (e.g., "7-10")
+                sides = part.split("-", 1)
+                if len(sides) == 2:
+                    left = sides[0].strip()
+                    right = sides[1].strip()
+                    
+                    # Check if both sides are pure numeric (no letter suffixes)
+                    if left.isdigit() and right.isdigit():
+                        start = int(left)
+                        end = int(right)
+                        # Expand range
+                        for i in range(start, end + 1):
+                            ids.append(str(i))
+                        continue
+            
+            # Not a valid range, treat as literal ID
+            ids.append(part)
+        
+        return ids
     
     def _move(self, args: List[str]) -> None:
         """
@@ -883,6 +1037,8 @@ Notes:
         
         # Recalculate totals
         variant['totals'] = self._calculate_totals(variant['items'])
+
+        self.ctx.save_workspace()
         
         print(f"Created variant #{new_id} (moved item in #{candidate_id})")
         self._show_detail(new_id)
@@ -975,6 +1131,8 @@ Notes:
         
         # Recalculate totals
         variant['totals'] = self._calculate_totals(variant['items'])
+
+        self.ctx.save_workspace()
         
         print(f"Created variant #{new_id} (changed multiplier in #{candidate_id})")
         self._show_detail(new_id)
@@ -1056,6 +1214,8 @@ Notes:
         
         # Recalculate totals
         variant['totals'] = self._calculate_totals(variant['items'])
+
+        self.ctx.save_workspace()
         
         print(f"Created variant #{new_id} (inserted {len(new_items)} item(s) into #{candidate_id})")
         self._show_detail(new_id)
@@ -1104,6 +1264,8 @@ Notes:
         }
         
         ws['candidates'].append(candidate)
+
+        self.ctx.save_workspace()
         
         print(f"Created blank candidate #{invented_id} for {meal_name}")
         print("Use 'plan add {0} <codes>' to add items".format(invented_id))
@@ -1354,6 +1516,97 @@ Notes:
             formatted = self.ctx.recipes.format_recipe(code)
             if formatted:
                 print(formatted)
+
+    def _copy(self, args: List[str]) -> None:
+        """
+        Copy workspace meal, stripping analyzed_as field.
+        
+        Usage: plan copy <id>
+        Example: plan copy 123a
+        """
+        if not args:
+            print("Usage: plan copy <id>")
+            print("Example: plan copy 123a")
+            return
+        
+        candidate_id = args[0]
+        
+        # Find candidate
+        candidate = self._find_candidate(candidate_id)
+        if not candidate:
+            print(f"Candidate '{candidate_id}' not found.")
+            return
+        
+        # Deep copy
+        import copy
+        variant = copy.deepcopy(candidate)
+        
+        # Strip analyzed_as
+        if "analyzed_as" in variant:
+            del variant["analyzed_as"]
+        
+        # Update description
+        orig_desc = variant.get("description", "")
+        if orig_desc:
+            variant["description"] = f"{orig_desc} (copy)"
+        else:
+            variant["description"] = "(copy)"
+        
+        # Assign new ID
+        new_id = self._assign_variant_id(candidate_id)
+        variant["id"] = new_id
+        variant["parent_id"] = candidate_id
+        variant["ancestor_id"] = candidate.get("ancestor_id", candidate_id)
+        
+        if "modification_log" not in variant:
+            variant["modification_log"] = []
+        variant["modification_log"].append("Copied from #{0}".format(candidate_id))
+        
+        # Add to workspace
+        ws = self.ctx.planning_workspace
+        ws["candidates"].append(variant)
+        
+        # Auto-save
+        self.ctx.save_workspace()
+        
+        print(f"Created {new_id} (copy of {candidate_id})")
+        if variant.get("description"):
+            print(f"Description: {variant['description']}")
+
+    def _describe(self, args: List[str]) -> None:
+        """
+        Set description for workspace meal.
+        
+        Usage: plan describe <id> "description"
+        Example: plan describe N1 "Monday breakfast - high protein"
+        """
+        if len(args) < 2:
+            print('Usage: plan describe <id> "description"')
+            print('Example: plan describe N1 "Monday breakfast"')
+            return
+        
+        candidate_id = args[0]
+        description = ' '.join(args[1:])
+        
+        # Remove quotes if present
+        if description.startswith('"') and description.endswith('"'):
+            description = description[1:-1]
+        elif description.startswith("'") and description.endswith("'"):
+            description = description[1:-1]
+        
+        # Find candidate
+        candidate = self._find_candidate(candidate_id)
+        if not candidate:
+            print(f"Candidate '{candidate_id}' not found.")
+            return
+        
+        # Set description
+        candidate["description"] = description
+        
+        # Auto-save
+        self.ctx.save_workspace()
+        
+        print(f"Description set for {candidate_id}")
 
     # =========================================================================
     # Helper methods
