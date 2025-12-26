@@ -183,6 +183,7 @@ class MealAnalyzer:
         
         # Map template nutrient keys to DailyTotals attributes
         nutrient_mapping = {
+            "protein": ("protein_g", "g", 2),
             "carbs": ("carbs_g", "g", 2),
             "fat": ("fat_g", "g", 2),
             "gl": ("glycemic_load", "", 1)
