@@ -1469,10 +1469,10 @@ Notes:
         source_label = candidate.get('source_date', 'Invented')
         title = f"Report for Candidate #{candidate['id']} ({meal_label} from {source_label})"
         
-        report = builder.build_from_items(candidate['items'], title=title, verbose=verbose)
+        report = builder.build_from_items(candidate['items'], title=title)
         
         # Show main report
-        report.print()
+        report.print(verbose=verbose)
         
         # Show micronutrients if requested
         if show_nutrients and self.ctx.nutrients:
