@@ -6,7 +6,7 @@ Handles auto-save/load of meal planning workspace to JSON.
 """
 import json
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, List, Any
 from datetime import datetime
 
 
@@ -32,17 +32,7 @@ class WorkspaceManager:
         
         Returns:
             Workspace dictionary, or empty workspace if file doesn't exist
-            Format: {
-                "last_modified": "ISO timestamp",
-                "meals": {
-                    "123a": {
-                        "description": "...",
-                        "analyzed_as": "breakfast",
-                        "items": [...],
-                        ...
-                    }
-                }
-            }
+            
         """
         if not self.filepath.exists():
             return self._create_empty_workspace()
@@ -61,7 +51,20 @@ class WorkspaceManager:
             
             if "meals" not in data or not isinstance(data["meals"], dict):
                 data["meals"] = {}
-            
+
+            # Initialize command_history if missing (backward compatibility)
+            if "command_history" not in data:
+                data["command_history"] = {
+                    "threshold": {},
+                    "analyze": {},
+                    "recommend": {}
+                }
+            else:
+                # Ensure all three command types exist
+                for cmd in ["threshold", "analyze", "recommend"]:
+                    if cmd not in data["command_history"]:
+                        data["command_history"][cmd] = {}
+        
             return data
             
         except (json.JSONDecodeError, Exception):
@@ -110,7 +113,11 @@ class WorkspaceManager:
         Returns:
             New format workspace
         """
-        workspace = self._create_empty_workspace()
+        # Load existing workspace to preserve command_history
+        workspace = self.load()
+        
+        # Clear meals but keep command_history and other fields
+        workspace["meals"] = {}
         
         # Convert candidates list to meals dict
         for candidate in planning_ws.get("candidates", []):
@@ -201,3 +208,84 @@ class WorkspaceManager:
             planning_ws["next_invented_id"] = max(invented_ids) + 1
         
         return planning_ws
+    
+    def _create_empty_workspace(self) -> Dict[str, Any]:
+        """Create empty workspace structure."""
+        return {
+            "last_modified": datetime.now().isoformat(),
+            "meals": {},
+            "command_history": {
+                "threshold": {},
+                "analyze": {},
+                "recommend": {}
+            }
+        }  
+    
+    # Method to record command in history
+    def record_command_history(self, workspace: Dict[str, Any], 
+                            command: str, params: str, meal: str,
+                            max_size: int = 10) -> None:
+        """
+        Record a command execution in history.
+        
+        Args:
+            workspace: Workspace dictionary
+            command: Command name ("threshold", "analyze", or "recommend")
+            params: Parameter string (everything after command name)
+            meal: Meal name for categorization (or "default" for no-meal commands)
+            max_size: Maximum entries to keep per meal
+        """
+        if "command_history" not in workspace:
+            workspace["command_history"] = {
+                "threshold": {},
+                "analyze": {},
+                "recommend": {}
+            }
+        
+        if command not in workspace["command_history"]:
+            workspace["command_history"][command] = {}
+        
+        meal_history = workspace["command_history"][command].get(meal, [])
+        
+        # Remove duplicate if exists (move to front)
+        if params in meal_history:
+            meal_history.remove(params)
+        
+        # Add to front
+        meal_history.insert(0, params)
+        
+        # Trim to max size
+        if len(meal_history) > max_size:
+            meal_history = meal_history[:max_size]
+        
+        # Save back
+        workspace["command_history"][command][meal] = meal_history
+
+    # Method to get command history
+    def get_command_history(self, workspace: Dict[str, Any],
+                        command: str, meal: str,
+                        limit: Optional[int] = None) -> List[str]:
+        """
+        Get command history for a specific command/meal.
+        
+        Args:
+            workspace: Workspace dictionary
+            command: Command name ("threshold", "analyze", or "recommend")
+            meal: Meal name (or "default")
+            limit: Optional limit on number of entries to return
+        
+        Returns:
+            List of parameter strings, most recent first
+        """
+        if "command_history" not in workspace:
+            return []
+        
+        if command not in workspace["command_history"]:
+            return []
+        
+        meal_history = workspace["command_history"][command].get(meal, [])
+        
+        if limit and limit < len(meal_history):
+            return meal_history[:limit]
+        
+        return meal_history.copy()

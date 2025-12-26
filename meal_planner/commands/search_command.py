@@ -11,7 +11,7 @@ from meal_planner.utils import ColumnResolver
 class FindCommand(Command):
     """Search the master database."""
     
-    name = "find"
+    name = ("find", "f")
     help_text = "Search master database (e.g., find chicken)"
     
     def execute(self, args: str) -> None:

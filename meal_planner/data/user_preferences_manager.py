@@ -336,7 +336,27 @@ class UserPreferencesManager:
         
         # Return codes sorted by frequency (most used first)
         return [code for code, count in code_counts.most_common()]
-    
+
+    def get_command_history_size(self) -> int:
+        """
+        Get command history size preference.
+        
+        Returns:
+            Number of history entries to retain (default 10)
+        """
+        if not self._prefs:
+            return 10
+        
+        size_config = self._prefs.get('command_history_size', {})
+        
+        # Handle both object format and simple int format
+        if isinstance(size_config, dict):
+            return size_config.get('value', 10)
+        elif isinstance(size_config, int):
+            return size_config
+        else:
+            return 10
+
     # =========================================================================
     # Validation
     # =========================================================================

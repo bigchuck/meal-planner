@@ -1,7 +1,7 @@
 """
 Command classes for the meal planner REPL.
 """
-from .base import Command, CommandContext, CommandRegistry, register_command, get_registry
+from .base import Command, CommandContext, CommandHistoryMixin, CommandRegistry, register_command, get_registry
 
 # Import all command modules to trigger registration
 from . import basic_commands
@@ -28,6 +28,7 @@ __all__ = [
     'Command',
     'CommandContext',
     'CommandRegistry',
+    'CommandHistoryMixin',
     'register_command',
     'get_registry',
 ]

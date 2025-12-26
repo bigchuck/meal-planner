@@ -127,6 +127,120 @@ class CommandContext:
             workspace_data = self.workspace_mgr.convert_from_planning_workspace(self.planning_workspace)
             self.workspace_mgr.save(workspace_data)
 
+class CommandHistoryMixin:
+    """
+    Mixin for commands that support command history (threshold, analyze, recommend).
+    
+    Provides --history and --use flag support with meal-specific filtering.
+    """
+    
+    def _extract_meal_from_params(self, params: str) -> str:
+        """
+        Extract meal name from parameter string containing --meal flag.
+        
+        Args:
+            params: Parameter string (e.g., "--template breakfast --meal breakfast")
+        
+        Returns:
+            Meal name if found, otherwise "default"
+        """
+        import shlex
+        
+        try:
+            parts = shlex.split(params)
+        except:
+            parts = params.split()
+        
+        # Look for --meal flag
+        for i, part in enumerate(parts):
+            if part == "--meal" and i + 1 < len(parts):
+                return parts[i + 1]
+        
+        return "default"
+    
+    def _record_command_history(self, command_name: str, params: str) -> None:
+        """
+        Record successful command execution in workspace history.
+        
+        Args:
+            command_name: "threshold", "analyze", or "recommend"
+            params: Full parameter string
+        """
+        if not self.ctx.workspace_mgr:
+            return
+        
+        # Determine meal bucket
+        meal = self._extract_meal_from_params(params)
+        
+        # Get max history size from user preferences
+        max_size = 10  # default
+        if self.ctx.user_prefs:
+            max_size = self.ctx.user_prefs.get_command_history_size()
+        
+        # Record in workspace
+        workspace_data = self.ctx.workspace_mgr.load()
+        self.ctx.workspace_mgr.record_command_history(
+            workspace_data, command_name, params, meal, max_size
+        )
+        self.ctx.workspace_mgr.save(workspace_data)
+    
+    def _display_command_history(self, command_name: str, meal: str, limit: int) -> bool:
+        """
+        Display command history for a specific command/meal.
+        
+        Args:
+            command_name: "threshold", "analyze", or "recommend"
+            meal: Meal name to filter by
+            limit: Maximum entries to display
+        
+        Returns:
+            True if history was displayed, False if none available
+        """
+        if not self.ctx.workspace_mgr:
+            print("\nCommand history unavailable (no workspace)\n")
+            return False
+        
+        workspace_data = self.ctx.workspace_mgr.load()
+        history = self.ctx.workspace_mgr.get_command_history(
+            workspace_data, command_name, meal, limit
+        )
+        
+        if not history:
+            print(f"\nNo {command_name} command history for meal '{meal}'\n")
+            return False
+        
+        print(f"\nRecent {command_name} commands for meal '{meal}':")
+        for i, params in enumerate(history, 1):
+            print(f"  {i}: {params}")
+        print()
+        
+        return True
+    
+    def _get_params_from_history(self, command_name: str, meal: str, index: int) -> Optional[str]:
+        """
+        Get parameter string from history at specified index.
+        
+        Args:
+            command_name: "threshold", "analyze", or "recommend"
+            meal: Meal name to filter by
+            index: 1-based index into history
+        
+        Returns:
+            Parameter string if found, None otherwise
+        """
+        if not self.ctx.workspace_mgr:
+            return None
+        
+        workspace_data = self.ctx.workspace_mgr.load()
+        history = self.ctx.workspace_mgr.get_command_history(
+            workspace_data, command_name, meal
+        )
+        
+        if not history or index < 1 or index > len(history):
+            return None
+        
+        return history[index - 1]
+
 class Command(ABC):
     """
     Base class for all commands.

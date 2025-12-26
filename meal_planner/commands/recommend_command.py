@@ -7,7 +7,7 @@ Analyzes meal gaps/excesses and suggests additions, portions, or swaps.
 import shlex
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import date, timedelta
-from .base import Command, register_command
+from .base import Command, CommandHistoryMixin, register_command
 from meal_planner.analyzers.meal_analyzer import MealAnalyzer
 from meal_planner.models.analysis_result import DailyContext
 from meal_planner.parsers import parse_selection_to_items
@@ -15,7 +15,7 @@ from meal_planner.utils.time_utils import categorize_time, normalize_meal_name, 
 
 
 @register_command
-class RecommendCommand(Command):
+class RecommendCommand(Command, CommandHistoryMixin):
     """Generate recommendations for meal optimization."""
     
     name = "recommend"
@@ -25,8 +25,17 @@ class RecommendCommand(Command):
         """
         Generate recommendations for a workspace meal or pending meal.
         
+        Standard mode:
+            recommend 123a
+            recommend lunch --template lunch.balanced --meal lunch
+            recommend breakfast --template breakfast.protein_focus --meal breakfast
+        
+        History support:
+            recommend --history 5 --meal breakfast
+            recommend --use 2 --meal lunch [other flags...]
+
         Args:
-            args: Workspace ID (e.g., "123a") or meal name + --template flag
+            args: Workspace ID (e.g., "123a") or meal name + --template flag + --meal flag
         
         Examples:
             recommend 123a
@@ -53,35 +62,139 @@ class RecommendCommand(Command):
             self._show_help()
             return
         
-        target = parts[0]
-        
-        # Look for --template flag
+        target = None
         template_override = None
-        if '--template' in parts:
-            try:
-                template_idx = parts.index('--template')
-                if template_idx + 1 < len(parts):
-                    template_override = parts[template_idx + 1]
+        meal_name = None
+        history_limit = None
+        use_index = None
+
+        i = 0
+        while i < len(parts):
+            arg = parts[i]
+            
+            if arg == "--template":
+                if i + 1 < len(parts):
+                    template_override = parts[i + 1]
+                    i += 2
                 else:
                     print("\nError: --template requires a value")
-                    print("Example: recommend lunch --template lunch.balanced\n")
+                    print("Example: recommend lunch --template lunch.balanced --meal lunch\n")
                     return
-            except ValueError:
-                pass
+            
+            elif arg == "--meal":
+                if i + 1 < len(parts):
+                    meal_name = parts[i + 1]
+                    i += 2
+                else:
+                    print("Error: --meal requires a meal name")
+                    return
+            
+            elif arg == "--history":
+                if i + 1 < len(parts):
+                    try:
+                        history_limit = int(parts[i + 1])
+                        i += 2
+                    except ValueError:
+                        print("Error: --history requires a number")
+                        return
+                else:
+                    print("Error: --history requires a number")
+                    return
+            
+            elif arg == "--use":
+                if i + 1 < len(parts):
+                    try:
+                        use_index = int(parts[i + 1])
+                        i += 2
+                    except ValueError:
+                        print("Error: --use requires a number")
+                        return
+                else:
+                    print("Error: --use requires a number")
+                    return
+            
+            else:
+                # First non-flag arg is the target
+                if target is None:
+                    target = arg
+                    i += 1
+                else:
+                    print(f"Error: Unexpected argument '{arg}'")
+                    return
+        
+        # Handle --history mode
+        if history_limit is not None:
+            if use_index is not None:
+                print("Error: --history and --use are mutually exclusive")
+                return
+            if template_override is not None or target is not None:
+                print("Error: --history cannot be combined with recommendation parameters")
+                return
+            if meal_name is None:
+                print("Error: --history requires --meal flag")
+                print("Example: recommend --history 5 --meal breakfast")
+                return
+            
+            self._display_command_history("recommend", meal_name, history_limit)
+            return
+        
+        # Handle --use mode
+        if use_index is not None:
+            if meal_name is None:
+                print("Error: --use requires --meal flag")
+                print("Example: recommend --use 1 --meal breakfast")
+                return
+            
+            # Load params from history
+            params = self._get_params_from_history("recommend", meal_name, use_index)
+            if params is None:
+                print(f"Error: No history entry #{use_index} for meal '{meal_name}'")
+                print(f"Use: recommend --history 10 --meal {meal_name}")
+                return
+            
+            # Re-parse the historical params
+            print(f"Using history #{use_index}: {params}")
+            
+            # Re-execute with historical params
+            return self.execute(params)
+
+        # Regular recommendation mode - requires meal
+        if meal_name is None:
+            print("Error: --meal is required")
+            print("Example: recommend lunch --template lunch.balanced --meal lunch")
+            return
         
         # Determine if workspace ID or meal name
-        is_workspace = self._is_workspace_id(target)
+        is_workspace = False
+        if target:
+            is_workspace = self._is_workspace_id(target)
         
+        # Build parameter string for history recording
+        params_for_history = ""
+        if target:
+            params_for_history = f"{target} "
+        if template_override:
+            params_for_history += f"--template {template_override} "
+        params_for_history += f"--meal {meal_name}"
+        
+        # Execute recommendation
+        success = False
         if is_workspace:
-            self._recommend_workspace(target, template_override)
+            success = self._recommend_workspace(target, template_override, meal_name)
         else:
-            self._recommend_pending(target, template_override)
+            success = self._recommend_pending(target if target else meal_name, 
+                                            template_override, meal_name)
+        
+        # Record in history if successful
+        if success:
+            self._record_command_history("recommend", params_for_history.strip())
     
     # =========================================================================
     # Main recommendation paths
     # =========================================================================
     
-    def _recommend_workspace(self, workspace_id: str, template_override: Optional[str] = None) -> None:
+    def _recommend_workspace(self, workspace_id: str, template_override: Optional[str],
+                             meal_name: str) -> bool:
         """Generate recommendations for a workspace meal."""
         # Find workspace meal
         ws = self.ctx.planning_workspace
@@ -95,13 +208,13 @@ class RecommendCommand(Command):
         if not meal:
             print(f"\nWorkspace meal '{workspace_id}' not found.")
             print("Use 'plan show' to see available meals.\n")
-            return
+            return False
         
         # Get items and meal info
         items = meal.get('items', [])
         if not items:
             print(f"\nWorkspace meal '{workspace_id}' has no items.\n")
-            return
+            return False
         
         meal_name = meal.get('meal_name', 'meal')
         meal_description = meal.get('description', '')
@@ -120,7 +233,7 @@ class RecommendCommand(Command):
             print(f"  1. Analyze first: analyze {workspace_id} --template <template>")
             print(f"  2. Specify template: recommend {workspace_id} --template <template>")
             print("\nExample: recommend {workspace_id} --template lunch.balanced\n")
-            return
+            return False
         
         # Run recommendations
         self._generate_recommendations(
@@ -130,8 +243,10 @@ class RecommendCommand(Command):
             meal_id=workspace_id,
             meal_description=meal_description
         )
+        return True
     
-    def _recommend_pending(self, meal_name: str, template_override: Optional[str] = None) -> None:
+    def _recommend_pending(self, target: str, template_override: Optional[str],
+                           meal_name: str) -> bool:
         """Generate recommendations for a pending meal."""
         # Normalize meal name
         try:
@@ -139,7 +254,7 @@ class RecommendCommand(Command):
         except Exception:
             print(f"\nInvalid meal name: '{meal_name}'")
             print(f"Valid names: {', '.join(MEAL_NAMES)}\n")
-            return
+            return False
         
         # Load pending
         try:
@@ -149,7 +264,7 @@ class RecommendCommand(Command):
         
         if not pending or not pending.get('items'):
             print(f"\nNo pending items found for analysis.\n")
-            return
+            return False
         
         # Extract items for this meal
         items = self._extract_meal_items_from_pending(
@@ -159,7 +274,7 @@ class RecommendCommand(Command):
         
         if not items:
             print(f"\nNo items found for '{meal_name_norm}' in pending.\n")
-            return
+            return False
         
         # Determine template
         if template_override:
@@ -169,7 +284,7 @@ class RecommendCommand(Command):
             print(f"\nNo template specified for '{meal_name_norm}'.")
             print("Specify template: recommend {meal_name_norm} --template <template>")
             print(f"\nExample: recommend {meal_name_norm} --template {meal_name_norm.lower().replace(' ', '_')}.balanced\n")
-            return
+            return False
         
         # Run recommendations
         self._generate_recommendations(
@@ -179,6 +294,7 @@ class RecommendCommand(Command):
             meal_id=None,
             meal_description=None
         )
+        return True
     
     def _generate_recommendations(
         self,

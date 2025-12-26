@@ -6,11 +6,11 @@ Provides dot-notation navigation through the thresholds JSON structure,
 supporting both glucose monitoring and meal template configuration.
 """
 import shlex
-from .base import Command, register_command
+from .base import Command, CommandHistoryMixin, register_command
 
 
 @register_command
-class ThresholdCommand(Command):
+class ThresholdCommand(Command, CommandHistoryMixin):
     """Display meal planning threshold configuration."""
     
     name = "threshold"
@@ -20,6 +20,15 @@ class ThresholdCommand(Command):
         """
         Display threshold configuration using dot-notation key paths.
         
+        Standard mode:
+            threshold                                     -> List top-level sections
+            threshold --display glucose_scoring           -> Show glucose scoring keys
+            threshold --display meal_templates.breakfast --meal breakfast
+        
+        History support:
+            threshold --history 5 --meal breakfast
+            threshold --use 2 --meal lunch [other flags...]
+
         Args:
             args: Command arguments
         
@@ -37,6 +46,9 @@ class ThresholdCommand(Command):
         
         key_path = ""
         show_all = False
+        meal_name = None
+        history_limit = None
+        use_index = None
         
         i = 0
         while i < len(args_list):
@@ -49,14 +61,85 @@ class ThresholdCommand(Command):
                 else:
                     print("Error: --display requires a key path")
                     return
+            elif arg == "--meal":
+                if i + 1 < len(args_list):
+                    meal_name = args_list[i + 1]
+                    i += 2
+                else:
+                    print("Error: --meal requires a meal name")
+                    return
             elif arg == "--all":
                 show_all = True
                 i += 1
+
+            elif arg == "--history":
+                if i + 1 < len(args_list):
+                    try:
+                        history_limit = int(args_list[i + 1])
+                        i += 2
+                    except ValueError:
+                        print("Error: --history requires a number")
+                        return
+                else:
+                    print("Error: --history requires a number")
+                    return
+            
+            elif arg == "--use":
+                if i + 1 < len(args_list):
+                    try:
+                        use_index = int(args_list[i + 1])
+                        i += 2
+                    except ValueError:
+                        print("Error: --use requires a number")
+                        return
+                else:
+                    print("Error: --use requires a number")
+                    return
+
             else:
                 print(f"Unknown argument: {arg}")
-                print("Usage: threshold [--display <keys>] [--all]")
+                print("Usage: threshold [--display <keys>] [--all] [--meal <meal>]")
+                print("   or: threshold --history <n> --meal <meal>")
+                print("   or: threshold --use <n> --meal <meal> [other options...]")
+                return
+
+        # Handle --history mode
+        if history_limit is not None:
+            if use_index is not None:
+                print("Error: --history and --use are mutually exclusive")
+                return
+            if key_path or show_all:
+                print("Error: --history cannot be combined with display parameters")
+                return
+            if meal_name is None:
+                print("Error: --history requires --meal flag")
+                print("Example: threshold --history 5 --meal breakfast")
+                return
+            
+            self._display_command_history("threshold", meal_name, history_limit)
+            return
+    
+        # Handle --use mode
+        if use_index is not None:
+            if meal_name is None:
+                print("Error: --use requires --meal flag")
+                print("Example: threshold --use 1 --meal breakfast")
+                return
+            
+            # Load params from history
+            params = self._get_params_from_history("threshold", meal_name, use_index)
+            if params is None:
+                print(f"Error: No history entry #{use_index} for meal '{meal_name}'")
+                print(f"Use: threshold --history 10 --meal {meal_name}")
                 return
         
+            # Re-parse the historical params
+            print(f"Using history #{use_index}: {params}")
+        
+            # Re-execute with historical params
+            return self.execute(params)
+
+
         # Get thresholds data
         data = self.ctx.thresholds.thresholds
         if not data:
@@ -65,6 +148,14 @@ class ThresholdCommand(Command):
         
         # Display
         self._display_threshold(data, key_path, show_all)
+
+        # Record in history if we used --display and --meal
+        if key_path and meal_name:
+            params_for_history = f"--display {key_path} --meal {meal_name}"
+            if show_all:
+                params_for_history += " --all"
+            self._record_command_history("threshold", params_for_history)
+
     
     def _display_threshold(self, data: dict, key_path: str = "", show_all: bool = False):
         """

@@ -71,6 +71,8 @@ class PlanCommand(Command):
             self._copy(subargs)
         elif subcommand == "describe":
             self._describe(subargs)
+        elif subcommand == "rename":
+            self._rename(subargs)        
         else:
             print(f"\nUnknown subcommand: {subcommand}")
             print("Use 'plan help' to see available subcommands\n")
@@ -106,6 +108,9 @@ Subcommands:
   
   copy <id>                   Copy meal, strip analyzed_as field
                               Example: plan copy 123a
+
+  rename <from> <to>          Rename a workspace meal
+                              Example: plan rename 123a lunch-final
   
   describe <id> "text"        Set description for meal
                               Example: plan describe N1 "Tomorrow's breakfast"
@@ -133,7 +138,7 @@ Subcommands:
   invent <meal_name>          Create blank candidate to build from scratch
                               Example: plan invent lunch
   
-  report <id> [--nutrients]   Show detailed breakdown for candidate
+  report <id> [--nutrients] [--verbose]   Show detailed breakdown for candidate
                               Example: plan report 2 --nutrients
 
 Notes:
@@ -528,10 +533,73 @@ Notes:
         }
 
         if self.ctx.workspace_mgr:
-            self.ctx.workspace_mgr.clear()
+            self.ctx.save_workspace()
 
         print(f"\nCleared {count} candidate(s) from planning workspace.\n")
+        print("(Command history preserved)\n")
     
+    def _rename(self, args: List[str]) -> None:
+        """
+        Rename a workspace meal (change its ID).
+        
+        Args:
+            args: [from_id, to_id]
+        
+        Examples:
+            plan rename breakfast-old breakfast-new
+            plan rename 123a lunch-final
+        """
+        if len(args) != 2:
+            print("\nUsage: plan rename <from_id> <to_id>")
+            print("\nExamples:")
+            print("  plan rename breakfast-old breakfast-new")
+            print("  plan rename 123a lunch-final")
+            print("  plan rename N1 dinner-v2")
+            print()
+            return
+        
+        from_id = args[0]
+        to_id = args[1]
+        
+        # Find the source meal
+        ws = self.ctx.planning_workspace
+        source_meal = None
+        
+        for candidate in ws['candidates']:
+            if candidate['id'].upper() == from_id.upper():
+                source_meal = candidate
+                break
+        
+        if not source_meal:
+            print(f"\nWorkspace meal '{from_id}' not found.")
+            print("Use 'plan show' to see available meals.\n")
+            return
+        
+        # Check if target ID already exists
+        for candidate in ws['candidates']:
+            if candidate['id'].upper() == to_id.upper():
+                print(f"\nError: Workspace meal '{to_id}' already exists.")
+                print("Choose a different target ID.\n")
+                return
+        
+        # Update the ID
+        old_id = source_meal['id']
+        source_meal['id'] = to_id
+        
+        # Update parent_id and ancestor_id references in ALL meals
+        # (in case this meal is a parent or ancestor of others)
+        for candidate in ws['candidates']:
+            if candidate.get('parent_id') == old_id:
+                candidate['parent_id'] = to_id
+            if candidate.get('ancestor_id') == old_id:
+                candidate['ancestor_id'] = to_id
+        
+        # Save workspace
+        self.ctx.save_workspace()
+        
+        print(f"\nRenamed '{old_id}' → '{to_id}'\n")
+
+
     # =========================================================================
     # Helper methods
     # =========================================================================
@@ -1370,17 +1438,18 @@ Notes:
         """
         Show detailed report for candidate.
         
-        Usage: plan report <id> [--recipes] [--nutrients]
+        Usage: plan report <id> [--recipes] [--nutrients] [--verbose]
         Example: plan report 2a --nutrients
         """
         if len(args) < 1:
-            print("Usage: plan report <id> [--recipes] [--nutrients]")
+            print("Usage: plan report <id> [--recipes] [--nutrients] [--verbose]")
             print("Example: plan report 2a --nutrients")
             return
         
         candidate_id = args[0]
         show_recipes = '--recipes' in args or '--recipe' in args
         show_nutrients = '--nutrients' in args or '--nutrient' in args or '--micro' in args
+        verbose = "--verbose" in args
         
         # Find candidate
         candidate = self._find_candidate(candidate_id)
@@ -1400,7 +1469,7 @@ Notes:
         source_label = candidate.get('source_date', 'Invented')
         title = f"Report for Candidate #{candidate['id']} ({meal_label} from {source_label})"
         
-        report = builder.build_from_items(candidate['items'], title=title)
+        report = builder.build_from_items(candidate['items'], title=title, verbose=verbose)
         
         # Show main report
         report.print()

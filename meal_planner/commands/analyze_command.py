@@ -9,7 +9,7 @@ import shlex
 import re
 from datetime import date as date_type
 from typing import Optional, Dict, Any, List, Tuple
-from .base import Command, register_command
+from .base import Command, CommandHistoryMixin, register_command
 from meal_planner.parsers import parse_selection_to_items, CodeParser
 from meal_planner.utils.time_utils import categorize_time, normalize_meal_name
 from meal_planner.analyzers.meal_analyzer import MealAnalyzer
@@ -17,24 +17,27 @@ from meal_planner.models.analysis_result import AnalysisResult, DailyContext
 
 
 @register_command
-class AnalyzeCommand(Command):
+class AnalyzeCommand(Command, CommandHistoryMixin):
     """Analyze meals against nutritional templates."""
     
     name = "analyze"
-    help_text = "Analyze meals against template (analyze [date|id] --template <key>)"
+    help_text = "Analyze meals against template (analyze [date|id] --template <key> --meal <meal>)"
     
     def execute(self, args: str) -> None:
         """
         Analyze meals against a nutritional template.
         
-        Supports three modes:
-        1. Workspace meal: analyze <id> --template <template>
-        2. Pending meal: analyze --template <template>
-        3. Log date: analyze <date> --template <template>
-        
+        Supports three modes: 
+            1. Workspace meal: analyze <id> --template <template> --meal <meal>
+            2. Pending meal: analyze --template <template> --meal <meal>
+            3. Log date: analyze <date> --template <template> --meal <meal>  
         Args:
             args: Command arguments
         
+        History support:
+        - analyze --history 5 --meal breakfast
+        - analyze --use 2 --meal lunch [other flags...]
+ 
         Examples:
             analyze 123a --template breakfast.protein_low_carb
             analyze --template breakfast.protein_low_carb
@@ -47,16 +50,22 @@ class AnalyzeCommand(Command):
         args_list = shlex.split(args) if args else []
         
         if not args_list:
-            print("Usage: analyze [date|workspace_id] --template <template_key>")
+            print("Usage: analyze [date|workspace_id] --template <template_key> --meal <meal>")
+            print("   or: analyze --history <n> --meal <meal>")
+            print("   or: analyze --use <n> --meal <meal> [other options...]")
             print("\nExamples:")
-            print("  analyze 123a --template breakfast.protein_low_carb")
-            print("  analyze --template breakfast.protein_low_carb")
-            print("  analyze 2024-12-20 --template lunch.balanced")
+            print("  analyze 123a --template breakfast.protein_low_carb --meal breakfast")
+            print("  analyze --template breakfast.protein_low_carb --meal breakfast")
+            print("  analyze --history 5 --meal breakfast")
+            print("  analyze --use 1 --meal breakfast")
             return
         
         # Extract target and template
         target = None
         template_key = None
+        meal_name = None
+        history_limit = None
+        use_index = None
         
         i = 0
         while i < len(args_list):
@@ -69,6 +78,38 @@ class AnalyzeCommand(Command):
                 else:
                     print("Error: --template requires a key path")
                     return
+            elif arg == "--meal":
+                if i + 1 < len(args_list):
+                    meal_name = args_list[i + 1]
+                    i += 2
+                else:
+                    print("Error: --meal requires a meal name")
+                    return
+        
+            elif arg == "--history":
+                if i + 1 < len(args_list):
+                    try:
+                        history_limit = int(args_list[i + 1])
+                        i += 2
+                    except ValueError:
+                        print("Error: --history requires a number")
+                        return
+                else:
+                    print("Error: --history requires a number")
+                    return
+        
+            elif arg == "--use":
+                if i + 1 < len(args_list):
+                    try:
+                        use_index = int(args_list[i + 1])
+                        i += 2
+                    except ValueError:
+                        print("Error: --use requires a number")
+                        return
+                else:
+                    print("Error: --use requires a number")
+                    return
+
             else:
                 # First non-flag arg is the target
                 if target is None:
@@ -77,30 +118,73 @@ class AnalyzeCommand(Command):
                 else:
                     print(f"Error: Unexpected argument '{arg}'")
                     return
+   
+        # Handle --history mode
+        if history_limit is not None:
+            if use_index is not None:
+                print("Error: --history and --use are mutually exclusive")
+                return
+            if template_key is not None or target is not None:
+                print("Error: --history cannot be combined with analysis parameters")
+                return
+            if meal_name is None:
+                print("Error: --history requires --meal flag")
+                print("Example: analyze --history 5 --meal breakfast")
+                return
+            
+            self._display_command_history("analyze", meal_name, history_limit)
+            return
         
+        # Handle --use mode
+        if use_index is not None:
+            if meal_name is None:
+                print("Error: --use requires --meal flag")
+                print("Example: analyze --use 1 --meal breakfast")
+                return
+            # Load params from history
+            params = self._get_params_from_history("analyze", meal_name, use_index)
+            if params is None:
+                print(f"Error: No history entry #{use_index} for meal '{meal_name}'")
+                print(f"Use: analyze --history 10 --meal {meal_name}")
+                return        
+            print(f"Using history #{use_index}: {params}")
+            return self.execute(params)
+   
         if not template_key:
             print("Error: --template is required")
             print("Example: analyze --template breakfast.protein_low_carb")
             return
-        
+        if not meal_name:
+            print("Error: --meal is required")
+            print("Example: analyze --template breakfast.protein_low_carb --meal breakfast")
+            return        
+
         # Auto-prepend "meal_templates." if not present
         if not template_key.startswith("meal_templates."):
             template_key = f"meal_templates.{template_key}"
         
+        # Build parameter string for history recording
+        params_for_history = f"--template {template_key} --meal {meal_name}"
+        if target:
+            params_for_history = f"{target} {params_for_history}"
+
         # Determine analysis mode based on target
         if target is None:
             # Mode: Pending (today)
-            self._analyze_pending(template_key)
+            success = self._analyze_pending(template_key, meal_name)
         elif self._is_date(target):
             # Mode: Log date
-            self._analyze_log_date(target, template_key)
+            success = self._analyze_log_date(target, template_key, meal_name)
         elif self._is_workspace_id(target):
             # Mode: Workspace meal
-            self._analyze_workspace(target, template_key)
+            success = self._analyze_workspace(target, template_key, meal_name)
         else:
             print(f"Error: Could not determine target type: {target}")
             print("Expected: workspace ID (e.g., 123a, N1), date (YYYY-MM-DD), or nothing for pending")
             return
+        # Record in history if successful
+        if success:
+            self._record_command_history("analyze", params_for_history)
     
     def _is_date(self, arg: str) -> bool:
         """Check if argument is a date (YYYY-MM-DD)."""
@@ -112,14 +196,14 @@ class AnalyzeCommand(Command):
         # or N-prefix (N1, N2, N1a)
         return bool(re.match(r'^(\d+[a-z]?|N\d+[a-z]?)$', arg, re.IGNORECASE))
     
-    def _analyze_workspace(self, workspace_id: str, template_path: str) -> None:
+    def _analyze_workspace(self, workspace_id: str, template_path: str, meal_name: str) -> bool:
         """Analyze workspace meal against template."""
         # Find candidate in workspace
         candidate = self._find_workspace_candidate(workspace_id)
         if not candidate:
             print(f"Workspace meal '{workspace_id}' not found.")
             print("Use 'plan show' to see available meals.")
-            return
+            return False
         
         # Check template locking
         analyzed_as = candidate.get("analyzed_as")
@@ -131,7 +215,7 @@ class AnalyzeCommand(Command):
                 print(f"Error: Meal {workspace_id} already analyzed as '{analyzed_as}'")
                 print(f"Cannot analyze with '{meal_type}' template")
                 print(f"Use 'plan copy {workspace_id}' to create unlocked variant")
-                return
+                return False
         else:
             # First analysis - lock it
             candidate["analyzed_as"] = meal_type
@@ -145,7 +229,7 @@ class AnalyzeCommand(Command):
         
         if not items:
             print(f"Workspace meal {workspace_id} has no items.")
-            return
+            return False
         
         # Create analyzer
         analyzer = MealAnalyzer(self.ctx.master, 
@@ -165,29 +249,32 @@ class AnalyzeCommand(Command):
             )
         except ValueError as e:
             print(f"Error: {e}")
-            return
+            return False
         
         # Display result
         self._display_analysis(result)
+        return True
     
-    def _analyze_pending(self, template_path: str) -> None:
+    def _analyze_pending(self, template_path: str, meal_name: str) -> bool:
         """Analyze pending meal against template."""
-        # Get meal type from template
-        meal_type = self._extract_meal_type_from_template(template_path)
-        if not meal_type:
-            print(f"Error: Could not extract meal type from template: {template_path}")
-            return
-        
         # Get items from pending for this meal
-        items = self._get_pending_meal_items(meal_type)
+        items = self._get_pending_meal_items(meal_name)
         
         if not items:
-            print(f"\nNo {meal_type} items found in pending.")
+            print(f"\nNo {meal_name} items found in pending.")
             print("Use 'add' to add items with time markers.")
-            return
+            return False
+        
+        # Get items from pending for this meal
+        items = self._get_pending_meal_items(meal_name)
+        
+        if not items:
+            print(f"\nNo {meal_name} items found in pending.")
+            print("Use 'add' to add items with time markers.")
+            return False
         
         # Calculate daily context
-        daily_context = self._calculate_daily_context(meal_type)
+        daily_context = self._calculate_daily_context(meal_name)
         
         # Create analyzer
         analyzer = MealAnalyzer(self.ctx.master, self.ctx.nutrients, self.ctx.thresholds)
@@ -197,32 +284,27 @@ class AnalyzeCommand(Command):
             result = analyzer.calculate_analysis(
                 items=items,
                 template_path=template_path,
-                meal_name=meal_type,
+                meal_name=meal_name,
                 meal_id=None,
                 meal_description=None,
                 daily_context=daily_context
             )
         except ValueError as e:
             print(f"Error: {e}")
-            return
+            return False
         
         # Display result
         self._display_analysis(result)
+        return True
     
-    def _analyze_log_date(self, query_date: str, template_path: str) -> None:
+    def _analyze_log_date(self, query_date: str, template_path: str, meal_name: str) -> bool:
         """Analyze log date meal against template."""
-        # Get meal type from template
-        meal_type = self._extract_meal_type_from_template(template_path)
-        if not meal_type:
-            print(f"Error: Could not extract meal type from template: {template_path}")
-            return
-        
         # Get items from log for this meal
-        items = self._get_log_meal_items(query_date, meal_type)
+        items = self._get_log_meal_items(query_date, meal_name)
         
         if not items:
-            print(f"\nNo {meal_type} items found for {query_date}.")
-            return
+            print(f"\nNo {meal_name} items found for {query_date}.")
+            return False
         
         # Create analyzer
         analyzer = MealAnalyzer(self.ctx.master, self.ctx.nutrients, self.ctx.thresholds)
@@ -232,17 +314,18 @@ class AnalyzeCommand(Command):
             result = analyzer.calculate_analysis(
                 items=items,
                 template_path=template_path,
-                meal_name=meal_type,
+                meal_name=meal_name,
                 meal_id=None,
                 meal_description=None,
                 daily_context=None
             )
         except ValueError as e:
             print(f"Error: {e}")
-            return
+            return False
         
         # Display result
         self._display_analysis(result)
+        return True
     
     def _find_workspace_candidate(self, workspace_id: str) -> Optional[Dict[str, Any]]:
         """Find candidate in workspace by ID (case-insensitive)."""
