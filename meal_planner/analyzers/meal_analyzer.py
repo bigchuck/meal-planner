@@ -147,7 +147,10 @@ class MealAnalyzer:
                 min_val = target_def["min"]
                 if current_value < min_val:
                     deficit = min_val - current_value
-                    
+                    max_val = target_def.get("max")
+                    if max_val is not None:
+                        midpoint = (min_val + max_val) / 2
+                        deficit = midpoint - current_value
                     gap = NutrientGap(
                         nutrient=template_key,
                         current=current_value,

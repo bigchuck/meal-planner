@@ -22,6 +22,7 @@ from . import order_command
 from . import plan_command
 from . import threshold_command
 from . import analyze_command
+from . import recommend_command
 
 __all__ = [
     'Command',
