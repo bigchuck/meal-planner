@@ -9,6 +9,7 @@ from .pending_manager import PendingManager, load_pending, save_pending, clear_p
 from .alias_manager import AliasManager
 from .thresholds_manager import ThresholdsManager
 from .staging_buffer_manager import StagingBufferManager
+from .email_manager import EmailManager
 
 __all__ = [
     # Classes
@@ -18,6 +19,7 @@ __all__ = [
     'AliasManager',
     'ThresholdsManager',
     'StagingBufferManager',
+    'EmailManager',
     # Backward-compatible functions
     'load_master',
     'lookup_code_row',

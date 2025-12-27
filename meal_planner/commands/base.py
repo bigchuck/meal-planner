@@ -20,7 +20,8 @@ class CommandContext:
                  nutrients_file: Path = None, recipes_file: Path = None,
                  aliases_file: Path = None, thresholds_file: Path = None,
                  user_prefs_file: Path = None, workspace_file: Path = None,
-                 staging_buffer_file: Path = None):
+                 staging_buffer_file: Path = None,
+                 email_config_file: Path = None, email_log_file: Path = None): 
         """
         Initialize command context.
         
@@ -39,6 +40,7 @@ class CommandContext:
         from meal_planner.data.workspace_manager import WorkspaceManager
         from meal_planner.data.user_preferences_manager import UserPreferencesManager
         from meal_planner.data.staging_buffer_manager import StagingBufferManager
+        from meal_planner.data.email_manager import EmailManager
         
         self.master = MasterLoader(master_file, nutrients_file, recipes_file)
         self.log = LogManager(log_file)
@@ -99,6 +101,10 @@ class CommandContext:
         self.staging_buffer = None
         if staging_buffer_file:
             self.staging_buffer = StagingBufferManager(staging_buffer_file)
+
+        self.email_mgr = None
+        if email_config_file and email_log_file:
+            self.email_mgr = EmailManager(email_config_file, email_log_file)
 
     def _determine_initial_pending_source(self) -> str:
         """

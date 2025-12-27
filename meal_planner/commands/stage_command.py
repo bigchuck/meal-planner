@@ -6,7 +6,7 @@ Provides subcommands for viewing, editing, and clearing staged meal plans.
 """
 import shlex
 from .base import Command, register_command
-
+from typing import List, Tuple
 
 @register_command
 class StageCommand(Command):
@@ -50,6 +50,8 @@ class StageCommand(Command):
             self._remove(subargs)
         elif subcommand == "clear":
             self._clear(subargs)
+        elif subcommand == "send":     
+            self._send(subargs)
         else:
             print(f"\nUnknown subcommand: {subcommand}")
             print("Use 'stage help' to see available subcommands\n")
@@ -66,12 +68,14 @@ SUBCOMMANDS:
   edit <pos> --desc "text" - Edit description at position
   remove <pos>          - Remove item at position
   clear                 - Clear entire buffer
+  send                  - Email buffer to your phone  
 
 EXAMPLES:
   stage show
   stage edit 2 --desc "Tuesday Lunch - client meeting"
   stage remove 3
   stage clear
+  stage send
   
 NOTE: Use --stage flag on report/analyze/plan commands to add to buffer.
 """)
@@ -183,3 +187,157 @@ NOTE: Use --stage flag on report/analyze/plan commands to add to buffer.
             print(f"\n✓ Cleared {cleared} item(s) from staging buffer.\n")
         else:
             print("\nCancelled.\n")
+
+    def _send(self, args: list) -> None:
+        """
+        Send staged content via email.
+        
+        Usage: stage send
+        """
+        buffer_mgr = self.ctx.staging_buffer
+        email_mgr = self.ctx.email_mgr
+        
+        # Check if email is configured
+        if not email_mgr:
+            print("\nEmail not configured.")
+            print("Create data/email_config.json with your Gmail settings.")
+            print("See documentation for setup instructions.\n")
+            return
+        
+        # Load email config
+        if not email_mgr.load_config():
+            print(f"\n{email_mgr.get_error_message()}\n")
+            return
+        
+        # Check if buffer has content
+        if buffer_mgr.is_empty():
+            print("\nStaging buffer is empty. Nothing to send.\n")
+            return
+        
+        # Get buffer contents
+        items = buffer_mgr.get_all()
+        total_lines = buffer_mgr.get_total_lines()
+        
+        # Show what will be sent
+        print("\nBuffer contains:")
+        for pos, label, content, timestamp in items:
+            line_count = len(content)
+            print(f"  {pos}. {label} ({line_count} lines)")
+        
+        print(f"\nTotal: {len(items)} items, {total_lines} lines")
+        
+        # Show recipient and rate limit status
+        recipient = email_mgr.get_configured_address()
+        sent_count, limit = email_mgr.get_rate_limit_status()
+        
+        print(f"\nSend to: {recipient}")
+        print(f"Rate limit: {sent_count}/{limit} sent in last hour")
+        
+        # Generate subject
+        subject = self._generate_subject(items)
+        print(f"Subject: {subject}")
+        
+        # Confirmation
+        print()
+        response = input("Send email? (y/n): ").strip().lower()
+        
+        if response not in ("y", "yes"):
+            print("\nCancelled.\n")
+            return
+        
+        # Build email body
+        body_lines = self._build_email_body(items)
+        
+        # Send
+        success, message = email_mgr.send(subject, body_lines)
+        
+        if success:
+            print(f"\n✓ {message}\n")
+            
+            # Ask if user wants to clear buffer
+            print("Clear staging buffer?")
+            response = input("(y/n): ").strip().lower()
+            
+            if response in ("y", "yes"):
+                count = buffer_mgr.clear_all()
+                print(f"\n✓ Cleared {count} item(s) from buffer.\n")
+            else:
+                print("\nBuffer preserved.\n")
+        else:
+            print(f"\n✗ Failed to send: {message}\n")
+
+    def _generate_subject(self, items: List[Tuple]) -> str:
+        """
+        Generate email subject from staged items.
+        
+        Args:
+            items: List of (pos, label, content, timestamp) tuples
+        
+        Returns:
+            Email subject string
+        """
+        from datetime import datetime
+        
+        # Extract meal names from labels
+        meal_names = []
+        for pos, label, content, timestamp in items:
+            # Skip analysis items
+            if label.startswith("Analysis:"):
+                continue
+            
+            # Extract meal name from label
+            # Format: "Thursday, December 26, 2024 - BREAKFAST"
+            # or: "Tuesday Dinner - client meeting"
+            if " - " in label:
+                parts = label.split(" - ")
+                meal_part = parts[-1]  # Last part is usually the meal
+                
+                # Clean up meal name (remove "(workspace)", etc.)
+                meal_part = meal_part.replace("(workspace)", "").strip()
+                
+                if meal_part and meal_part not in meal_names:
+                    meal_names.append(meal_part)
+        
+        # Generate subject
+        today = datetime.now().strftime("%b %d")
+        
+        if len(meal_names) == 0:
+            return f"Meal Plans - {today}"
+        elif len(meal_names) == 1:
+            return f"Meal Plan: {meal_names[0]} - {today}"
+        elif len(meal_names) <= 3:
+            return f"Meal Plans: {', '.join(meal_names)} - {today}"
+        else:
+            return f"Meal Plans ({len(meal_names)} meals) - {today}"
+
+    def _build_email_body(self, items: List[Tuple]) -> List[str]:
+        """
+        Build email body from staged items.
+        
+        Args:
+            items: List of (pos, label, content, timestamp) tuples
+        
+        Returns:
+            List of body lines
+        """
+        body = []
+        
+        for i, (pos, label, content, timestamp) in enumerate(items):
+            # Add separator between items (except before first)
+            if i > 0:
+                body.append("")
+                body.append("=" * 70)
+                body.append("")
+            
+            # Add item label as header
+            body.append(label)
+            body.append("=" * 70)
+            
+            # Add content (skip first line if it's a duplicate header)
+            for line in content:
+                # Skip empty === headers that duplicate our label
+                if line.strip().startswith("===") and label in line:
+                    continue
+                body.append(line)
+        
+        return body
