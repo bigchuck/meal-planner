@@ -148,6 +148,7 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
                 print(f"Use: analyze --history 10 --meal {meal_name}")
                 return        
             print(f"Using history #{use_index}: {params}")
+
             # Prepend target if provided in current command
             if target:
                 params = f"{target} {params}"
@@ -169,8 +170,6 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
         
         # Build parameter string for history recording
         params_for_history = f"--template {template_key} --meal {meal_name}"
-        if target:
-            params_for_history = f"{target} {params_for_history}"
 
         # Determine analysis mode based on target
         if target is None:

@@ -175,8 +175,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         # Build parameter string for history recording
         params_for_history = ""
-        if target:
-            params_for_history = f"{target} "
         if template_override:
             params_for_history += f"--template {template_override} "
         params_for_history += f"--meal {meal_name}"
