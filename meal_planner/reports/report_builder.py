@@ -335,3 +335,78 @@ class Report:
             result.append((meal_name, first_time, meal_totals))
         
         return result if result else None
+    
+    def format_abbreviated(self) -> List[str]:
+        """
+        Format report in abbreviated style for phone/email viewing.
+        
+        Abbreviated format:
+        - Title
+        - Code xMult - Description (no macro columns)
+        - Time markers preserved
+        - Totals line without "TOTAL" prefix
+        - Missing codes if any
+        
+        Returns:
+            List of formatted output lines
+        """
+        lines = []
+        
+        # Title
+        lines.append(f"\n=== {self.title} ===")
+        
+        if not self.rows and not self.display:
+            lines.append("(no items)")
+            lines.append("")
+            return lines
+        
+        # Items (no header row for abbreviated format)
+        for kind, val in self.display:
+            if kind == "time":
+                # Time marker
+                time_str = val.get("time", "")
+                meal_override = val.get("meal_override")
+                display_str = f"@{time_str}"
+                if meal_override:
+                    display_str += f" ({meal_override})"
+                lines.append(f"  {display_str}")
+            else:
+                # Nutrient row - abbreviated format
+                row = self.rows[val]
+                lines.append(self._format_abbreviated_row(row))
+        
+        # Totals (without "TOTAL" prefix)
+        rounded = self.totals.rounded()
+        totals_line = (f"{int(rounded.calories)} cal | "
+                    f"{int(rounded.protein_g)}g P | "
+                    f"{int(rounded.carbs_g)}g C | "
+                    f"{int(rounded.fat_g)}g F | "
+                    f"{int(rounded.sugar_g)}g Sugars | "
+                    f"GL: {int(rounded.glycemic_load)}")
+        lines.append("")
+        lines.append(totals_line)
+        
+        if self.missing:
+            lines.append(f"Missing (not counted): {', '.join(self.missing)}")
+        
+        lines.append("")
+        return lines
+
+    def _format_abbreviated_row(self, row: NutrientRow) -> str:
+        """
+        Format a single row in abbreviated style.
+        
+        Format: CODE xMULT - Description
+        Always shows multiplier.
+        
+        Args:
+            row: NutrientRow to format
+        
+        Returns:
+            Formatted string
+        """
+        # Format multiplier - always show
+        mult_str = self._format_mult(row.multiplier)
+        
+        # Build line: CODE xMULT - Description
+        return f"  {row.code} x{mult_str} - {row.option}"

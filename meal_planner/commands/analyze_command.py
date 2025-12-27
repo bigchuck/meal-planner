@@ -8,6 +8,7 @@ Supports workspace meals, pending meals, and log dates.
 import shlex
 import re
 from datetime import date as date_type
+from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
 from .base import Command, CommandHistoryMixin, register_command
 from meal_planner.parsers import parse_selection_to_items, CodeParser
@@ -21,16 +22,16 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
     """Analyze meals against nutritional templates."""
     
     name = "analyze"
-    help_text = "Analyze meals against template (analyze [date|id] --template <key> --meal <meal>)"
+    help_text = "Analyze meals against template (analyze [date|id] --template <key> --meal <meal> [--stage])"
     
     def execute(self, args: str) -> None:
         """
         Analyze meals against a nutritional template.
         
         Supports three modes: 
-            1. Workspace meal: analyze <id> --template <template> --meal <meal>
-            2. Pending meal: analyze --template <template> --meal <meal>
-            3. Log date: analyze <date> --template <template> --meal <meal>  
+            1. Workspace meal: analyze <id> --template <template> --meal <meal> [--stage]
+            2. Pending meal: analyze --template <template> --meal <meal> [--stage]
+            3. Log date: analyze <date> --template <template> --meal <meal> [--stage]
         Args:
             args: Command arguments
         
@@ -66,6 +67,7 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
         meal_name = None
         history_limit = None
         use_index = None
+        stage = False
         
         i = 0
         while i < len(args_list):
@@ -97,7 +99,11 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
                 else:
                     print("Error: --history requires a number")
                     return
-        
+            
+            elif arg == "--stage":
+                stage = True
+                i += 1
+
             elif arg == "--use":
                 if i + 1 < len(args_list):
                     try:
@@ -152,7 +158,8 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
             # Prepend target if provided in current command
             if target:
                 params = f"{target} {params}"
-    
+            if stage:
+                params = f"{params} --stage"
             return self.execute(params)
    
         if not template_key:
@@ -174,17 +181,21 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
         # Determine analysis mode based on target
         if target is None:
             # Mode: Pending (today)
-            success = self._analyze_pending(template_key, meal_name)
+            success, lines, date_label = self._analyze_pending(template_key, meal_name, stage)
         elif self._is_date(target):
             # Mode: Log date
-            success = self._analyze_log_date(target, template_key, meal_name)
+            success, lines, date_label = self._analyze_log_date(target, template_key, meal_name, stage)
         elif self._is_workspace_id(target):
             # Mode: Workspace meal
-            success = self._analyze_workspace(target, template_key, meal_name)
+            success, lines, date_label = self._analyze_workspace(target, template_key, meal_name, stage)
         else:
             print(f"Error: Could not determine target type: {target}")
             print("Expected: workspace ID (e.g., 123a, N1), date (YYYY-MM-DD), or nothing for pending")
             return
+            # Handle staging if requested
+        if success and stage and lines:
+            self._stage_analysis(lines, date_label, meal_name, target)
+
         # Record in history if successful
         if success:
             self._record_command_history("analyze", params_for_history)
@@ -199,14 +210,15 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
         # or N-prefix (N1, N2, N1a)
         return bool(re.match(r'^(\d+[a-z]?|N\d+[a-z]?)$', arg, re.IGNORECASE))
     
-    def _analyze_workspace(self, workspace_id: str, template_path: str, meal_name: str) -> bool:
+    def _analyze_workspace(self, workspace_id: str, template_path: str, meal_name: str, 
+                           stage: bool = False) -> Tuple[bool, Optional[List[str]], Optional[str]]: 
         """Analyze workspace meal against template."""
         # Find candidate in workspace
         candidate = self._find_workspace_candidate(workspace_id)
         if not candidate:
             print(f"Workspace meal '{workspace_id}' not found.")
             print("Use 'plan show' to see available meals.")
-            return False
+            return False, None, None
         
         # Check template locking
         analyzed_as = candidate.get("analyzed_as")
@@ -218,7 +230,7 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
                 print(f"Error: Meal {workspace_id} already analyzed as '{analyzed_as}'")
                 print(f"Cannot analyze with '{meal_type}' template")
                 print(f"Use 'plan copy {workspace_id}' to create unlocked variant")
-                return False
+                return False, None, None
         else:
             # First analysis - lock it
             candidate["analyzed_as"] = meal_type
@@ -232,7 +244,7 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
         
         if not items:
             print(f"Workspace meal {workspace_id} has no items.")
-            return False
+            return False, None, None
         
         # Create analyzer
         analyzer = MealAnalyzer(self.ctx.master, 
@@ -252,13 +264,20 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
             )
         except ValueError as e:
             print(f"Error: {e}")
-            return False
+            return False, None, None
         
-        # Display result
-        self._display_analysis(result)
-        return True
+        lines = self._display_analysis(result)
+
+        if stage:
+            # Return lines for staging (caller will handle staging and display)
+            return True, lines, "workspace"
+        else:
+            # Normal mode: print immediately
+            self._print_lines(lines)
+            return True, None, None
     
-    def _analyze_pending(self, template_path: str, meal_name: str) -> bool:
+    def _analyze_pending(self, template_path: str, meal_name: str, 
+                         stage: bool = False) -> Tuple[bool, Optional[List[str]], Optional[str]]:
         """Analyze pending meal against template."""
         # Get items from pending for this meal
         items = self._get_pending_meal_items(meal_name)
@@ -266,7 +285,7 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
         if not items:
             print(f"\nNo {meal_name} items found in pending.")
             print("Use 'add' to add items with time markers.")
-            return False
+            return False, None, None
         
         # Get items from pending for this meal
         items = self._get_pending_meal_items(meal_name)
@@ -274,7 +293,7 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
         if not items:
             print(f"\nNo {meal_name} items found in pending.")
             print("Use 'add' to add items with time markers.")
-            return False
+            return False, None, None
         
         # Calculate daily context
         daily_context = self._calculate_daily_context(meal_name)
@@ -294,20 +313,27 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
             )
         except ValueError as e:
             print(f"Error: {e}")
-            return False
+            return False, None, None
         
         # Display result
-        self._display_analysis(result)
-        return True
+        lines = self._display_analysis(result)
+        if stage:
+            # Return lines for staging (caller will handle staging and display)
+            return True, lines, "pending"
+        else:
+            # Normal mode: print immediately
+            self._print_lines(lines)
+            return True, None, None
     
-    def _analyze_log_date(self, query_date: str, template_path: str, meal_name: str) -> bool:
+    def _analyze_log_date(self, query_date: str, template_path: str, meal_name: str, 
+                          stage: bool = False) -> Tuple[bool, Optional[List[str]], Optional[str]]:
         """Analyze log date meal against template."""
         # Get items from log for this meal
         items = self._get_log_meal_items(query_date, meal_name)
         
         if not items:
             print(f"\nNo {meal_name} items found for {query_date}.")
-            return False
+            return False, None, None
         
         # Create analyzer
         analyzer = MealAnalyzer(self.ctx.master, self.ctx.nutrients, self.ctx.thresholds)
@@ -324,11 +350,17 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
             )
         except ValueError as e:
             print(f"Error: {e}")
-            return False
+            return False, None, None
         
         # Display result
-        self._display_analysis(result)
-        return True
+        lines = self._display_analysis(result)
+        if stage:
+            # Return lines for staging (caller will handle staging and display)
+            return True, lines, query_date
+        else:
+            # Normal mode: print immediately
+            self._print_lines(lines)
+            return True, None, None
     
     def _find_workspace_candidate(self, workspace_id: str) -> Optional[Dict[str, Any]]:
         """Find candidate in workspace by ID (case-insensitive)."""
@@ -439,38 +471,39 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
         # TODO: Implement daily context calculation
         return None
     
-    def _display_analysis(self, result: AnalysisResult) -> None:
+    def _display_analysis(self, result: AnalysisResult) -> List[str]:
         """Display analysis result in terminal."""
         
+        lines = []
         # Header
-        print(f"\n{'=' * 70}")
-        print(f"Analysis: {result.meal_name.title()}")
+        lines.append(f"\n{'=' * 70}")
+        lines.append(f"Analysis: {result.meal_name.title()}")
         if result.meal_id:
-            print(f"Workspace: {result.meal_id}")
+            lines.append(f"Workspace: {result.meal_id}")
         if result.meal_description:
-            print(f"Description: {result.meal_description}")
-        print(f"Template: {result.template_name}")
-        print(f"{'=' * 70}\n")
+            lines.append(f"Description: {result.meal_description}")
+        lines.append(f"Template: {result.template_name}")
+        lines.append(f"{'=' * 70}\n")
         
         # Daily context (if present)
         if result.daily_context and (result.daily_context.has_deficits() or 
                                      result.daily_context.has_excesses()):
-            print("Daily Context (from earlier meals):")
+            lines.append("Daily Context (from earlier meals):")
             
             if result.daily_context.protein_deficit > 0:
-                print(f"  Protein deficit: {result.daily_context.protein_deficit:.1f}g")
+                lines.append(f"  Protein deficit: {result.daily_context.protein_deficit:.1f}g")
             if result.daily_context.fiber_deficit > 0:
-                print(f"  Fiber deficit: {result.daily_context.fiber_deficit:.1f}g")
+                lines.append(f"  Fiber deficit: {result.daily_context.fiber_deficit:.1f}g")
             if result.daily_context.sugar_excess > 0:
-                print(f"  Sugar excess: {result.daily_context.sugar_excess:.1f}g")
+                lines.append(f"  Sugar excess: {result.daily_context.sugar_excess:.1f}g")
             
             if result.daily_context.sugar_budget_remaining > 0:
-                print(f"  Sugar budget remaining: {result.daily_context.sugar_budget_remaining:.1f}g")
+                lines.append(f"  Sugar budget remaining: {result.daily_context.sugar_budget_remaining:.1f}g")
             
-            print()
+            lines.append("")
         
         # Template targets
-        print("Template Targets:")
+        lines.append("Template Targets:")
         targets = result.template.get("targets", {})
         for nutrient, target_def in targets.items():
             # Special case for GL (glycemic load) - display as all caps
@@ -478,43 +511,43 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
             
             unit = target_def.get("unit", "")
             if "min" in target_def and "max" in target_def:
-                print(f"  {display_name:12} {target_def['min']:.1f}-{target_def['max']:.1f}{unit}")
+                lines.append(f"  {display_name:12} {target_def['min']:.1f}-{target_def['max']:.1f}{unit}")
             elif "min" in target_def:
-                print(f"  {display_name:12} ≥ {target_def['min']:.1f}{unit}")
+                lines.append(f"  {display_name:12} ≥ {target_def['min']:.1f}{unit}")
             elif "max" in target_def:
-                print(f"  {display_name:12} ≤ {target_def['max']:.1f}{unit}")        
-        print()
+                lines.append(f"  {display_name:12} ≤ {target_def['max']:.1f}{unit}")        
+        lines.append("")
         
         # Current totals
-        print("Current Meal:")
+        lines.append("Current Meal:")
         totals = result.totals
-        print(f"  Calories:    {totals.calories:.1f}")
-        print(f"  Protein:     {totals.protein_g:.1f}g")
-        print(f"  Carbs:       {totals.carbs_g:.1f}g")
-        print(f"  Fat:         {totals.fat_g:.1f}g")
-        print(f"  Fiber:       {totals.fiber_g:.1f}g")
-        print(f"  GL:          {totals.glycemic_load:.1f}")
-        print()
-        
+        lines.append(f"  Calories:    {totals.calories:.1f}")
+        lines.append(f"  Protein:     {totals.protein_g:.1f}g")
+        lines.append(f"  Carbs:       {totals.carbs_g:.1f}g")
+        lines.append(f"  Fat:         {totals.fat_g:.1f}g")
+        lines.append(f"  Fiber:       {totals.fiber_g:.1f}g")
+        lines.append(f"  GL:          {totals.glycemic_load:.1f}")
+        lines.append("")
+
         # Gaps (deficits)
         if result.gaps:
-            print("Gaps (Below Target):")
+            lines.append("Gaps (Below Target):")
             for gap in result.gaps:
                 priority_mark = "***" if gap.priority == 1 else "**" if gap.priority == 2 else "*"
-                print(f"  {priority_mark} {gap}")
-            print()
+                lines.append(f"  {priority_mark} {gap}")
+            lines.append("")
         
         # Excesses (surpluses)
         if result.excesses:
-            print("Excesses (Above Threshold):")
+            lines.append("Excesses (Above Threshold):")
             for excess in result.excesses:
                 priority_mark = "***" if excess.priority == 1 else "**" if excess.priority == 2 else "*"
-                print(f"  {priority_mark} {excess}")
-            print()
+                lines.append(f"  {priority_mark} {excess}")
+            lines.append("")
         
         # Overall status
         if not result.has_issues():
-            print("✓ All targets met")
+            lines.append("✓ All targets met")
         else:
             gap_count = result.get_gap_count()
             excess_count = result.get_excess_count()
@@ -525,7 +558,68 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
             if excess_count > 0:
                 issues.append(f"{excess_count} excess{'es' if excess_count > 1 else ''}")
             
-            print(f"Status: Found {' and '.join(issues)}")
-            print(f"Use 'recommend {result.meal_id or result.meal_name}' for suggestions")
+            lines.append(f"Status: Found {' and '.join(issues)}")
+            lines.append(f"Use 'recommend {result.meal_id or result.meal_name}' for suggestions")
         
-        print()
+        lines.append("")
+
+        return lines
+    
+    def _print_lines(self, lines: List[str]) -> None:
+        """
+        Print list of lines to console.
+        
+        Args:
+            lines: List of strings to print
+        """
+        for line in lines:
+            print(line)
+
+    def _stage_analysis(self, lines: List[str], date_label: str, meal_name: str, 
+                        target: Optional[str]) -> None:
+        """
+        Stage analysis output to buffer and display to screen.
+        
+        Args:
+            lines: Formatted output lines
+            date_label: Date label ("pending", "workspace", or "YYYY-MM-DD")
+            meal_name: Meal name
+            target: Original target (workspace ID or date, or None for pending)
+        """
+        if not self.ctx.staging_buffer:
+            print("\nWarning: Staging buffer not configured, cannot stage.\n")
+            # Still print to screen
+            self._print_lines(lines)
+            return
+        
+        from meal_planner.data.staging_buffer_manager import StagingBufferManager
+        from datetime import datetime
+        
+        # Print to screen
+        self._print_lines(lines)
+        
+        # Generate ID and label based on source
+        if date_label == "workspace":
+            # Workspace analysis
+            base_id = StagingBufferManager.generate_workspace_id(target, meal_name)
+            item_id = StagingBufferManager.generate_analysis_id(base_id)
+            label = f"Analysis: {meal_name} (workspace {target})"
+        elif date_label == "pending":
+            # Pending analysis
+            today = str(datetime.now().date())
+            base_id = StagingBufferManager.generate_pending_id(meal_name, today)
+            item_id = StagingBufferManager.generate_analysis_id(base_id)
+            label = f"Analysis: " + StagingBufferManager.format_date_label(today, meal_name)
+        else:
+            # Log date analysis
+            base_id = StagingBufferManager.generate_pending_id(meal_name, date_label)
+            item_id = StagingBufferManager.generate_analysis_id(base_id)
+            label = f"Analysis: " + StagingBufferManager.format_date_label(date_label, meal_name)
+        
+        # Add to buffer
+        is_new = self.ctx.staging_buffer.add(item_id, label, lines)
+        
+        if is_new:
+            print(f"\n✓ Staged: {label}\n")
+        else:
+            print(f"\n✓ Replaced staged item: {label}\n")

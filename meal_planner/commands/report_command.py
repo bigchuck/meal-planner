@@ -3,6 +3,7 @@ Report command - detailed nutrient breakdown.
 """
 from typing import List, Dict, Any, Optional, Tuple
 import shlex
+from datetime import datetime, date as date_obj
 
 from .base import Command, register_command
 from meal_planner.reports.report_builder import ReportBuilder
@@ -41,6 +42,12 @@ class ReportCommand(Command):
         show_meals = "--meals" in parts
         show_risk = "--risk" in parts
         verbose = "--verbose" in parts
+        stage = "--stage" in parts
+
+        # --stage auto-enables verbose
+        if stage:
+            verbose = True 
+    
         if show_risk:
             if not self._check_thresholds("Risk analysis"):
                 show_risk = False
@@ -88,26 +95,37 @@ class ReportCommand(Command):
         else:
             report = builder.build_from_items(items, title=f"Report for {date}")
         
-        # Show main report
-        report.print(verbose=verbose)
-        
-        # Show meal breakdown if requested (not shown for single meal filter)
-        if show_meals and not meal_name:
-            if show_risk:
-                self._show_meals(report, True)
-            else:
-                self._show_meals(report)
-        
-        # Show micronutrients if requested
-        if show_nutrients and report:
-            self._show_nutrients(report)
-        
-        # Show recipes if requested
-        if show_recipes and report:
-            self._show_recipes(report)
+        if stage:
+            self._stage_report(report, date, meal_name)
 
-        if show_risk and not show_meals and not meal_name and report:
-            self._show_risk(report)
+            # Show main report (abbreviated if staging, normal otherwise)
+        if stage:
+            # Show abbreviated format to screen
+            lines = report.format_abbreviated()
+            for line in lines:
+                print(line)
+        else:
+            # Normal display
+            report.print(verbose=verbose)
+        
+        if not stage:
+            # Show meal breakdown if requested (not shown for single meal filter)
+            if show_meals and not meal_name:
+                if show_risk:
+                    self._show_meals(report, True)
+                else:
+                    self._show_meals(report)
+            
+            # Show micronutrients if requested
+            if show_nutrients and report:
+                self._show_nutrients(report)
+            
+            # Show recipes if requested
+            if show_recipes and report:
+                self._show_recipes(report)
+
+            if show_risk and not show_meals and not meal_name and report:
+                self._show_risk(report)
     
     def _get_pending_items(self) -> Tuple[Optional[List], str]:
         """Get items from pending day."""
@@ -466,6 +484,46 @@ class ReportCommand(Command):
                         ---------
     Total Risk Score:           72
 
-
-
     """
+
+    def _stage_report(self, report, date: str, meal_name: Optional[str]) -> None:
+        """
+        Stage report to buffer for email delivery.
+        
+        Args:
+            report: Report object
+            date: Date string
+            meal_name: Optional meal name filter
+        """
+        if not self.ctx.staging_buffer:
+            print("\nWarning: Staging buffer not configured, cannot stage.\n")
+            return
+        
+        from meal_planner.data.staging_buffer_manager import StagingBufferManager
+        
+        # Generate abbreviated output
+        content = report.format_abbreviated()
+        
+        # Generate ID and label based on source
+        if meal_name:
+            # Specific meal
+            item_id = StagingBufferManager.generate_pending_id(meal_name, date)
+            label = StagingBufferManager.format_date_label(date, meal_name)
+        else:
+            # Full day report
+            item_id = f"pending:full:{date}"
+            # Format label
+            try:
+                date_dt = datetime.strptime(date, "%Y-%m-%d")
+                date_formatted = date_dt.strftime("%A, %B %d, %Y")
+                label = f"{date_formatted} - FULL DAY"
+            except ValueError:
+                label = f"{date} - FULL DAY"
+        
+        # Add to buffer
+        is_new = self.ctx.staging_buffer.add(item_id, label, content)
+        
+        if is_new:
+            print(f"\n✓ Staged: {label}\n")
+        else:
+            print(f"\n✓ Replaced staged item: {label}\n")

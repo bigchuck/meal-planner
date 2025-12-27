@@ -1438,11 +1438,11 @@ Notes:
         """
         Show detailed report for candidate.
         
-        Usage: plan report <id> [--recipes] [--nutrients] [--verbose]
+        Usage: plan report <id> [--recipes] [--nutrients] [--verbose] [--stage]
         Example: plan report 2a --nutrients
         """
         if len(args) < 1:
-            print("Usage: plan report <id> [--recipes] [--nutrients] [--verbose]")
+            print("Usage: plan report <id> [--recipes] [--nutrients] [--verbose] [--stage]")
             print("Example: plan report 2a --nutrients")
             return
         
@@ -1450,7 +1450,12 @@ Notes:
         show_recipes = '--recipes' in args or '--recipe' in args
         show_nutrients = '--nutrients' in args or '--nutrient' in args or '--micro' in args
         verbose = "--verbose" in args
+        stage = "--stage" in args
         
+        # --stage auto-enables verbose
+        if stage:
+            verbose = True
+
         # Find candidate
         candidate = self._find_candidate(candidate_id)
         if not candidate:
@@ -1471,16 +1476,27 @@ Notes:
         
         report = builder.build_from_items(candidate['items'], title=title)
         
-        # Show main report
-        report.print(verbose=verbose)
+        if stage:
+            self._stage_workspace_report(report, candidate_id, candidate)
+
+        # Show main report (abbreviated if staging, normal otherwise)
+        if stage:
+            # Show abbreviated format
+            lines = report.format_abbreviated()
+            for line in lines:
+                print(line)
+        else:
+            # Normal display
+            report.print(verbose=verbose)        
+
+        if not stage:
+            # Show micronutrients if requested
+            if show_nutrients and self.ctx.nutrients:
+                self._show_report_nutrients(report)
         
-        # Show micronutrients if requested
-        if show_nutrients and self.ctx.nutrients:
-            self._show_report_nutrients(report)
-        
-        # Show recipes if requested
-        if show_recipes and self.ctx.recipes:
-            self._show_report_recipes(report)
+            # Show recipes if requested
+            if show_recipes and self.ctx.recipes:
+                self._show_report_recipes(report)
     
     def _show_report_nutrients(self, report) -> None:
         """Show micronutrients for codes in report."""
@@ -1807,3 +1823,44 @@ Notes:
                     return True
         
         return False
+    
+    def _stage_workspace_report(self, report, ws_id: str, candidate: dict) -> None:
+        """
+        Stage workspace meal report to buffer.
+        
+        Args:
+            report: Report object
+            ws_id: Workspace ID
+            candidate: Candidate dictionary
+        """
+        if not self.ctx.staging_buffer:
+            print("\nWarning: Staging buffer not configured, cannot stage.\n")
+            return
+        
+        from meal_planner.data.staging_buffer_manager import StagingBufferManager
+        
+        # Generate abbreviated output
+        content = report.format_abbreviated()
+        
+        # Generate ID and label
+        meal_name = candidate.get('meal_name')
+        description = candidate.get('description')
+        
+        # Use description if provided, otherwise auto-generate
+        if description:
+            label = description
+        elif meal_name:
+            label = f"{meal_name} (workspace)"
+        else:
+            label = f"Workspace meal {ws_id}"
+        
+        # ID always includes workspace ID
+        item_id = StagingBufferManager.generate_workspace_id(ws_id, meal_name)
+        
+        # Add to buffer
+        is_new = self.ctx.staging_buffer.add(item_id, label, content)
+        
+        if is_new:
+            print(f"\n✓ Staged: {label}\n")
+        else:
+            print(f"\n✓ Replaced staged item: {label}\n")
