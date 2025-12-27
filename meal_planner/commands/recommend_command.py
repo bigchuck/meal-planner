@@ -155,6 +155,10 @@ class RecommendCommand(Command, CommandHistoryMixin):
             # Re-parse the historical params
             print(f"Using history #{use_index}: {params}")
             
+            # Prepend target if provided in current command
+            if target:
+                params = f"{target} {params}"
+
             # Re-execute with historical params
             return self.execute(params)
 

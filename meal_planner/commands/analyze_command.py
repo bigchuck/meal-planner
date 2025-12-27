@@ -148,6 +148,10 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
                 print(f"Use: analyze --history 10 --meal {meal_name}")
                 return        
             print(f"Using history #{use_index}: {params}")
+            # Prepend target if provided in current command
+            if target:
+                params = f"{target} {params}"
+    
             return self.execute(params)
    
         if not template_key:
