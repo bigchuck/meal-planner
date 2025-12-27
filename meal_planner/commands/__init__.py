@@ -23,6 +23,7 @@ from . import plan_command
 from . import threshold_command
 from . import analyze_command
 from . import recommend_command
+from . import stage_command
 
 __all__ = [
     'Command',

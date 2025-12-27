@@ -46,6 +46,7 @@ THRESHOLDS_FILE = DATA_PATH / "meal_plan_config.json"
 WORKSPACE_FILE = DATA_PATH / "meal_plan_workspace.json"
 USER_PREFS_FILE = DATA_PATH / "meal_plan_user_preferences.json"
 CONFIG_FILE = DATA_PATH / "meal_planning_config.json"
+STAGING_BUFFER_FILE = DATA_PATH / "staging_buffer.json"
 
 # Usage tracking
 TRACK_USAGE = True  # Set to False to disable usage tracking

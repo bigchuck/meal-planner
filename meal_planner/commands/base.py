@@ -6,7 +6,6 @@ from typing import Dict, Type, Optional, List, Set
 from pathlib import Path
 
 from meal_planner.data import MasterLoader, LogManager, PendingManager, ThresholdsManager
-from meal_planner.data.user_preferences_manager import UserPreferencesManager
 from datetime import datetime
 
 
@@ -20,7 +19,8 @@ class CommandContext:
     def __init__(self, master_file: Path, log_file: Path, pending_file: Path,
                  nutrients_file: Path = None, recipes_file: Path = None,
                  aliases_file: Path = None, thresholds_file: Path = None,
-                 user_prefs_file: Path = None, workspace_file: Path = None):
+                 user_prefs_file: Path = None, workspace_file: Path = None,
+                 staging_buffer_file: Path = None):
         """
         Initialize command context.
         
@@ -37,6 +37,8 @@ class CommandContext:
         from meal_planner.data.recipes_manager import RecipesManager
         from meal_planner.data.alias_manager import AliasManager
         from meal_planner.data.workspace_manager import WorkspaceManager
+        from meal_planner.data.user_preferences_manager import UserPreferencesManager
+        from meal_planner.data.staging_buffer_manager import StagingBufferManager
         
         self.master = MasterLoader(master_file, nutrients_file, recipes_file)
         self.log = LogManager(log_file)
@@ -93,6 +95,10 @@ class CommandContext:
                 "next_numeric_id": 1,
                 "next_invented_id": 1
             }
+
+        self.staging_buffer = None
+        if staging_buffer_file:
+            self.staging_buffer = StagingBufferManager(staging_buffer_file)
 
     def _determine_initial_pending_source(self) -> str:
         """

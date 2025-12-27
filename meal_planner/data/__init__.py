@@ -8,6 +8,7 @@ from .log_manager import LogManager, ensure_log, save_log
 from .pending_manager import PendingManager, load_pending, save_pending, clear_pending
 from .alias_manager import AliasManager
 from .thresholds_manager import ThresholdsManager
+from .staging_buffer_manager import StagingBufferManager
 
 __all__ = [
     # Classes
@@ -16,6 +17,7 @@ __all__ = [
     'PendingManager',
     'AliasManager',
     'ThresholdsManager',
+    'StagingBufferManager',
     # Backward-compatible functions
     'load_master',
     'lookup_code_row',
