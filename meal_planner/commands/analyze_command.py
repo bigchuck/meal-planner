@@ -205,10 +205,12 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
         return bool(re.match(r'^\d{4}-\d{2}-\d{2}$', arg))
     
     def _is_workspace_id(self, arg: str) -> bool:
-        """Check if argument looks like a workspace ID."""
-        # Numeric (1, 2, 123) or numeric with letter (123a, 2b)
-        # or N-prefix (N1, N2, N1a)
-        return bool(re.match(r'^(\d+[a-z]?|N\d+[a-z]?)$', arg, re.IGNORECASE))
+        """Check if argument exists as a workspace ID."""
+        # Actually look it up in the workspace
+        ws = self.ctx.planning_workspace
+        for candidate in ws['candidates']:
+            if candidate['id'].upper() == arg.upper():
+                return True
     
     def _analyze_workspace(self, workspace_id: str, template_path: str, meal_name: str, 
                            stage: bool = False) -> Tuple[bool, Optional[List[str]], Optional[str]]: 

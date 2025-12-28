@@ -13,8 +13,7 @@ import re
 from .base import Command, register_command
 from meal_planner.reports.report_builder import ReportBuilder
 from meal_planner.utils.time_utils import categorize_time, normalize_meal_name, MEAL_NAMES
-from meal_planner.parsers import CodeParser, eval_multiplier_expression
-
+from meal_planner.parsers import CodeParser, eval_multiplier_expression, expand_aliases
 @register_command
 class PlanCommand(Command):
     """Meal planning workspace."""
@@ -791,7 +790,7 @@ Notes:
             return
         
         # Parse new codes
-        new_items = CodeParser.parse(codes_str)
+        new_items = expand_aliases(codes_str, self.ctx.aliases)
         if not new_items:
             print("No valid codes found.")
             return
@@ -1235,7 +1234,7 @@ Notes:
             return
         
         # Parse new codes
-        new_items = CodeParser.parse(codes_str)
+        new_items = expand_aliases(codes_str, self.ctx.aliases)
         if not new_items:
             print("No valid codes found.")
             return

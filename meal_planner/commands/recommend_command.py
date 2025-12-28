@@ -820,24 +820,18 @@ class RecommendCommand(Command, CommandHistoryMixin):
     # =========================================================================
     
     def _is_workspace_id(self, target: str) -> bool:
-        """Check if target looks like a workspace ID."""
-        # Workspace IDs are numeric or numeric + letter (e.g., "1", "2a", "123b")
+        """Check if target exists as a workspace ID."""
         target = target.strip()
         
         if not target:
             return False
         
-        # Must start with digit
-        if not target[0].isdigit():
-            return False
-        
-        # Rest must be digits or single letter at end
-        if len(target) == 1:
-            return True
-        
-        # Check pattern: digits + optional letter
-        import re
-        return bool(re.match(r'^\d+[a-zA-Z]?$', target))
+        # Actually look it up in the workspace
+        ws = self.ctx.planning_workspace
+        for candidate in ws['candidates']:
+            if candidate['id'].upper() == target.upper():
+                return True
+        return False
     
     def _extract_meal_items_from_pending(
         self,
