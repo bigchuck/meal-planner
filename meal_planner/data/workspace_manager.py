@@ -139,8 +139,11 @@ class WorkspaceManager:
                 "parent_id": candidate.get("parent_id"),
                 "ancestor_id": candidate.get("ancestor_id"),
                 "modification_log": candidate.get("modification_log", []),
-                "meets_constraints": candidate.get("meets_constraints", True)
+                "meets_constraints": candidate.get("meets_constraints", True),
+                "history": candidate.get("history", []),  # NEW
+                "immutable": candidate.get("immutable", False)  # NEW
             }
+
         
         return workspace
     
@@ -176,7 +179,9 @@ class WorkspaceManager:
                 "parent_id": meal_data.get("parent_id"),
                 "ancestor_id": meal_data.get("ancestor_id"),
                 "modification_log": meal_data.get("modification_log", []),
-                "meets_constraints": meal_data.get("meets_constraints", True)
+                "meets_constraints": meal_data.get("meets_constraints", True),
+                "history": meal_data.get("history", []),
+                "immutable": meal_data.get("immutable", False)
             }
             planning_ws["candidates"].append(candidate)
         
@@ -289,3 +294,46 @@ class WorkspaceManager:
             return meal_history[:limit]
         
         return meal_history.copy()
+
+    def append_plan_history(self, workspace: Dict[str, Any], plan_id: str, 
+                        command: str, note: str) -> None:
+        """
+        Append a history entry to a plan's history.
+        
+        Args:
+            workspace: Workspace dictionary (new format)
+            plan_id: Plan ID
+            command: Command string
+            note: Description of what happened
+        """
+        if "meals" not in workspace or plan_id not in workspace["meals"]:
+            return
+        
+        meal = workspace["meals"][plan_id]
+        
+        if "history" not in meal:
+            meal["history"] = []
+        
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+        meal["history"].append({
+            'timestamp': timestamp,
+            'command': command,
+            'note': note
+        })
+
+    def get_plan_history(self, workspace: Dict[str, Any], plan_id: str) -> List[Dict[str, str]]:
+        """
+        Get history for a plan.
+        
+        Args:
+            workspace: Workspace dictionary (new format)
+            plan_id: Plan ID
+        
+        Returns:
+            List of history entries
+        """
+        if "meals" not in workspace or plan_id not in workspace["meals"]:
+            return []
+        
+        meal = workspace["meals"][plan_id]
+        return meal.get("history", [])

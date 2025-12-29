@@ -72,6 +72,8 @@ class PlanCommand(Command):
             self._describe(subargs)
         elif subcommand == "rename":
             self._rename(subargs)        
+        elif subcommand == "history":
+            self._history(subargs)        
         else:
             print(f"\nUnknown subcommand: {subcommand}")
             print("Use 'plan help' to see available subcommands\n")
@@ -403,39 +405,48 @@ Notes:
             return
         
         # Group by meal type
-        by_meal = {}
+        meals_by_type = {}
         for c in ws['candidates']:
-            meal = c['meal_name']
-            if meal not in by_meal:
-                by_meal[meal] = []
-            by_meal[meal].append(c)
+            meal_type = c.get('meal_name', 'unknown')
+            if meal_type not in meals_by_type:
+                meals_by_type[meal_type] = []
+            meals_by_type[meal_type].append(c)  
         
         print("\n=== Planning Workspace ===\n")
         
-        for meal_name in sorted(by_meal.keys()):
-            print(f"{meal_name}:")
-            candidates = by_meal[meal_name]
+        for meal_type in sorted(meals_by_type.keys()):
+            candidates = meals_by_type[meal_type]
+            print(f"{meal_type.upper()}:")
             
             for c in candidates:
-                status = "[OK]" if c.get("meets_constraints", True) else "[X]"  # Changed
+                c_id = c['id']
+                items = c.get('items', [])
+                totals = c.get('totals', {})
                 
-                tags = []
-                if c.get("modified"):
-                    tags.append("Modified")
-                if c.get("invented"):
-                    tags.append("Invented")
+                # Get source info for display
+                source_date = c.get('source_date', '')
+                source_info = f"from {source_date}" if source_date else ""
+                if c.get('type') == 'invented':
+                    source_info = "invented"
+                elif c.get('parent_id'):
+                    parent = c.get('parent_id')
+                    source_info = f"from {parent}"
                 
-                tag_str = " " + " ".join(tags) if tags else ""
+                # Immutable indicator
+                immutable = c.get('immutable', False)
+                mut_indicator = "-" if immutable else "✓"
                 
-                desc = c.get("description", "")
-                desc_str = f" - {desc}" if desc else ""
-
-                source = c.get("source_date", "")
-                if source:
-                    print(f"  #{c['id']} [{source}]{tag_str} {status}{desc_str}")
-                else:
-                    print(f"  #{c['id']}{tag_str} {status}{desc_str}")
-            
+                # Format line
+                cal = totals.get('cal', 0)
+                prot = totals.get('prot_g', 0)
+                item_count = len(items)
+                
+                desc = c.get('description', '')
+                desc_str = f' - {desc}' if desc else ''
+                
+                print(f"  {c_id:<6} {mut_indicator}  {source_info:20}  "
+                    f"{item_count} items  {cal:.0f} cal  {prot:.0f}g prot{desc_str}")
+                    
             print()
         
         print("Use 'plan show <id>' for details")
@@ -623,13 +634,26 @@ Notes:
         candidate_copy['id'] = id_str
         candidate_copy['parent_id'] = None
         candidate_copy['ancestor_id'] = id_str
-    
+        candidate_copy['immutable'] = True  # NEW: Search results are immutable
+        
+        # NEW: Add history entry
+        from datetime import datetime
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+        source_date = candidate_copy.get('source_date', 'unknown')
+        meal_name = candidate_copy.get('meal_name', 'meal')
+        
+        candidate_copy['history'] = [{
+            'timestamp': timestamp,
+            'command': 'plan search',  # Will be updated by caller if needed
+            'note': f'created plan {id_str} from {source_date} {meal_name}'
+        }]
+
         ws['candidates'].append(candidate_copy)
 
         self.ctx.save_workspace()
 
         return id_str
-    
+        
     def _extract_meal_items_in_order(self, all_items: List[Dict],
                                      target_meal: str) -> List[Dict]:
         """Extract items belonging to target meal, preserving order."""
@@ -766,11 +790,11 @@ Notes:
     > plan show 1
     > plan discard
     """
-    
-    
+
+
     def _add(self, args: List[str]) -> None:
         """
-        Add items to existing candidate (creates variant).
+        Add items to candidate.
         
         Usage: plan add <id> <codes>
         Example: plan add 2 VE.T1, FR.4 x0.5
@@ -795,41 +819,65 @@ Notes:
             print("No valid codes found.")
             return
 
-        # Check if invented - modify in-place
+        # Build command and note
+        command_str = f"plan add {candidate_id} {codes_str}"
+        edit_note = f"added {len(new_items)} item(s) to plan {candidate_id}"
+        
+        # Check if invented - modify in-place regardless
         if candidate.get('type') == 'invented':
             candidate['items'].extend(new_items)
+            if 'modification_log' not in candidate:
+                candidate['modification_log'] = []
             candidate['modification_log'].append(f"Added {len(new_items)} item(s)")
             candidate['totals'] = self._calculate_totals(candidate['items'])
             
+            # Append to history
+            from datetime import datetime
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+            if 'history' not in candidate:
+                candidate['history'] = []
+            candidate['history'].append({
+                'timestamp': timestamp,
+                'command': command_str,
+                'note': edit_note
+            })
+            
+            self.ctx.save_workspace()
             print(f"Updated #{candidate['id']} (added {len(new_items)} item(s))")
             self._show_detail(candidate['id'])
             return
 
-        # Create variant
-        variant = copy.deepcopy(candidate)
-        variant['items'].extend(new_items)
+        # Check mutability and auto-copy if needed
+        target, was_copied, new_id = self._ensure_mutable(candidate, command_str, edit_note)
         
-        # Track modification
-        variant['parent_id'] = candidate['id']
-        variant['ancestor_id'] = candidate.get('ancestor_id', candidate['id'])
-        if 'modification_log' not in variant:
-            variant['modification_log'] = []
-        variant['modification_log'].append(f"Added {len(new_items)} item(s)")
+        # Modify the target (whether it's a new copy or existing mutable)
+        target['items'].extend(new_items)
+        if 'modification_log' not in target:
+            target['modification_log'] = []
+        target['modification_log'].append(f"Added {len(new_items)} item(s)")
+        target['totals'] = self._calculate_totals(target['items'])
         
-        # Assign variant ID and add to workspace
-        new_id = self._assign_variant_id(candidate['id'])
-        variant['id'] = new_id
+        # If not copied, need to add history entry (copied already has it)
+        if not was_copied:
+            from datetime import datetime
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+            if 'history' not in target:
+                target['history'] = []
+            target['history'].append({
+                'timestamp': timestamp,
+                'command': command_str,
+                'note': edit_note
+            })
         
-        ws = self.ctx.planning_workspace
-        ws['candidates'].append(variant)
-        
-        # Recalculate totals
-        variant['totals'] = self._calculate_totals(variant['items'])
-
         self.ctx.save_workspace()
         
-        print(f"Created variant #{new_id} (added {len(new_items)} item(s) to #{candidate_id})")
-        self._show_detail(new_id)
+        if was_copied:
+            print(f"Created {new_id} from {candidate_id} and added {len(new_items)} item(s)")
+        else:
+            print(f"Updated #{target['id']} (added {len(new_items)} item(s))")
+        
+        self._show_detail(target['id'])
+
     
     def _rm(self, args: List[str]) -> None:
         """
@@ -1317,6 +1365,9 @@ Notes:
         invented_id = f"N{ws['next_invented_id']}"
         ws['next_invented_id'] += 1
         
+        from datetime import datetime
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+
         # Create blank candidate
         candidate = {
             'id': invented_id,
@@ -1327,7 +1378,14 @@ Notes:
             'source_date': None,
             'source_time': None,
             'constraints_met': True,
-            'modification_log': []
+            'modification_log': [],
+            'created': datetime.now().isoformat(),
+            'immutable': False,  # NEW: Invented plans are mutable
+            'history': [{  # NEW: Add history
+                'timestamp': timestamp,
+                'command': f'plan invent {meal_name}',
+                'note': f'created plan {invented_id} (invented)'
+            }]
         }
         
         ws['candidates'].append(candidate)
@@ -1601,62 +1659,7 @@ Notes:
             if formatted:
                 print(formatted)
 
-    def _copy(self, args: List[str]) -> None:
-        """
-        Copy workspace meal, stripping analyzed_as field.
-        
-        Usage: plan copy <id>
-        Example: plan copy 123a
-        """
-        if not args:
-            print("Usage: plan copy <id>")
-            print("Example: plan copy 123a")
-            return
-        
-        candidate_id = args[0]
-        
-        # Find candidate
-        candidate = self._find_candidate(candidate_id)
-        if not candidate:
-            print(f"Candidate '{candidate_id}' not found.")
-            return
-        
-        # Deep copy
-        import copy
-        variant = copy.deepcopy(candidate)
-        
-        # Strip analyzed_as
-        if "analyzed_as" in variant:
-            del variant["analyzed_as"]
-        
-        # Update description
-        orig_desc = variant.get("description", "")
-        if orig_desc:
-            variant["description"] = f"{orig_desc} (copy)"
-        else:
-            variant["description"] = "(copy)"
-        
-        # Assign new ID
-        new_id = self._assign_variant_id(candidate_id)
-        variant["id"] = new_id
-        variant["parent_id"] = candidate_id
-        variant["ancestor_id"] = candidate.get("ancestor_id", candidate_id)
-        
-        if "modification_log" not in variant:
-            variant["modification_log"] = []
-        variant["modification_log"].append("Copied from #{0}".format(candidate_id))
-        
-        # Add to workspace
-        ws = self.ctx.planning_workspace
-        ws["candidates"].append(variant)
-        
-        # Auto-save
-        self.ctx.save_workspace()
-        
-        print(f"Created {new_id} (copy of {candidate_id})")
-        if variant.get("description"):
-            print(f"Description: {variant['description']}")
-
+   
     def _describe(self, args: List[str]) -> None:
         """
         Set description for workspace meal.
@@ -1863,3 +1866,175 @@ Notes:
             print(f"\n✓ Staged: {label}\n")
         else:
             print(f"\n✓ Replaced staged item: {label}\n")
+
+    def _history(self, args: List[str]) -> None:
+        """
+        Show history of operations for a plan.
+        
+        Usage: plan history <plan_id>
+        Example: plan history 1a
+        """
+        if len(args) < 1:
+            print("Usage: plan history <plan_id>")
+            print("Example: plan history 1a")
+            return
+        
+        plan_id = args[0]
+        
+        # Find candidate
+        candidate = self._find_candidate(plan_id)
+        if not candidate:
+            print(f"Plan {plan_id} not found")
+            return
+        
+        history = candidate.get('history', [])
+        if not history:
+            print(f"No history for plan {plan_id}")
+            return
+        
+        # Print each history entry
+        for entry in history:
+            timestamp = entry['timestamp']
+            command = entry['command']
+            note = entry['note']
+            print(f"{timestamp}  {command:45}  [{note}]")
+
+    def _copy(self, args: List[str]) -> None:
+        """
+        Copy a plan to a new plan ID (explicit fork).
+        
+        Usage: plan copy <source_id> [<dest_id>]
+        Example: plan copy 1a
+        Example: plan copy 1a 1c
+        """
+        if not args:
+            print("Usage: plan copy <source_id> [<dest_id>]")
+            print("Example: plan copy 1a")
+            print("Example: plan copy 1a 1c")
+            return
+        
+        source_id = args[0]
+        dest_id = args[1] if len(args) > 1 else None
+        
+        # Find source candidate
+        source = self._find_candidate(source_id)
+        if not source:
+            print(f"Plan {source_id} not found")
+            return
+        
+        # Deep copy
+        import copy
+        variant = copy.deepcopy(source)
+        
+        # Determine new ID
+        if dest_id:
+            # Check if dest_id already exists
+            if self._find_candidate(dest_id):
+                print(f"Error: Plan {dest_id} already exists")
+                return
+            new_id = dest_id
+        else:
+            # Auto-generate
+            new_id = self._assign_variant_id(source_id)
+        
+        # Update variant
+        variant['id'] = new_id
+        variant['parent_id'] = source_id
+        variant['ancestor_id'] = source.get('ancestor_id', source_id)
+        variant['immutable'] = False  # Copies are always mutable
+        
+        # Strip analyzed_as (existing behavior)
+        if "analyzed_as" in variant:
+            del variant["analyzed_as"]
+        
+        # Update description
+        orig_desc = variant.get("description", "")
+        if orig_desc:
+            variant["description"] = f"{orig_desc} (copy)"
+        else:
+            variant["description"] = "(copy)"
+        
+        # Append copy operation to history
+        from datetime import datetime
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+        if 'history' not in variant:
+            variant['history'] = []
+        variant['history'].append({
+            'timestamp': timestamp,
+            'command': f'plan copy {source_id} {new_id}',
+            'note': f'created plan {new_id} from plan {source_id}'
+        })
+        
+        # Update modification log
+        if "modification_log" not in variant:
+            variant["modification_log"] = []
+        variant["modification_log"].append(f"Copied from #{source_id}")
+        
+        # Add to workspace
+        ws = self.ctx.planning_workspace
+        ws["candidates"].append(variant)
+        
+        # Auto-save
+        self.ctx.save_workspace()
+        
+        print(f"Created {new_id} (copy of {source_id})")
+        if variant.get("description"):
+            print(f"Description: {variant['description']}")
+
+    def _ensure_mutable(self, candidate: Dict, command_str: str, edit_note: str) -> tuple:
+        """
+        Ensure candidate is mutable, auto-creating copy if immutable.
+        
+        Args:
+            candidate: The candidate to check
+            command_str: The command being executed
+            edit_note: Note describing the edit operation
+        
+        Returns:
+            Tuple of (candidate_to_modify, was_copied, new_id_if_copied)
+        """
+        if not candidate.get('immutable', False):
+            # Already mutable, just return it
+            return candidate, False, None
+        
+        # Auto-create mutable copy
+        import copy
+        from datetime import datetime
+        
+        ws = self.ctx.planning_workspace
+        old_id = candidate['id']
+        new_id = self._assign_variant_id(old_id)
+        
+        variant = copy.deepcopy(candidate)
+        variant['id'] = new_id
+        variant['parent_id'] = old_id
+        variant['ancestor_id'] = candidate.get('ancestor_id', old_id)
+        variant['immutable'] = False
+
+        # Ensure modification_log exists
+        if 'modification_log' not in variant:
+            variant['modification_log'] = []
+
+        # Append auto-copy history entry
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+        if 'history' not in variant:
+            variant['history'] = []
+        
+        variant['history'].append({
+            'timestamp': timestamp,
+            'command': command_str,
+            'note': f'auto-created plan {new_id} from immutable plan {old_id}'
+        })
+        
+        # Append edit history entry
+        edit_note_for_new = edit_note.replace(f'plan {old_id}', f'plan {new_id}')
+        variant['history'].append({
+            'timestamp': timestamp,
+            'command': command_str,          
+            'note': edit_note_for_new
+        })
+        
+        # Add to workspace
+        ws['candidates'].append(variant)
+        
+        return variant, True, new_id
