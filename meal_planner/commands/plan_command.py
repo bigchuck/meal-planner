@@ -1807,7 +1807,7 @@ Notes:
         except Exception:
             # If parsing fails, treat as simple code check
             simple_code = code_filter.upper().strip()
-            return simple_code in meal_codes
+            return any(code.startswith(simple_code) for code in meal_codes)
         
         if not clauses:
             return True  # Empty filter matches all
@@ -1815,11 +1815,17 @@ Notes:
         # Check if any clause matches (OR between clauses)
         for clause in clauses:
             # All positive terms must be present (AND within clause)
-            all_pos_match = all(term.upper() in meal_codes for term in clause['pos'])
+            all_pos_match = all(
+                any(code.startswith(term.upper()) for code in meal_codes)
+                for term in clause['pos']
+            )
             
             if all_pos_match:
                 # No negative terms can be present (NOT)
-                no_neg_match = not any(term.upper() in meal_codes for term in clause['neg'])
+                no_neg_match = not any(
+                    any(code.startswith(term.upper()) for code in meal_codes)
+                    for term in clause['neg']
+                    )
                 
                 if no_neg_match:
                     return True
