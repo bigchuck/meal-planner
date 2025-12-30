@@ -176,7 +176,8 @@ class ReportCommand(Command):
             if isinstance(item, dict) and 'time' in item and 'code' not in item:
                 # Categorize meal name from time
                 time_str = item.get('time', '')
-                current_meal = categorize_time(time_str)
+                meal_override = item.get('meal_override')
+                current_meal = categorize_time(time_str, meal_override)
             elif current_meal == meal_name:
                 # Include this item if we're in the target meal
                 filtered.append(item)
