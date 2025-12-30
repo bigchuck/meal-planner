@@ -9,11 +9,13 @@ import shlex
 import copy
 from typing import List, Dict, Any, Optional, Tuple
 import re
+from datetime import datetime, date, timedelta
 
 from .base import Command, register_command
 from meal_planner.reports.report_builder import ReportBuilder
 from meal_planner.utils.time_utils import categorize_time, normalize_meal_name, MEAL_NAMES
 from meal_planner.parsers import CodeParser, eval_multiplier_expression, expand_aliases
+
 @register_command
 class PlanCommand(Command):
     """Meal planning workspace."""
@@ -262,7 +264,6 @@ Notes:
         print()
       
         # Get log entries
-        from datetime import date, timedelta
         end_date = date.today()
         start_date = end_date - timedelta(days=history_count)
         
@@ -636,8 +637,6 @@ Notes:
         candidate_copy['ancestor_id'] = id_str
         candidate_copy['immutable'] = True  # NEW: Search results are immutable
         
-        # NEW: Add history entry
-        from datetime import datetime
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
         source_date = candidate_copy.get('source_date', 'unknown')
         meal_name = candidate_copy.get('meal_name', 'meal')
@@ -820,7 +819,7 @@ Notes:
             return
 
         # Build command and note
-        command_str = f"plan add {candidate_id} {codes_str}"
+        command_str = f"add {candidate_id} {codes_str}"
         edit_note = f"added {len(new_items)} item(s) to plan {candidate_id}"
         
         # Check if invented - modify in-place regardless
@@ -832,7 +831,6 @@ Notes:
             candidate['totals'] = self._calculate_totals(candidate['items'])
             
             # Append to history
-            from datetime import datetime
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
             if 'history' not in candidate:
                 candidate['history'] = []
@@ -859,7 +857,6 @@ Notes:
         
         # If not copied, need to add history entry (copied already has it)
         if not was_copied:
-            from datetime import datetime
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
             if 'history' not in target:
                 target['history'] = []
@@ -993,6 +990,10 @@ Notes:
             print("No valid indices.")
             return
 
+        # Build command and note
+        command_str = f"rm {candidate_id} {indices_str}"
+        edit_note = f"Removed {len(indices)} item(s) on plan {candidate_id}"
+
         # Check if invented - modify in-place
         if candidate.get('type') == 'invented':
             # Remove items in reverse order
@@ -1000,42 +1001,55 @@ Notes:
                 del candidate['items'][idx]
             candidate['modification_log'].append(f"Removed {len(indices)} item(s)")
             candidate['totals'] = self._calculate_totals(candidate['items'])
-            
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+            if 'history' not in candidate:
+                candidate['history'] = []
+            candidate['history'].append({
+                'timestamp': timestamp,
+                'command': command_str,
+                'note': edit_note
+            })
+    
             self.ctx.save_workspace()
             
             print(f"Updated #{candidate['id']} (removed {len(indices)} item(s))")
             self._show_detail(candidate['id'])
             return
         
-        # Create variant
-        import copy
-        variant = copy.deepcopy(candidate)
+        target, was_copied, new_id = self._ensure_mutable(candidate, command_str, edit_note)
         
         # Remove items in reverse order
         for idx in reversed(sorted(indices)):
-            del variant['items'][idx]
+            del target['items'][idx]
         
         # Track modification
-        variant['parent_id'] = candidate['id']
-        variant['ancestor_id'] = candidate.get('ancestor_id', candidate['id'])
-        if 'modification_log' not in variant:
-            variant['modification_log'] = []
-        variant['modification_log'].append(f"Removed {len(indices)} item(s)")
-        
-        # Assign variant ID and add to workspace
-        new_id = self._assign_variant_id(candidate['id'])
-        variant['id'] = new_id
-        
-        ws = self.ctx.planning_workspace
-        ws['candidates'].append(variant)
+        target['parent_id'] = candidate['id']
+        target['ancestor_id'] = candidate.get('ancestor_id', candidate['id'])
+        if 'modification_log' not in target:
+            target['modification_log'] = []
+        target['modification_log'].append(f"Removed {len(indices)} item(s)")
         
         # Recalculate totals
-        variant['totals'] = self._calculate_totals(variant['items'])
+        target['totals'] = self._calculate_totals(target['items'])
+
+        if not was_copied:
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+            if 'history' not in target:
+                target['history'] = []
+            target['history'].append({
+                'timestamp': timestamp,
+                'command': command_str,
+                'note': edit_note
+            })
         
         self.ctx.save_workspace()
         
-        print(f"Created variant #{new_id} (removed {len(indices)} item(s) from #{candidate_id})")
-        self._show_detail(new_id)
+        if was_copied:
+            print(f"Created {new_id} from {candidate_id} and removed {len(indices)} item(s)")
+        else:
+            print(f"Updated #{target['id']} (removed {len(indices)} item(s))")
+        
+        self._show_detail(target['id'])
 
     def _parse_candidate_ids(self, ids_str: str) -> List[str]:
         """
@@ -1110,6 +1124,10 @@ Notes:
         if not (1 <= from_idx <= n and 1 <= to_idx <= n):
             print(f"Indices must be between 1 and {n}.")
             return
+        
+        # Build command and note
+        command_str = f"move {candidate_id} {from_idx} {to_idx}"
+        edit_note = f"Moved {from_idx} to {to_idx} on plan {candidate_id}"
 
         # Check if invented - modify in-place
         if candidate.get('type') == 'invented':
@@ -1121,42 +1139,57 @@ Notes:
             candidate['items'].insert(to_idx, item)
             candidate['modification_log'].append(f"Moved item from {from_idx+1} to {to_idx+1}")
             candidate['totals'] = self._calculate_totals(candidate['items'])
+
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+            if 'history' not in candidate:
+                candidate['history'] = []
+            candidate['history'].append({
+                'timestamp': timestamp,
+                'command': command_str,
+                'note': edit_note
+            })
+            
+            self.ctx.save_workspace()
             
             print(f"Updated #{candidate['id']} (moved item)")
             self._show_detail(candidate['id'])
             return
         
-        # Create variant
-        variant = copy.deepcopy(candidate)
+        target, was_copied, new_id = self._ensure_mutable(candidate, command_str, edit_note)
         
         # Convert to 0-based and move
         from_idx -= 1
         to_idx -= 1
         
-        item = variant['items'].pop(from_idx)
-        variant['items'].insert(to_idx, item)
+        item = target['items'].pop(from_idx)
+        target['items'].insert(to_idx, item)
         
         # Track modification
-        variant['parent_id'] = candidate['id']
-        variant['ancestor_id'] = candidate.get('ancestor_id', candidate['id'])
-        if 'modification_log' not in variant:
-            variant['modification_log'] = []
-        variant['modification_log'].append(f"Moved item from {from_idx+1} to {to_idx+1}")
-        
-        # Assign variant ID and add to workspace
-        new_id = self._assign_variant_id(candidate['id'])
-        variant['id'] = new_id
-        
-        ws = self.ctx.planning_workspace
-        ws['candidates'].append(variant)
+        if 'modification_log' not in target:
+            target['modification_log'] = []
+        target['modification_log'].append(f"Moved item from {from_idx+1} to {to_idx+1}")
         
         # Recalculate totals
-        variant['totals'] = self._calculate_totals(variant['items'])
+        target['totals'] = self._calculate_totals(target['items'])
+
+        if not was_copied:
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+            if 'history' not in target:
+                target['history'] = []
+            target['history'].append({
+                'timestamp': timestamp,
+                'command': command_str,
+                'note': edit_note
+            })
 
         self.ctx.save_workspace()
         
-        print(f"Created variant #{new_id} (moved item in #{candidate_id})")
-        self._show_detail(new_id)
+        if was_copied:
+            print(f"Created {new_id} from {candidate_id} and moved item in #{target['id']}")
+        else:
+            print(f"Updated #{target['id']} (moved item in #{target['id']})")
+
+        self._show_detail(target['id'])
     
     def _setmult(self, args: List[str]) -> None:
         """
@@ -1211,6 +1244,10 @@ Notes:
             print("Cannot set multiplier on time marker.")
             return
 
+        # Build command and note
+        command_str = f"setmult {candidate_id} {idx} {mult_str}"
+        edit_note = f"Set multiplier {idx} to {mult_str} on plan {candidate_id}"
+
         # Check if invented - modify in-place
         if candidate.get('type') == 'invented':
             # Set multiplier
@@ -1219,38 +1256,55 @@ Notes:
             candidate['modification_log'].append(f"Changed item {idx+1} mult from {old_mult:g} to {mult:g}")
             candidate['totals'] = self._calculate_totals(candidate['items'])
             
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+            if 'history' not in candidate:
+                candidate['history'] = []
+            candidate['history'].append({
+                'timestamp': timestamp,
+                'command': command_str,
+                'note': edit_note
+            })
+
+            self.ctx.save_workspace()
+
             print(f"Updated #{candidate['id']} (changed mult on item)")
             self._show_detail(candidate['id'])
             return
         
-        # Create variant
-        variant = copy.deepcopy(candidate)
+        target, was_copied, new_id = self._ensure_mutable(candidate, command_str, edit_note)
         
         # Set multiplier
-        old_mult = variant['items'][idx].get('mult', 1.0)
-        variant['items'][idx]['mult'] = mult
+        old_mult = target['items'][idx].get('mult', 1.0)
+        target['items'][idx]['mult'] = mult
         
         # Track modification
-        variant['parent_id'] = candidate['id']
-        variant['ancestor_id'] = candidate.get('ancestor_id', candidate['id'])
-        if 'modification_log' not in variant:
-            variant['modification_log'] = []
-        variant['modification_log'].append(f"Changed item {idx+1} mult from {old_mult:g} to {mult:g}")
-        
-        # Assign variant ID and add to workspace
-        new_id = self._assign_variant_id(candidate['id'])
-        variant['id'] = new_id
-        
-        ws = self.ctx.planning_workspace
-        ws['candidates'].append(variant)
-        
+        target['parent_id'] = candidate['id']
+        target['ancestor_id'] = candidate.get('ancestor_id', candidate['id'])
+        if 'modification_log' not in target:
+            target['modification_log'] = []
+        target['modification_log'].append(f"Changed item {idx+1} mult from {old_mult:g} to {mult:g}")
+               
         # Recalculate totals
-        variant['totals'] = self._calculate_totals(variant['items'])
+        target['totals'] = self._calculate_totals(target['items'])
+
+        if not was_copied:
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+            if 'history' not in target:
+                target['history'] = []
+            target['history'].append({
+                'timestamp': timestamp,
+                'command': command_str,
+                'note': edit_note
+            })
 
         self.ctx.save_workspace()
         
-        print(f"Created variant #{new_id} (changed multiplier in #{candidate_id})")
-        self._show_detail(new_id)
+        if was_copied:
+            print(f"Created {new_id} from {candidate_id} and set multiplier in #{target['id']}")
+        else:
+            print(f"Updated #{target['id']} (set multiplier in #{target['id']})")
+
+        self._show_detail(target['id'])
     
     def _ins(self, args: List[str]) -> None:
         """
@@ -1292,6 +1346,10 @@ Notes:
         # Clamp position (1-based, can be n+1 to append)
         pos = max(1, min(pos, n + 1))
 
+        # Build command and note
+        command_str = f"ins {candidate_id} {pos} {codes_str}"
+        edit_note = f"Insert {new_items} at {pos} on plan {candidate_id}"
+
         # Check if invented - modify in-place
         if candidate.get('type') == 'invented':
             # Convert to 0-based and insert
@@ -1300,40 +1358,57 @@ Notes:
                 candidate['items'].insert(pos + i, item)
             candidate['modification_log'].append(f"Inserted {len(new_items)} item(s) at position {pos+1}")
             candidate['totals'] = self._calculate_totals(candidate['items'])
-            
+
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+            if 'history' not in candidate:
+                candidate['history'] = []
+            candidate['history'].append({
+                'timestamp': timestamp,
+                'command': command_str,
+                'note': edit_note
+            })
+
+            self.ctx.save_workspace()
+
             print(f"Updated #{candidate['id']} (inserted {len(new_items)} item(s))")
             self._show_detail(candidate['id'])
             return
         
-        # Create variant
-        variant = copy.deepcopy(candidate)
+        target, was_copied, new_id = self._ensure_mutable(candidate, command_str, edit_note)
         
         # Convert to 0-based and insert
         pos -= 1
         for i, item in enumerate(new_items):
-            variant['items'].insert(pos + i, item)
+            target['items'].insert(pos + i, item)
         
         # Track modification
-        variant['parent_id'] = candidate['id']
-        variant['ancestor_id'] = candidate.get('ancestor_id', candidate['id'])
-        if 'modification_log' not in variant:
-            variant['modification_log'] = []
-        variant['modification_log'].append(f"Inserted {len(new_items)} item(s) at position {pos+1}")
-        
-        # Assign variant ID and add to workspace
-        new_id = self._assign_variant_id(candidate['id'])
-        variant['id'] = new_id
-        
-        ws = self.ctx.planning_workspace
-        ws['candidates'].append(variant)
+        target['parent_id'] = candidate['id']
+        target['ancestor_id'] = candidate.get('ancestor_id', candidate['id'])
+        if 'modification_log' not in target:
+            target['modification_log'] = []
+        target['modification_log'].append(f"Inserted {len(new_items)} item(s) at position {pos+1}")
         
         # Recalculate totals
-        variant['totals'] = self._calculate_totals(variant['items'])
+        target['totals'] = self._calculate_totals(target['items'])
+
+        if not was_copied:
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+            if 'history' not in target:
+                target['history'] = []
+            target['history'].append({
+                'timestamp': timestamp,
+                'command': command_str,
+                'note': edit_note
+            })
 
         self.ctx.save_workspace()
         
-        print(f"Created variant #{new_id} (inserted {len(new_items)} item(s) into #{candidate_id})")
-        self._show_detail(new_id)
+        if was_copied:
+            print(f"Created {new_id} from {candidate_id} and inserted in #{target['id']}")
+        else:
+            print(f"Updated #{target['id']} (insert in #{target['id']})")
+
+        self._show_detail(target['id'])
     
     def _invent(self, args: List[str]) -> None:
         """
@@ -1365,7 +1440,6 @@ Notes:
         invented_id = f"N{ws['next_invented_id']}"
         ws['next_invented_id'] += 1
         
-        from datetime import datetime
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
 
         # Create blank candidate
@@ -1451,7 +1525,6 @@ Notes:
             pending = None
         
         if pending is None:
-            from datetime import date
             pending = {
                 "date": str(date.today()),
                 "items": []
@@ -1961,7 +2034,6 @@ Notes:
             variant["description"] = "(copy)"
         
         # Append copy operation to history
-        from datetime import datetime
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
         if 'history' not in variant:
             variant['history'] = []
@@ -2005,7 +2077,6 @@ Notes:
         
         # Auto-create mutable copy
         import copy
-        from datetime import datetime
         
         ws = self.ctx.planning_workspace
         old_id = candidate['id']
