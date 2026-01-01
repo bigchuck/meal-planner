@@ -15,6 +15,14 @@ class HelpCommand(Command):
         """Display help for all commands."""
         registry = get_registry()
         
+        # Show mode status if active
+        if self.ctx.mode_mgr.is_active:
+            mode = self.ctx.mode_mgr.active_mode
+            print(f"\n*** Currently in {mode.prompt_display} mode ***")
+            print("Commands shown below can be used WITHOUT the mode prefix")
+            print("Prefix with '.' to use global commands")
+            print()
+
         print("\nAvailable Commands:")
         print("=" * 70)
         
@@ -39,12 +47,12 @@ class HelpCommand(Command):
 class QuitCommand(Command):
     """Exit the application."""
     
-    name = ("quit", "exit", "q")
+    name = ("quit", "q")
     help_text = "Exit the application"
     
     def execute(self, args: str) -> None:
         """Exit with message."""
-        print("Goodbye!")
+        print("SO LONG, CRABBY!")
         raise SystemExit(0)
 
 # @register_command

@@ -54,14 +54,37 @@ def repl():
     
     # Main loop
     while True:
+        # Build prompt based on mode
+        if ctx.mode_mgr.is_active:
+            prompt = f"[{ctx.mode_mgr.active_mode.prompt_display}]> "
+        else:
+            prompt = "> "
+
         try:
             # Get input
-            user_input = input("> ").strip()
+            user_input = input(prompt).strip()
             
             # Skip empty input
             if not user_input:
                 continue
             
+            # Handle mode exit keyword
+            if ctx.mode_mgr.is_active and user_input.lower() == "exit":
+                message = ctx.mode_mgr.exit_mode()
+                print(message)
+                continue
+            
+            # Check for global command escape (dot prefix)
+            if ctx.mode_mgr.is_active and user_input.startswith('.'):
+                # Strip dot and process as global command
+                user_input = user_input[1:].strip()
+                if not user_input:
+                    continue
+                # Fall through to normal dispatch
+            else:
+                # Apply mode prefix if in mode
+                user_input = ctx.mode_mgr.apply_mode_prefix(user_input)
+
             # Parse command and arguments
             parts = user_input.split(maxsplit=1)
             cmd_name = parts[0].lower()
@@ -81,6 +104,12 @@ def repl():
                 # Track usage using canonical name (first alias)
                 canonical_name = cmd.name if isinstance(cmd.name, str) else cmd.name[0]
                 ctx.usage.track(canonical_name)
+
+                # After each command, validate mode is still valid
+                if ctx.mode_mgr.is_active:
+                    warning = ctx.mode_mgr.auto_exit_if_invalid()
+                    if warning:
+                        print(f"\n{warning}\n")
  
             except SystemExit:
                 # Quit command raises SystemExit

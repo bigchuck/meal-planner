@@ -42,6 +42,8 @@ class CommandContext:
         from meal_planner.data.user_preferences_manager import UserPreferencesManager
         from meal_planner.data.staging_buffer_manager import StagingBufferManager
         from meal_planner.data.email_manager import EmailManager
+
+        from meal_planner.commands.mode_manager import ModeManager
         
         self.master = MasterLoader(master_file, nutrients_file, recipes_file)
         self.log = LogManager(log_file)
@@ -98,6 +100,8 @@ class CommandContext:
                 "next_numeric_id": 1,
                 "next_invented_id": 1
             }
+
+        self.mode_mgr = ModeManager(self)
 
         self.staging_buffer = None
         if staging_buffer_file:
