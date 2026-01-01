@@ -6,8 +6,9 @@ from typing import Dict, Type, Optional, List, Set
 from pathlib import Path
 
 from meal_planner.data import MasterLoader, LogManager, PendingManager, ThresholdsManager
-from datetime import datetime
+from meal_planner.utils.time_utils import initialize_meal_boundaries
 
+from datetime import datetime
 
 class CommandContext:
     """
@@ -105,6 +106,8 @@ class CommandContext:
         self.email_mgr = None
         if email_config_file and email_log_file:
             self.email_mgr = EmailManager(email_config_file, email_log_file)
+
+        initialize_meal_boundaries(self.user_prefs)
 
     def _determine_initial_pending_source(self) -> str:
         """

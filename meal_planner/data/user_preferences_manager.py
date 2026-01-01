@@ -472,6 +472,51 @@ class UserPreferencesManager:
         with open(self.filepath, 'w', encoding='utf-8') as f:
             json.dump(default, f, indent=2, ensure_ascii=False)
 
+    def get_meal_time_boundaries(self) -> Optional[Dict[str, Dict[str, str]]]:
+        """
+        Get meal time boundaries configuration.
+        
+        Returns:
+            Dictionary mapping meal names to their time ranges:
+            {
+                "BREAKFAST": {"start": "05:00", "end": "10:29"},
+                "MORNING SNACK": {"start": "10:30", "end": "11:59"},
+                "LUNCH": {"start": "12:00", "end": "14:29"},
+                "AFTERNOON SNACK": {"start": "14:30", "end": "16:59"},
+                "DINNER": {"start": "17:00", "end": "19:59"},
+                "EVENING SNACK": {"start": "20:00", "end": "04:59"}
+            }
+            Returns None if preferences not loaded.
+        
+        Example usage:
+            boundaries = user_prefs.get_meal_time_boundaries()
+            if boundaries:
+                breakfast_times = boundaries.get("BREAKFAST")
+                print(f"Breakfast: {breakfast_times['start']} to {breakfast_times['end']}")
+        """
+        if not self._prefs:
+            return None
+        
+        # Get the meal_time_boundaries section
+        boundaries_config = self._prefs.get('meal_time_boundaries', {})
+        
+        # Return the nested 'boundaries' dictionary
+        return boundaries_config.get('boundaries', {})
+
+
+    # Example of what it returns when config is present:
+    # {
+    #     "BREAKFAST": {"start": "05:00", "end": "10:29", "description": "Early morning meal"},
+    #     "MORNING SNACK": {"start": "10:30", "end": "11:59", "description": "Mid-morning snack"},
+    #     "LUNCH": {"start": "12:00", "end": "14:29", "description": "Midday meal"},
+    #     "AFTERNOON SNACK": {"start": "14:30", "end": "16:59", "description": "Mid-afternoon snack"},
+    #     "DINNER": {"start": "17:00", "end": "19:59", "description": "Evening meal"},
+    #     "EVENING SNACK": {"start": "20:00", "end": "04:59", "description": "Late evening/night snack"}
+    # }
+
+    # Returns {} (empty dict) if meal_time_boundaries section exists but 'boundaries' key is missing
+    # Returns None if self._prefs is None (preferences not loaded)
+
 
 # Add pandas import at top
 import pandas as pd
