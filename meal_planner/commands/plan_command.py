@@ -359,19 +359,19 @@ Notes:
         if dup_date:
             print(f"Skipped {len(dup_date)} duplicate date(s):")
             for meal in dup_date:
-                date = meal.get('source_date')
-                print(f"  - {date}: already in workspace")
+                meal_date = meal.get('source_date')
+                print(f"  - {meal_date}: already in workspace")
         
         if dup_composition:
             print(f"Skipped {len(dup_composition)} duplicate composition(s):")
             for meal in dup_composition[:5]:  # Show first 5
-                date = meal.get('source_date')
+                meal_date = meal.get('source_date')
                 items = meal.get('items', [])
                 codes = ', '.join([f"{i.get('code', '')} x{i.get('mult', 1.0):g}" 
                                 if abs(i.get('mult', 1.0) - 1.0) > 1e-9 
                                 else i.get('code', '')
                                 for i in items if 'code' in i])
-                print(f"  - {date}: {codes}")
+                print(f"  - {meal_date}: {codes}")
             if len(dup_composition) > 5:
                 print(f"  ... and {len(dup_composition) - 5} more")
 
