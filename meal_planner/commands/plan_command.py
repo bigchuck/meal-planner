@@ -518,7 +518,7 @@ Notes:
               f"GL: {int(totals.get('gl', 0))}")
         
         print(f"Use 'plan report {candidate['id']}' for full breakdown")
-    
+
     def _discard(self, args: List[str]) -> None:
         """Clear planning workspace."""
         ws = self.ctx.planning_workspace
@@ -528,13 +528,26 @@ Notes:
             print("\nPlanning workspace is already empty.\n")
             return
         
-        # Confirm if there are many candidates
-        if count > 5:
-            print(f"\nClear {count} candidates from planning workspace? (y/n): ", end="")
-            response = input().strip().lower()
-            if response not in ('y', 'yes'):
-                print("Cancelled.\n")
-                return
+        # ALWAYS show what will be lost
+        print(f"\nWorkspace has {count} candidate(s) that will be PERMANENTLY LOST:")
+        
+        for candidate in ws['candidates']:
+            meal_id = candidate.get('id', '?')
+            meal_name = candidate.get('meal_name', 'meal')
+            desc = candidate.get('description', '')
+            item_count = len(candidate.get('items', []))
+            
+            desc_str = f" - {desc}" if desc else ""
+            print(f"  #{meal_id}  {meal_name}  {item_count} items{desc_str}")
+        
+        print()
+        
+        # ALWAYS require explicit "yes"
+        response = input("Type 'yes' to confirm: ").strip().lower()
+        
+        if response != "yes":
+            print("Cancelled.\n")
+            return
         
         # Clear workspace
         self.ctx.planning_workspace = {
