@@ -65,6 +65,19 @@ class WorkspaceManager:
                     if cmd not in data["command_history"]:
                         data["command_history"][cmd] = {}
         
+            # Initialize inventory if missing (NEW for Phase 1)
+            if "inventory" not in data:
+                data["inventory"] = {
+                    "leftovers": {},
+                    "batch": {},
+                    "rotating": {}
+                }
+            else:
+                # Ensure all three inventory types exist
+                for inv_type in ["leftovers", "batch", "rotating"]:
+                    if inv_type not in data["inventory"]:
+                        data["inventory"][inv_type] = {}
+
             return data
             
         except (json.JSONDecodeError, Exception):
@@ -113,10 +126,10 @@ class WorkspaceManager:
         Returns:
             New format workspace
         """
-        # Load existing workspace to preserve command_history
+        # Load existing workspace to preserve command_history and inventory
         workspace = self.load()
         
-        # Clear meals but keep command_history and other fields
+        # Clear meals but keep command_history and inventory
         workspace["meals"] = {}
         
         # Convert candidates list to meals dict
@@ -223,6 +236,11 @@ class WorkspaceManager:
                 "threshold": {},
                 "analyze": {},
                 "recommend": {}
+            },
+            "inventory": {
+                "leftovers": {},
+                "batch": {},
+                "rotating": {}
             }
         }  
     

@@ -25,6 +25,7 @@ from . import analyze_command
 from . import recommend_command
 from . import stage_command
 from . import mode_command
+from . import inventory_command
 
 __all__ = [
     'Command',
