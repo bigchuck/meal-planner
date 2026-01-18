@@ -78,6 +78,18 @@ class WorkspaceManager:
                     if inv_type not in data["inventory"]:
                         data["inventory"][inv_type] = {}
 
+            if "locks" not in data:
+                data["locks"] = {
+                    "include": {},
+                    "exclude": []
+                }
+            else:
+                # Ensure both lock types exist
+                if "include" not in data["locks"]:
+                    data["locks"]["include"] = {}
+                if "exclude" not in data["locks"]:
+                    data["locks"]["exclude"] = []
+
             return data
             
         except (json.JSONDecodeError, Exception):
@@ -241,7 +253,12 @@ class WorkspaceManager:
                 "leftovers": {},
                 "batch": {},
                 "rotating": {}
+            },
+            "locks": {
+                "include": {},
+                "exclude": []
             }
+
         }  
     
     # Method to record command in history

@@ -3,6 +3,7 @@
 Inventory command - manage leftovers, batch items, and rotating items.
 """
 from .base import Command, register_command
+from meal_planner.parsers.code_parser import parse_one_code_mult
 from datetime import datetime
 
 
@@ -70,6 +71,8 @@ Inventory Management Commands:
       Examples:
         inventory add FI.8 0.225 --leftover "salmon from dinner"
         inventory add SO.13d 0.5 --batch "lentil soup"
+        inventory add FI.8 x1/7 --leftover "fish"
+        inventory add FI.8 *1/7 --leftover "fish"
         inventory add GR.H1 --rotating "homemade granola"
   
   inventory remove <code>
@@ -91,15 +94,17 @@ Inventory Management Commands:
       Examples:
         inventory restore GR.H1
         inventory restore GR.H1 1.5
-  
+        inventory restore GR.H1 x1/7
+        inventory restore GR.H1 *1/7
+                
   inventory list
       Show all inventory items
 
 Notes:
   - Multipliers are fractions of master.csv portions
+  - Multipliers support: 1.5, 1/7, .9/4, x1/7, *1/7, etc.
   - Default multiplier is 1.0 if omitted
-  - Inventory auto-saves after each change
-""")
+  - Inventory auto-saves after each change""")
     
     def _add(self, args: str) -> None:
         """
@@ -159,19 +164,27 @@ Notes:
                     note = " ".join(parts[i+1:])
                 break
             else:
-                # Try to parse as multiplier
-                try:
-                    multiplier = float(part)
+                # Try to parse as multiplier - support both:
+                # - Bare: "1/7", "0.225", ".9/4"
+                # - Prefixed: "x1/7", "*1/7" (like add command)
+                
+                # Try parsing with code prefix first (handles x1/7, *1/7)
+                # Create fake code to parse: "DUMMY x1/7" -> extracts multiplier
+                test_snippet = f"DUMMY {part}"
+                parsed = parse_one_code_mult(test_snippet)
+                
+                if parsed and 'mult' in parsed:
+                    multiplier = parsed['mult']
                     if multiplier <= 0:
                         print(f"\nError: Multiplier must be positive, got {multiplier}")
                         print()
                         return
-                except ValueError:
+                else:
                     print(f"\nError: Expected multiplier or type flag, got '{part}'")
                     print()
                     return
             i += 1
-        
+
         if inv_type is None:
             print("\nError: Must specify type: --leftover, --batch, or --rotating")
             print()
@@ -212,7 +225,6 @@ Notes:
         
         # Get food name for display
         food_name = self._get_food_name(code)
-        master_portion = self._get_master_portion(code)
         
         # Display-friendly type names
         type_display = {
@@ -221,10 +233,9 @@ Notes:
             "rotating": "rotating item"
         }
         
-        # Show confirmation
         action = "Updated" if item_exists else "Added"
         print(f"\n{action} {code} ({food_name}) as {type_display[inv_type]}")
-        print(f"  Multiplier: {multiplier}x (master portion: {master_portion})")
+        print(f"  Multiplier: {multiplier:g}x")
         if note:
             print(f"  Note: {note}")
         print()
@@ -333,20 +344,23 @@ Notes:
         parts = args.split()
         code = parts[0].upper()
         
-        # Parse optional multiplier
+        # Parse optional multiplier (supports x1/7, *1/7, 1/7, .9/4, etc.)
         multiplier = None
         if len(parts) > 1:
-            try:
-                multiplier = float(parts[1])
+            # Try parsing with code prefix first (handles x1/7, *1/7)
+            test_snippet = f"DUMMY {parts[1]}"
+            parsed = parse_one_code_mult(test_snippet)
+            
+            if parsed and 'mult' in parsed:
+                multiplier = parsed['mult']
                 if multiplier <= 0:
                     print(f"\nError: Multiplier must be positive, got {multiplier}")
                     print()
                     return
-            except ValueError:
+            else:
                 print(f"\nError: Invalid multiplier '{parts[1]}'")
                 print()
                 return
-        
         # Get workspace
         workspace = self._load_workspace()
         
@@ -373,7 +387,7 @@ Notes:
         self._save_workspace(workspace)
         
         food_name = self._get_food_name(code)
-        mult_str = f" at {multiplier}x" if multiplier is not None else ""
+        mult_str = f" at {multiplier:g}x" if multiplier is not None else ""
         print(f"\nRestored {code} ({food_name}) to available{mult_str}")
         print()
     
@@ -398,46 +412,41 @@ Notes:
             print("Leftovers (single-use items):")
             for code, item in sorted(inventory["leftovers"].items()):
                 food_name = self._get_food_name(code)
-                master_portion = self._get_master_portion(code)
                 mult = item["multiplier"]
                 added = item["added"][:10]  # Just date
                 note = item.get("note", "")
                 
-                print(f"  {code} ({food_name}): {mult}x (master: {master_portion})")
+                print(f"  {code} ({food_name}): {mult:g}x")
                 print(f"    Added: {added}")
                 if note:
                     print(f"    Note: {note}")
-                print()
-        
+                print()        
         # Show batch items
         if inventory["batch"]:
             print("Batch items (multi-portion):")
             for code, item in sorted(inventory["batch"].items()):
                 food_name = self._get_food_name(code)
-                master_portion = self._get_master_portion(code)
                 mult = item["multiplier"]
                 added = item["added"][:10]
                 note = item.get("note", "")
                 
-                print(f"  {code} ({food_name}): {mult}x per use (master: {master_portion})")
+                print(f"  {code} ({food_name}): {mult:g}x per use")
                 print(f"    Added: {added}")
                 if note:
                     print(f"    Note: {note}")
                 print()
-        
         # Show rotating items
         if inventory["rotating"]:
             print("Rotating items (persistent):")
             for code, item in sorted(inventory["rotating"].items()):
                 food_name = self._get_food_name(code)
-                master_portion = self._get_master_portion(code)
                 mult = item["multiplier"]
                 status = item["status"]
                 added = item["added"][:10]
                 note = item.get("note", "")
                 
                 status_str = "AVAILABLE" if status == "available" else "DEPLETED"
-                print(f"  {code} ({food_name}): {status_str}, {mult}x (master: {master_portion})")
+                print(f"  {code} ({food_name}): {status_str}, {mult:g}x")
                 print(f"    Added: {added}")
                 if status == "depleted" and "depleted_date" in item:
                     depleted = item["depleted_date"][:10]
