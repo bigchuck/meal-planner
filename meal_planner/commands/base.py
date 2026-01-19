@@ -113,6 +113,11 @@ class CommandContext:
 
         initialize_meal_boundaries(self.user_prefs)
 
+        # Initialize scorers if thresholds and user_prefs available
+        self.scorers = {}
+        if self.thresholds and self.user_prefs:
+            self._initialize_scorers()
+
     def _determine_initial_pending_source(self) -> str:
         """
         Determine initial pending source state on startup.
@@ -145,6 +150,29 @@ class CommandContext:
         if self.workspace_mgr:
             workspace_data = self.workspace_mgr.convert_from_planning_workspace(self.planning_workspace)
             self.workspace_mgr.save(workspace_data)
+    
+    def _initialize_scorers(self):
+        """Initialize available scorers."""
+        from meal_planner.scorers import create_scorer, get_available_scorers
+        
+        weights = self.thresholds.get_recommendation_weights()
+        
+        for scorer_name in get_available_scorers():
+            # Only initialize scorers with non-zero weights
+            if weights.get(scorer_name, 0.0) > 0:
+                try:
+                    config = self.thresholds.get_scorer_config(scorer_name)
+                    scorer = create_scorer(
+                        scorer_name,
+                        config,
+                        self.master,
+                        self.nutrients,
+                        self.thresholds,
+                        self.user_prefs
+                    )
+                    self.scorers[scorer_name] = scorer
+                except Exception as e:
+                    print(f"Warning: Failed to initialize {scorer_name}: {e}")
 
 class CommandHistoryMixin:
     """
@@ -327,7 +355,6 @@ class Command(ABC):
                 print(f"\n{feature_name} unavailable: thresholds file not configured\n")
             return False
         return True
-
 
 class CommandRegistry:
     """

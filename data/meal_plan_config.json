@@ -311,5 +311,63 @@
         ]
       }
     }
+  },
+
+  "recommendation_weights": {
+    "description": "Global weights for each scorer in final score calculation",
+    "nutrient_gap": 1.0,
+    "preference": 0.8,
+    "portion_efficiency": 0.6,
+    "variety": 0.5,
+    "staple_food": 0.4,
+    "cost_practicality": 0.3
+  },
+
+  "scorers": {
+    "description": "Configuration parameters for individual scorers",
+    
+    "nutrient_gap": {
+      "description": "Scores meals based on how well they meet nutritional targets",
+      "gap_penalty_weights": {
+        "1": 3.0,
+        "2": 2.0,
+        "3": 1.0
+      },
+      "excess_penalty_weight": 0.5,
+      "perfect_match_bonus": 0.1,
+      "tolerance_pct": 0.10
+    },
+    
+    "preference": {
+      "description": "Scores based on frozen portions and availability flags",
+      "frozen_item_bonus": 0.05,
+      "staple_item_bonus": 0.03,
+      "unavailable_item_penalty": 0.5
+    },
+    
+    "portion_efficiency": {
+      "description": "Scores alignment with typical serving sizes",
+      "ideal_multiplier_range": [0.5, 1.5],
+      "extreme_mult_penalty": 0.2
+    },
+    
+    "variety": {
+      "description": "Scores meals based on dietary diversity",
+      "recent_usage_penalty": 0.15,
+      "days_threshold": 3,
+      "code_overlap_penalty": 0.1
+    },
+    
+    "staple_food": {
+      "description": "Boosts meals with designated staple items",
+      "staple_presence_boost": 0.15,
+      "base_score": 0.5
+    },
+    
+    "cost_practicality": {
+      "description": "Considers shelf life and preparation complexity",
+      "quick_prep_boost": 0.1,
+      "complexity_penalty": 0.05
+    }
   }
-}
+ }

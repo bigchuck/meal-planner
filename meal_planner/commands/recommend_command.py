@@ -12,7 +12,9 @@ from meal_planner.analyzers.meal_analyzer import MealAnalyzer
 from meal_planner.models.analysis_result import DailyContext
 from meal_planner.parsers import parse_selection_to_items
 from meal_planner.utils.time_utils import categorize_time, normalize_meal_name, MEAL_NAMES
-
+from meal_planner.models.scoring_context import MealLocation, ScoringContext
+from meal_planner.analyzers.meal_analyzer import MealAnalyzer
+import pandas as pd        
 
 @register_command
 class RecommendCommand(Command, CommandHistoryMixin):
@@ -52,14 +54,23 @@ class RecommendCommand(Command, CommandHistoryMixin):
             return
         
         # Parse args
-        if not args.strip():
+        try:
+            parts = shlex.split(args) if args.strip() else []
+        except ValueError:
+            parts = args.strip().split() if args.strip() else []
+
+        # No args or help request
+        if not parts or parts[0] == "help":
             self._show_help()
             return
         
         # Parse target and template flag
-        parts = shlex.split(args)
-        if not parts:
-            self._show_help()
+        subcommand = parts[0]
+        subargs = parts[1:]
+    
+        # Route to subcommands
+        if subcommand == "score":
+            self._score(subargs)
             return
         
         target = None
@@ -954,12 +965,637 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("  recommend lunch --template lunch.low_carb")
         print("  recommend dinner --template dinner.standard")
         print("\nProvides:")
-        print("  • Gap closure suggestions (add items/increase portions)")
-        print("  • Excess management tips (reduce/remove items)")
-        print("  • Leftover ideas (lunch only)")
-        print("  • Snack bridge options")
+        print("  - Gap closure suggestions (add items/increase portions)")
+        print("  - Excess management tips (reduce/remove items)")
+        print("  - Leftover ideas (lunch only)")
+        print("  - Snack bridge options")
+        print("\nrecommend score <meal_id>")
+        print("  Debug scorer output for a complete meal")
+        print("  Shows detailed breakdown of how the meal is scored")
+    
+        print("\nExamples:")
+        print("  recommend score 123a")
+        print("  recommend score N1")
+        print("  recommend score pending --meal breakfast")
         print()
 
+    def _score(self, args: List[str]) -> None:
+        """
+        Debug scorer output for a meal.
+        
+        Args:
+            args: [meal_id, optional --meal flag]
+        
+        Examples:
+            recommend score 123a
+            recommend score N1
+            recommend score pending --meal breakfast
+        """
+        if not args:
+            print("\nUsage: recommend score <meal_id>")
+            print("\nExamples:")
+            print("  recommend score 123a")
+            print("  recommend score N1")
+            print("  recommend score pending --meal breakfast")
+            print()
+            return
+        
+        # Check dependencies
+        if not self.ctx.scorers:
+            print("\nScorer system not initialized")
+            print("Check meal_plan_config.json and user preferences")
+            print()
+            return
+        
+        # Parse meal_id
+        meal_id = args[0]
+        meal_category = None
+        
+        # Check for --meal flag (for pending)
+        if len(args) >= 3 and args[1] == "--meal":
+            meal_category = args[2]
+        
+        # Build scoring context
+        context = self._build_scoring_context(meal_id, meal_category)
+        if not context:
+            return
+        
+        # Score the meal
+        self._score_meal(context)
 
-# Add pandas import
-import pandas as pd
+    def _build_scoring_context(self, meal_id: str, meal_category: Optional[str]) -> Optional[ScoringContext]:
+        """Build scoring context from meal ID."""
+
+        # Determine location and get items
+        if meal_id.lower() == "pending":
+            location = MealLocation.PENDING
+            
+            # Get pending items for meal_category
+            if not meal_category:
+                print("\nError: --meal required for pending")
+                print("Example: recommend score pending --meal breakfast")
+                print()
+                return None
+            
+            # Extract items for this meal from pending
+            pending = self.ctx.pending.load()
+            if not pending or not pending.get('items'):
+                print(f"\nNo pending items for {meal_category}")
+                print()
+                return None
+            
+            # Extract items for target meal
+            items = self._extract_pending_meal_items(pending['items'], meal_category)
+            
+            if not items:
+                print(f"\nNo items found for pending {meal_category}")
+                print()
+                return None
+            
+            meal_id_str = None  # Pending doesn't have persistent ID
+            
+        else:
+            location = MealLocation.WORKSPACE
+            
+            # Get workspace meal by ID
+            ws = self.ctx.planning_workspace
+            meal = None
+            
+            for candidate in ws['candidates']:
+                if candidate['id'].upper() == meal_id.upper():
+                    meal = candidate
+                    break
+            
+            if not meal:
+                print(f"\nMeal '{meal_id}' not found in workspace")
+                print("Use 'plan show' to see available meals")
+                print()
+                return None
+            
+            items = meal.get('items', [])
+            meal_category = meal.get('meal_name', 'unknown')
+            meal_id_str = meal['id']
+        
+        # Get template path
+        template_path = self._get_template_for_meal(meal_category)
+        
+        # Run analysis to get gaps/excesses
+        analyzer = MealAnalyzer(
+            self.ctx.master,
+            self.ctx.nutrients,
+            self.ctx.thresholds
+        )
+        
+        try:
+            analysis_result = analyzer.calculate_analysis(
+                items=items,
+                template_path=template_path,
+                meal_name=meal_category,
+                meal_id=meal_id_str
+            )
+        except Exception as e:
+            print(f"\nAnalysis error: {e}")
+            print()
+            return None
+        
+        # Build context
+        context = ScoringContext(
+            location=location,
+            meal_id=meal_id_str,
+            meal_category=meal_category,
+            template_path=template_path,
+            items=items,
+            totals=analysis_result.totals.to_dict() if hasattr(analysis_result.totals, 'to_dict') else {},
+            analysis_result=analysis_result
+        )
+        
+        return context
+
+    def _score_meal(self, context: ScoringContext) -> None:
+        """Score and display results for a meal."""
+        
+        # Display header
+        meal_display = context.meal_id if context.meal_id else "pending"
+        print(f"\nScoring meal: {meal_display} ({context.meal_category})")
+        print(f"Items: {context.item_count()}")
+        
+        if context.totals:
+            cal = context.totals.get('cal', 0)
+            prot = context.totals.get('prot_g', 0)
+            carbs = context.totals.get('carbs_g', 0)
+            fat = context.totals.get('fat_g', 0)
+            print(f"Total: {cal:.0f} cal, {prot:.0f}g prot, {carbs:.0f}g carbs, {fat:.0f}g fat")
+        print()
+        
+        # Run each scorer
+        scorer_results = []
+        weights = self.ctx.thresholds.get_recommendation_weights()
+        
+        for scorer_name, scorer in self.ctx.scorers.items():
+            result = scorer.calculate_score(context)
+            scorer_results.append(result)
+            
+            weight = weights.get(scorer_name, 0.0)
+            weighted = result.get_weighted_score(weight)
+            
+            print(f"=== {scorer_name.upper()} ===")
+            print(f"Raw Score: {result.raw_score:.3f}")
+            print(f"Weight: {weight:.1f}")
+            print(f"Weighted Score: {weighted:.3f}")
+            print()
+            
+            # Display details
+            if result.details:
+                self._display_scorer_details(scorer_name, result.details)
+            print()
+        
+        # Calculate aggregate
+        final_score = sum(
+            r.get_weighted_score(weights.get(r.scorer_name, 0.0))
+            for r in scorer_results
+        )
+        
+        print(f"=== AGGREGATE SCORE ===")
+        print(f"Final Score: {final_score:.3f}")
+        print()
+
+    def _display_scorer_details(self, scorer_name: str, details: Dict[str, Any]) -> None:
+        """Display scorer-specific details."""
+        if scorer_name == "nutrient_gap":
+            self._display_nutrient_gap_details(details)
+
+    def _display_nutrient_gap_details(self, details: Dict[str, Any]) -> None:
+        """Display nutrient gap scorer details."""
+        print("Gap Analysis:")
+        
+        gap_count = details.get("gap_count", 0)
+        excess_count = details.get("excess_count", 0)
+        
+        print(f"  Gaps: {gap_count}")
+        
+        # Show gap penalties
+        gap_penalties = details.get("gap_penalties", [])
+        for gap in gap_penalties:
+            nutrient = gap["nutrient"]
+            current = gap["current"]
+            target = gap["target"]
+            deficit = gap["deficit"]
+            deficit_pct = gap["deficit_pct"]
+            priority = gap["priority"]
+            weight = gap["weight"]
+            penalty = gap["penalty"]
+            unit = gap.get("unit", "")
+            
+            print(f"    {nutrient}: {current:.1f}{unit} / {target:.1f}{unit} target "
+                f"(-{deficit:.1f}{unit}, {deficit_pct*100:.0f}% deficit)")
+            print(f"      Priority: {priority}, Weight: {weight:.1f}x, Penalty: {penalty:.2f}")
+        
+        print(f"\n  Excesses: {excess_count}")
+        
+        # Show excess penalties
+        excess_penalties = details.get("excess_penalties", [])
+        for excess in excess_penalties:
+            nutrient = excess["nutrient"]
+            current = excess["current"]
+            threshold = excess["threshold"]
+            overage = excess["overage"]
+            overage_pct = excess["overage_pct"]
+            penalty = excess["penalty"]
+            unit = excess.get("unit", "")
+            
+            print(f"    {nutrient}: {current:.1f}{unit} / {threshold:.1f}{unit} limit "
+                f"(+{overage:.1f}{unit}, {overage_pct*100:.0f}% over)")
+            print(f"      Penalty: {penalty:.2f}")
+        
+        # Show summary
+        total_gap_penalty = details.get("total_gap_penalty", 0.0)
+        total_excess_penalty = details.get("total_excess_penalty", 0.0)
+        bonus = details.get("perfect_match_bonus", 0.0)
+        
+        print(f"\n  Total Gap Penalty: {total_gap_penalty:.2f}")
+        print(f"  Total Excess Penalty: {total_excess_penalty:.2f}")
+        print(f"  Perfect Match Bonus: {bonus:.2f}")
+        print(f"  ")
+        print(f"  Base Score: {details.get('base_score', 1.0):.2f}")
+        print(f"  Final Score: {details.get('final_score', 0.0):.2f}")
+
+    # =========================================================================
+    # Scorer integration methods
+    # =========================================================================
+
+    def _score(self, args: List[str]) -> None:
+        """
+        Debug scorer output for a meal.
+        
+        Args:
+            args: [meal_id, optional --meal flag, optional --template flag]
+        
+        Examples:
+            recommend score 123a
+            recommend score N1
+            recommend score pending --meal breakfast
+            recommend score 20 --template lunch.balanced
+        """
+        if not args:
+            print("\nUsage: recommend score <meal_id> [--meal <category>] [--template <path>]")
+            print("\nExamples:")
+            print("  recommend score 123a")
+            print("  recommend score N1")
+            print("  recommend score pending --meal breakfast")
+            print("  recommend score 20 --template lunch.balanced")
+            print()
+            return
+        
+        # Check dependencies
+        if not self.ctx.scorers:
+            print("\nScorer system not initialized")
+            print("Check meal_plan_config.json and user preferences")
+            print()
+            return
+        
+        # Parse arguments
+        meal_id = args[0]
+        meal_category = None
+        template_override = None
+        
+        i = 1
+        while i < len(args):
+            if args[i] == "--meal" and i + 1 < len(args):
+                meal_category = args[i + 1]
+                i += 2
+            elif args[i] == "--template" and i + 1 < len(args):
+                template_override = args[i + 1]
+                i += 2
+            else:
+                i += 1
+        
+        # Build scoring context (now with template override support)
+        context = self._build_scoring_context(meal_id, meal_category, template_override)
+        if not context:
+            return
+        
+        # Score the meal
+        self._score_meal(context)
+
+    def _build_scoring_context(
+        self, 
+        meal_id: str, 
+        meal_category: Optional[str],
+        template_override: Optional[str] = None  # NEW: support --template flag
+    ) -> Optional['ScoringContext']:
+        """Build scoring context from meal ID."""
+        from meal_planner.models.scoring_context import MealLocation, ScoringContext
+        from meal_planner.analyzers.meal_analyzer import MealAnalyzer
+        
+        # ... existing code to determine location and get items ...
+        
+        if meal_id.lower() == "pending":
+            location = MealLocation.PENDING
+            
+            if not meal_category:
+                print("\nError: --meal required for pending")
+                print("Example: recommend score pending --meal breakfast")
+                print()
+                return None
+            
+            pending = self.ctx.pending_mgr.load()
+            if not pending or not pending.get('items'):
+                print(f"\nNo pending items for {meal_category}")
+                print()
+                return None
+            
+            items = self._extract_pending_meal_items(pending['items'], meal_category)
+            
+            if not items:
+                print(f"\nNo items found for pending {meal_category}")
+                print()
+                return None
+            
+            meal_id_str = None
+            
+        else:
+            location = MealLocation.WORKSPACE
+            
+            ws = self.ctx.planning_workspace
+            meal = None
+            
+            for candidate in ws['candidates']:
+                if candidate['id'].upper() == meal_id.upper():
+                    meal = candidate
+                    break
+            
+            if not meal:
+                print(f"\nMeal '{meal_id}' not found in workspace")
+                print("Use 'plan show' to see available meals")
+                print()
+                return None
+            
+            items = meal.get('items', [])
+            meal_category = meal.get('meal_name', 'unknown')
+            meal_id_str = meal['id']
+        
+        # Get template path - NOW PROPERLY FROM CONFIG
+        template_path = self._get_template_for_meal(meal_category, template_override)
+        
+        # ERROR if no template found
+        if not template_path:
+            print(f"\nError: No template found for meal category '{meal_category}'")
+            print(f"Available meal categories in config:")
+            
+            if self.ctx.thresholds:
+                meal_templates = self.ctx.thresholds.thresholds.get('meal_templates', {})
+                for cat in meal_templates.keys():
+                    print(f"  - {cat}")
+            
+            print(f"\nEither:")
+            print(f"  1. Add a template for '{meal_category}' to meal_plan_config.json")
+            print(f"  2. Use --template flag to specify one explicitly")
+            print()
+            return None
+        
+        # Run analysis
+        analyzer = MealAnalyzer(
+            self.ctx.master,
+            self.ctx.nutrients,
+            self.ctx.thresholds
+        )
+        
+        try:
+            analysis_result = analyzer.calculate_analysis(
+                items=items,
+                template_path=template_path,
+                meal_name=meal_category,
+                meal_id=meal_id_str
+            )
+        except Exception as e:
+            print(f"\nAnalysis error: {e}")
+            print()
+            return None
+        
+        # Build totals dict
+        totals_dict = {}
+        if hasattr(analysis_result.totals, 'to_dict'):
+            totals_dict = analysis_result.totals.to_dict()
+        else:
+            totals_dict = {
+                'cal': getattr(analysis_result.totals, 'calories', 0),
+                'prot_g': getattr(analysis_result.totals, 'protein_g', 0),
+                'carbs_g': getattr(analysis_result.totals, 'carbs_g', 0),
+                'fat_g': getattr(analysis_result.totals, 'fat_g', 0),
+                'sugar_g': getattr(analysis_result.totals, 'sugar_g', 0),
+                'gl': getattr(analysis_result.totals, 'glycemic_load', 0)
+            }
+        
+        context = ScoringContext(
+            location=location,
+            meal_id=meal_id_str,
+            meal_category=meal_category,
+            template_path=template_path,
+            items=items,
+            totals=totals_dict,
+            analysis_result=analysis_result
+        )
+        
+        return context
+
+
+    def _score_meal(self, context: 'ScoringContext') -> None:
+        """Score and display results for a meal."""
+        
+        # Display header
+        meal_display = context.meal_id if context.meal_id else "pending"
+        print(f"\nScoring meal: {meal_display} ({context.meal_category})")
+        
+        # Show template being used
+        if context.template_path:
+            print(f"Template: {context.template_path}")
+        
+        print(f"Items: {context.item_count()}")
+        
+        if context.totals:
+            cal = context.totals.get('cal', 0)
+            prot = context.totals.get('prot_g', 0)
+            carbs = context.totals.get('carbs_g', 0)
+            fat = context.totals.get('fat_g', 0)
+            print(f"Total: {cal:.0f} cal, {prot:.0f}g prot, {carbs:.0f}g carbs, {fat:.0f}g fat")
+        print()
+        
+        # Run each scorer
+        scorer_results = []
+        weights = self.ctx.thresholds.get_recommendation_weights()
+        
+        for scorer_name, scorer in self.ctx.scorers.items():
+            result = scorer.calculate_score(context)
+            scorer_results.append(result)
+            
+            weight = weights.get(scorer_name, 0.0)
+            weighted = result.get_weighted_score(weight)
+            
+            print(f"=== {scorer_name.upper()} ===")
+            print(f"Raw Score: {result.raw_score:.3f}")
+            print(f"Weight: {weight:.1f}")
+            print(f"Weighted Score: {weighted:.3f}")
+            print()
+            
+            # Display details
+            if result.details:
+                self._display_scorer_details(scorer_name, result.details)
+            print()
+        
+        # Calculate aggregate
+        final_score = sum(
+            r.get_weighted_score(weights.get(r.scorer_name, 0.0))
+            for r in scorer_results
+        )
+        
+        print(f"=== AGGREGATE SCORE ===")
+        print(f"Final Score: {final_score:.3f}")
+        print()
+
+    def _display_scorer_details(self, scorer_name: str, details: Dict[str, Any]) -> None:
+        """Display scorer-specific details."""
+        if scorer_name == "nutrient_gap":
+            self._display_nutrient_gap_details(details)
+
+
+    def _display_nutrient_gap_details(self, details: Dict[str, Any]) -> None:
+        """Display nutrient gap scorer details."""
+        print("Gap Analysis:")
+        
+        gap_count = details.get("gap_count", 0)
+        excess_count = details.get("excess_count", 0)
+        
+        print(f"  Gaps: {gap_count}")
+        
+        # Show gap penalties
+        gap_penalties = details.get("gap_penalties", [])
+        for gap in gap_penalties:
+            nutrient = gap["nutrient"]
+            current = gap["current"]
+            target_min = gap["target_min"]
+            target_max = gap.get("target_max")
+            deficit = gap["deficit"]
+            # deficit_pct = gap["deficit_pct"]  # Don't display this anymore
+            priority = gap["priority"]
+            weight = gap["weight"]
+            penalty = gap["penalty"]
+            unit = gap.get("unit", "")
+            
+            # Format target display - show range if max exists
+            if target_max is not None:
+                target_str = f"{target_min:.1f}-{target_max:.1f}{unit}"
+            else:
+                target_str = f"{target_min:.1f}{unit}"
+            
+            # CLEANER: Just show current / target / deficit (no redundant %)
+            print(f"    {nutrient}: {current:.1f}{unit} / {target_str} target (-{deficit:.1f}{unit})")
+            print(f"      Priority: {priority}, Weight: {weight:.1f}x, Penalty: {penalty:.2f}")
+        
+        print(f"\n  Excesses: {excess_count}")
+        
+        # Show excess penalties
+        excess_penalties = details.get("excess_penalties", [])
+        for excess in excess_penalties:
+            nutrient = excess["nutrient"]
+            current = excess["current"]
+            threshold = excess["threshold"]
+            overage = excess["overage"]
+            # overage_pct = excess["overage_pct"]  # Don't display this anymore
+            penalty = excess["penalty"]
+            unit = excess.get("unit", "")
+            
+            # CLEANER: Just show current / limit / overage (no redundant %)
+            print(f"    {nutrient}: {current:.1f}{unit} / {threshold:.1f}{unit} limit (+{overage:.1f}{unit})")
+            print(f"      Penalty: {penalty:.2f}")
+        
+        # Show summary
+        total_gap_penalty = details.get("total_gap_penalty", 0.0)
+        total_excess_penalty = details.get("total_excess_penalty", 0.0)
+        bonus = details.get("perfect_match_bonus", 0.0)
+        
+        print(f"\n  Total Gap Penalty: {total_gap_penalty:.2f}")
+        print(f"  Total Excess Penalty: {total_excess_penalty:.2f}")
+        print(f"  Perfect Match Bonus: {bonus:.2f}")
+        print(f"  ")
+        print(f"  Base Score: {details.get('base_score', 1.0):.2f}")
+        print(f"  Final Score: {details.get('final_score', 0.0):.2f}")
+
+
+    def _get_template_for_meal(self, meal_category: str, template_override: Optional[str] = None) -> Optional[str]:
+        """
+        Get template path for a meal category from config.
+        
+        Resolution order:
+        1. If template_override provided via --template flag, use that
+        2. Otherwise, get templates for meal_category from config
+        3. If multiple templates exist, use first one
+        4. If no templates exist for category, return None (caller should error)
+        
+        Args:
+            meal_category: Meal name (breakfast, lunch, etc.)
+            template_override: Optional template path from --template flag
+        
+        Returns:
+            Template path string or None if not found
+        """
+        # If explicit override provided, use it
+        if template_override:
+            return template_override
+        
+        # Get meal templates from config
+        if not self.ctx.thresholds:
+            return None
+        
+        meal_templates = self.ctx.thresholds.thresholds.get('meal_templates', {})
+        
+        # Normalize meal category
+        meal_lower = meal_category.lower() if meal_category else ''
+        
+        # Get templates for this meal category
+        category_templates = meal_templates.get(meal_lower, {})
+        
+        if not category_templates:
+            # No templates defined for this meal category
+            return None
+        
+        # Get first template key (they're typically named like "protein_low_carb", "balanced", etc.)
+        template_keys = list(category_templates.keys())
+        if not template_keys:
+            return None
+        
+        first_template = template_keys[0]
+        
+        # Return full path: "meal_category.template_name"
+        return f"{meal_lower}.{first_template}"
+
+    def _extract_pending_meal_items(self, all_items: List[Dict], meal_category: str) -> List[Dict]:
+        """
+        Extract items for a specific meal from pending items list.
+        
+        Args:
+            all_items: All pending items (includes time markers and codes)
+            meal_category: Target meal category
+        
+        Returns:
+            List of items belonging to target meal
+        """
+        from meal_planner.utils.time_utils import categorize_time
+        
+        meal_items = []
+        current_meal = None
+        
+        for item in all_items:
+            # Time marker - update current meal context
+            if 'time' in item and 'code' not in item:
+                time_str = item.get('time', '')
+                meal_override = item.get('meal_override')
+                current_meal = categorize_time(time_str, meal_override)
+                # Include time marker in output
+                meal_items.append(item)
+                continue
+            
+            # Code item - add if it belongs to target meal
+            if current_meal and current_meal.lower() == meal_category.lower():
+                meal_items.append(item)
+        
+        return meal_items

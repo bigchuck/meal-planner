@@ -375,3 +375,12 @@ class ThresholdsManager:
             self._validation_errors.append(
                 f"{path}: last entry should have 'max': null"
             )
+
+    def get_recommendation_weights(self) -> Dict[str, float]:
+        """Get scorer weights from config."""
+        return self.thresholds.get("recommendation_weights", {})
+
+    def get_scorer_config(self, scorer_name: str) -> Dict[str, Any]:
+        """Get configuration for specific scorer."""
+        scorers = self.thresholds.get("scorers", {})
+        return scorers.get(scorer_name, {})
