@@ -127,12 +127,15 @@ class MealAnalyzer:
         targets = template.get("targets", {})
         
         # Map template nutrient keys to DailyTotals attributes
+        # Get priorities from config, with fallback defaults
+        priorities = self.thresholds.thresholds.get("nutrient_priorities", {}) if self.thresholds else {}
+
         nutrient_mapping = {
-            "protein": ("protein_g", "g", 1),
-            "carbs": ("carbs_g", "g", 2),
-            "fat": ("fat_g", "g", 2),
-            "fiber": ("fiber_g", "g", 2),
-            "gl": ("glycemic_load", "", 2)
+            "protein": ("protein_g", "g", priorities.get("protein", 1)),
+            "carbs": ("carbs_g", "g", priorities.get("carbs", 2)),
+            "fat": ("fat_g", "g", priorities.get("fat", 2)),
+            "fiber": ("fiber_g", "g", priorities.get("fiber", 2)),
+            "gl": ("glycemic_load", "", priorities.get("gl", 2))
         }
         
         for template_key, target_def in targets.items():

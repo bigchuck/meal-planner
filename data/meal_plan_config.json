@@ -313,6 +313,14 @@
     }
   },
 
+  "nutrient_priorities": {
+    "protein": 1,
+    "fiber": 2,
+    "carbs": 2,
+    "fat": 3,
+    "gl": 2
+  },
+
   "recommendation_weights": {
     "description": "Global weights for each scorer in final score calculation",
     "nutrient_gap": 1.0,
@@ -342,7 +350,8 @@
       "description": "Scores based on frozen portions and availability flags",
       "frozen_item_bonus": 0.05,
       "staple_item_bonus": 0.03,
-      "unavailable_item_penalty": 0.5
+      "unavailable_item_penalty": 0.5,
+      "base_score": 0.5
     },
     
     "portion_efficiency": {

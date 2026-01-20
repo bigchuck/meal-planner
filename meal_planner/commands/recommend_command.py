@@ -1456,7 +1456,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
         """Display scorer-specific details."""
         if scorer_name == "nutrient_gap":
             self._display_nutrient_gap_details(details)
-
+        elif scorer_name == "preference":
+                self._display_preference_details(details)
 
     def _display_nutrient_gap_details(self, details: Dict[str, Any]) -> None:
         """Display nutrient gap scorer details."""
@@ -1520,6 +1521,46 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print(f"  Base Score: {details.get('base_score', 1.0):.2f}")
         print(f"  Final Score: {details.get('final_score', 0.0):.2f}")
 
+    def _display_preference_details(self, details: Dict[str, Any]) -> None:
+        """Display preference scorer details."""
+        print("Preference Analysis:")
+        
+        total_items = details.get("total_items", 0)
+        frozen_count = details.get("frozen_count", 0)
+        staple_count = details.get("staple_count", 0)
+        unavailable_count = details.get("unavailable_count", 0)
+        
+        print(f"  Total Items: {total_items}")
+        print(f"  Frozen Items: {frozen_count}")
+        
+        if frozen_count > 0:
+            frozen_items = details.get("frozen_items", [])
+            print(f"    {', '.join(frozen_items)}")
+        
+        print(f"  Staple Items: {staple_count}")
+        
+        if staple_count > 0:
+            staple_items = details.get("staple_items", [])
+            print(f"    {', '.join(staple_items)}")
+        
+        print(f"  Unavailable Items: {unavailable_count}")
+        
+        if unavailable_count > 0:
+            unavailable_items = details.get("unavailable_items", [])
+            print(f"    {', '.join(unavailable_items)}")
+        
+        # Show score calculation
+        base = details.get("base_score", 0.5)
+        frozen_bonus = details.get("frozen_bonus", 0.0)
+        staple_bonus = details.get("staple_bonus", 0.0)
+        unavailable_penalty = details.get("unavailable_penalty", 0.0)
+        
+        print(f"\n  Base Score: {base:.2f}")
+        print(f"  Frozen Bonus: +{frozen_bonus:.2f}")
+        print(f"  Staple Bonus: +{staple_bonus:.2f}")
+        print(f"  Unavailable Penalty: -{unavailable_penalty:.2f}")
+        print(f"  ")
+        print(f"  Final Score: {details.get('final_score', 0.0):.2f}")
 
     def _get_template_for_meal(self, meal_category: str, template_override: Optional[str] = None) -> Optional[str]:
         """
