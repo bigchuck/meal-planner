@@ -27,24 +27,10 @@ class RecommendCommand(Command, CommandHistoryMixin):
     
     def execute(self, args: str) -> None:
         """
-        Generate recommendations for a workspace meal or pending meal.
+        Execute recommend command with subcommands.
         
-        Standard mode:
-            recommend 123a
-            recommend lunch --template lunch.balanced --meal lunch
-            recommend breakfast --template breakfast.protein_focus --meal breakfast
-        
-        History support:
-            recommend --history 5 --meal breakfast
-            recommend --use 2 --meal lunch [other flags...]
-
         Args:
-            args: Workspace ID (e.g., "123a") or meal name + --template flag + --meal flag
-        
-        Examples:
-            recommend 123a
-            recommend lunch --template lunch.balanced
-            recommend breakfast --template breakfast.protein_focus
+            args: Full argument string (everything after "recommend")
         """
         # Check dependencies
         if not self._check_thresholds("Recommend"):
@@ -60,322 +46,33 @@ class RecommendCommand(Command, CommandHistoryMixin):
             parts = shlex.split(args) if args.strip() else []
         except ValueError:
             parts = args.strip().split() if args.strip() else []
-
+        
         # No args or help request
         if not parts or parts[0] == "help":
             self._help()
             return
         
-        # Parse target and template flag
-        subcommand = parts[0]
-        subargs = parts[1:]
-    
-        # Route to subcommands
-        if subcommand == "score":
-            self._score(subargs)
-            return
-        elif subcommand == "generate":
+        # Extract subcommand and remaining arguments
+        subcommand = parts[0].lower()
+        subargs = parts[1:]  # THIS IS THE FIX - use parts[1:] not parts[1].split()
+        
+        # Route to subcommand handlers
+        if subcommand == "generate":
             self._generate_candidates(subargs)
-            return
-        elif subcommand == "filter":  # NEW
-            self._filter(subargs)
-            return
-        elif subcommand == "show":  
+        elif subcommand == "show":
             self._show(subargs)
-            return
+        elif subcommand == "filter":
+            self._filter(subargs)
+        elif subcommand == "score":
+            self._score(subargs)
+        elif subcommand == "discard":
+            self._discard(subargs)
         elif subcommand == "help":
             self._help()
-            return
         else:
             print(f"\nUnknown subcommand: {subcommand}")
-            # self._help([])
+            self._help()
 
-        # the following is the old recommend command support, which was paired with the analyze command
-        target = None
-        template_override = None
-        meal_name = None
-        history_limit = None
-        use_index = None
-
-        i = 0
-        while i < len(parts):
-            arg = parts[i]
-            
-            if arg == "--template":
-                if i + 1 < len(parts):
-                    template_override = parts[i + 1]
-                    i += 2
-                else:
-                    print("\nError: --template requires a value")
-                    print("Example: recommend lunch --template lunch.balanced --meal lunch\n")
-                    return
-            
-            elif arg == "--meal":
-                if i + 1 < len(parts):
-                    meal_name = parts[i + 1]
-                    i += 2
-                else:
-                    print("Error: --meal requires a meal name")
-                    return
-            
-            elif arg == "--history":
-                if i + 1 < len(parts):
-                    try:
-                        history_limit = int(parts[i + 1])
-                        i += 2
-                    except ValueError:
-                        print("Error: --history requires a number")
-                        return
-                else:
-                    print("Error: --history requires a number")
-                    return
-            
-            elif arg == "--use":
-                if i + 1 < len(parts):
-                    try:
-                        use_index = int(parts[i + 1])
-                        i += 2
-                    except ValueError:
-                        print("Error: --use requires a number")
-                        return
-                else:
-                    print("Error: --use requires a number")
-                    return
-            
-            else:
-                # First non-flag arg is the target
-                if target is None:
-                    target = arg
-                    i += 1
-                else:
-                    print(f"Error: Unexpected argument '{arg}'")
-                    return
-        
-        # Handle --history mode
-        if history_limit is not None:
-            if use_index is not None:
-                print("Error: --history and --use are mutually exclusive")
-                return
-            if template_override is not None or target is not None:
-                print("Error: --history cannot be combined with recommendation parameters")
-                return
-            if meal_name is None:
-                print("Error: --history requires --meal flag")
-                print("Example: recommend --history 5 --meal breakfast")
-                return
-            
-            self._display_command_history("recommend", meal_name, history_limit)
-            return
-        
-        # Handle --use mode
-        if use_index is not None:
-            if meal_name is None:
-                print("Error: --use requires --meal flag")
-                print("Example: recommend --use 1 --meal breakfast")
-                return
-            
-            # Load params from history
-            params = self._get_params_from_history("recommend", meal_name, use_index)
-            if params is None:
-                print(f"Error: No history entry #{use_index} for meal '{meal_name}'")
-                print(f"Use: recommend --history 10 --meal {meal_name}")
-                return
-            
-            # Re-parse the historical params
-            print(f"Using history #{use_index}: {params}")
-            
-            # Prepend target if provided in current command
-            if target:
-                params = f"{target} {params}"
-
-            # Re-execute with historical params
-            return self.execute(params)
-
-        # Regular recommendation mode - requires meal
-        if meal_name is None:
-            print("Error: --meal is required")
-            print("Example: recommend lunch --template lunch.balanced --meal lunch")
-            return
-        
-        # Determine if workspace ID or meal name
-        is_workspace = False
-        if target:
-            is_workspace = self._is_workspace_id(target)
-        
-        # Build parameter string for history recording
-        params_for_history = ""
-        if template_override:
-            params_for_history += f"--template {template_override} "
-        params_for_history += f"--meal {meal_name}"
-        
-        # Execute recommendation
-        success = False
-        if is_workspace:
-            success = self._recommend_workspace(target, template_override, meal_name)
-        else:
-            success = self._recommend_pending(target if target else meal_name, 
-                                            template_override, meal_name)
-        
-        # Record in history if successful
-        if success:
-            self._record_command_history("recommend", params_for_history.strip())
-      
-    def _identify_contributors(self, result, excess) -> List[Dict[str, Any]]:
-        """Identify which items contribute most to an excess."""
-        contributors = []
-        
-        nutrient_key = excess.nutrient
-        nutrient_col = self._map_nutrient_to_column(nutrient_key)
-        
-        cols = self.ctx.master.cols
-        
-        for item in result.meal_items:
-            if 'code' not in item:
-                continue
-            
-            code = item['code']
-            mult = item.get('mult', 1.0)
-            
-            # Look up in master
-            row = self.ctx.master.lookup_code(code)
-            if row is None:
-                continue
-            
-            # Get nutrient value
-            nutrient_val = row.get(nutrient_col, 0)
-            if pd.isna(nutrient_val):
-                nutrient_val = 0
-            
-            amount = float(nutrient_val) * mult
-            
-            if amount > 0:
-                contributors.append({
-                    'code': code,
-                    'option': row[cols.option],
-                    'amount': amount,
-                    'percent': (amount / excess.current) * 100
-                })
-        
-        # Sort by amount (descending)
-        contributors.sort(key=lambda x: x['amount'], reverse=True)
-        
-        return contributors
-       
-    def _get_recent_meals_by_type(self, days: int, meal_types: List[str]) -> List[Dict[str, Any]]:
-        """
-        Get specific meal types from recent log entries.
-        
-        Args:
-            days: Number of days to look back
-            meal_types: List of meal types to include (e.g., ['LUNCH', 'DINNER'])
-        
-        Returns:
-            List of dicts with date, meal_type, and leftover-friendly codes
-        """
-        results = []
-        
-        # Get log entries from last N days
-        log_df = self.ctx.log.df
-        if log_df.empty:
-            return results
-        
-        # Calculate date range
-        today = date.today()
-        start_date = today - timedelta(days=days)
-        
-        # Get date column
-        from meal_planner.utils import get_date_column
-        date_col = get_date_column(log_df)
-        if date_col is None:
-            return results
-        
-        # Filter to date range
-        log_df[date_col] = pd.to_datetime(log_df[date_col], errors='coerce')
-        mask = (log_df[date_col] >= str(start_date)) & (log_df[date_col] <= str(today))
-        recent_df = log_df[mask]
-        
-        if recent_df.empty:
-            return results
-        
-        # Extract codes from each entry
-        from meal_planner.utils import get_codes_column
-        codes_col = get_codes_column(recent_df)
-        if codes_col is None:
-            return results
-        
-        for idx, row in recent_df.iterrows():
-            date_str = str(row[date_col])[:10]
-            codes_str = row[codes_col]
-            
-            if not codes_str or str(codes_str).strip() == '':
-                continue
-            
-            # Parse items
-            try:
-                items = parse_selection_to_items(str(codes_str))
-            except Exception:
-                continue
-            
-            # Extract meals of requested types
-            for meal_type in meal_types:
-                codes = self._extract_meal_codes_by_type(items, meal_type)
-                
-                if codes:
-                    results.append({
-                        'date': date_str,
-                        'meal_type': meal_type.title(),
-                        'codes': codes
-                    })
-        
-        return results
-    
-    def _extract_meal_codes_by_type(self, items: List[Dict[str, Any]], meal_type: str) -> List[str]:
-        """
-        Extract leftover-friendly codes from a specific meal type.
-        
-        Args:
-            items: All items from a log entry
-            meal_type: Meal type to extract (e.g., 'LUNCH', 'DINNER')
-        
-        Returns:
-            List of leftover-friendly codes from that meal
-        """
-        meal_codes = []
-        in_target_meal = False
-        
-        # Get leftover-friendly patterns from user preferences
-        leftover_patterns = self.ctx.user_prefs.get_leftover_friendly()
-        leftover_excludes = self.ctx.user_prefs.get_leftover_excludes()
-        
-        # If no patterns defined, use conservative defaults
-        if not leftover_patterns:
-            leftover_patterns = ['MT.', 'FI.', 'SO.', 'CH.']
-        
-        for item in items:
-            # Time marker
-            if 'time' in item:
-                time_str = item.get('time', '')
-                meal_override = item.get('meal_override', '')
-                
-                # Detect meal type
-                detected_meal = categorize_time(time_str, meal_override)
-                in_target_meal = (detected_meal and detected_meal.upper() == meal_type.upper())
-                continue
-            
-            # Code item
-            if 'code' in item and in_target_meal:
-                code = item['code'].upper()
-                
-                # Check if excluded (even if matches pattern)
-                if code in leftover_excludes:
-                    continue
-                
-                # Only include leftover-friendly items
-                if any(code.startswith(pattern) for pattern in leftover_patterns):
-                    meal_codes.append(code)
-        
-        return meal_codes
-    
     # =========================================================================
     # Helper methods
     # =========================================================================
@@ -413,26 +110,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
             meal_items.extend(current_items)
         
         return meal_items
-    
-    def _map_nutrient_to_column(self, nutrient_key: str) -> str:
-        """Map nutrient key from template to column name in master."""
-        mapping = {
-            'cal': 'cal',
-            'protein': 'prot_g',
-            'carbs': 'carbs_g',
-            'fat': 'fat_g',
-            'fiber': 'fiber_g',
-            'sugar': 'sugar_g',
-            'sodium': 'sodium_mg',
-            'potassium': 'potassium_mg',
-            'gl': 'gl',
-            'gi': 'gi'
-        }
         
-        return mapping.get(nutrient_key, nutrient_key)
-    
-    
-    
+
     def _help(self) -> None:
         """Display help for recommend command."""
         print("\nRECOMMEND - Meal recommendation pipeline")
@@ -469,6 +148,14 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("      recommend score pending --meal breakfast")
         print()
         
+        print("  recommend discard [array]")
+        print("    Discard generated candidates (requires confirmation)")
+        print("    Arrays: raw, filtered, scored (omit to discard all)")
+        print("    Examples:")
+        print("      recommend discard       # Discard all")
+        print("      recommend discard raw   # Discard only raw")
+        print()
+        
         print("Pipeline flow:")
         print("  1. recommend generate lunch      # Generate raw candidates")
         print("  2. recommend show                # Preview candidates")
@@ -476,6 +163,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("  4. recommend show                # View filtered candidates")
         print("  5. recommend score               # Score filtered candidates (future)")
         print("  6. recommend accept G3           # Accept a recommendation (future)")
+        print("  7. recommend discard             # Clean up when done")
         print()
 
     def _score(self, args: List[str]) -> None:
@@ -1426,4 +1114,107 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print(f"  Fiber:     {totals.fiber_g:.1f}g")
         print(f"  Sugar:     {totals.sugar_g:.1f}g")
         print(f"  GL:        {totals.glycemic_load:.1f}")
+        print()
+
+    def _discard(self, args: List[str]) -> None:
+        """
+        Discard generated candidates from workspace.
+        
+        Usage:
+            recommend discard           # Discard all (raw, filtered, scored)
+            recommend discard raw       # Discard only raw candidates
+            recommend discard filtered  # Discard only filtered candidates
+            recommend discard scored    # Discard only scored candidates (future)
+        
+        Args:
+            args: Optional [array_name]
+        """
+        # Check for generated candidates
+        gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
+        
+        if not gen_cands:
+            print("\nNo generated candidates to discard")
+            print()
+            return
+        
+        # Determine what to discard
+        valid_arrays = ['raw', 'filtered', 'scored']
+        
+        if not args:
+            # Discard all
+            target_arrays = ['raw', 'filtered', 'scored']
+            target_label = "all candidates"
+        else:
+            # Discard specific array
+            array_name = args[0].lower()
+            
+            if array_name not in valid_arrays:
+                print(f"\nError: Invalid array '{array_name}'")
+                print(f"Valid arrays: {', '.join(valid_arrays)}")
+                print()
+                return
+            
+            target_arrays = [array_name]
+            target_label = f"{array_name} candidates"
+        
+        # Count what will be discarded
+        meal_type = gen_cands.get("meal_type", "unknown")
+        raw_count = len(gen_cands.get("raw", []))
+        filtered_count = len(gen_cands.get("filtered", []))
+        scored_count = len(gen_cands.get("scored", []))  # Future
+        
+        # Show what will be lost
+        print(f"\n=== DISCARD {target_label.upper()} ===")
+        print(f"Meal type: {meal_type}")
+        print()
+        
+        total_to_discard = 0
+        
+        if 'raw' in target_arrays and raw_count > 0:
+            print(f"  Raw candidates: {raw_count}")
+            total_to_discard += raw_count
+        
+        if 'filtered' in target_arrays and filtered_count > 0:
+            print(f"  Filtered candidates: {filtered_count}")
+            total_to_discard += filtered_count
+        
+        if 'scored' in target_arrays and scored_count > 0:
+            print(f"  Scored candidates: {scored_count}")
+            total_to_discard += scored_count
+        
+        if total_to_discard == 0:
+            print(f"  No {target_label} to discard")
+            print()
+            return
+        
+        print()
+        print(f"This will PERMANENTLY delete {total_to_discard} candidate(s)")
+        print()
+        
+        # Idiot check - require explicit "yes"
+        response = input("Type 'yes' to confirm: ").strip().lower()
+        
+        if response != "yes":
+            print("\nCancelled")
+            print()
+            return
+        
+        # Perform discard
+        if not args:
+            # Discard entire generated_candidates section
+            self.ctx.workspace_mgr.clear_generated_candidates()
+            print(f"\nDiscarded all candidates ({total_to_discard} total)")
+        else:
+            # Discard specific array(s)
+            workspace = self.ctx.workspace_mgr.load()
+            
+            if "generated_candidates" in workspace:
+                for array_name in target_arrays:
+                    if array_name in workspace["generated_candidates"]:
+                        workspace["generated_candidates"][array_name] = []
+                
+                self.ctx.workspace_mgr.save(workspace)
+            
+            print(f"\nDiscarded {target_label} ({total_to_discard} total)")
+        
         print()
