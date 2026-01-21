@@ -420,7 +420,8 @@ class WorkspaceManager:
 
     def update_filtered_candidates(
         self,
-        filtered_candidates: List[Dict[str, Any]]
+        filtered_candidates: List[Dict[str, Any]],
+        filtered_out_candidates: List[Dict[str, Any]]
     ) -> None:
         """
         Update filtered candidates list (after pre-score filtering).
@@ -434,6 +435,7 @@ class WorkspaceManager:
             raise ValueError("No generated candidates to filter")
         
         workspace["generated_candidates"]["filtered"] = filtered_candidates
+        workspace["generated_candidates"]["filtered_out"] = filtered_out_candidates
         
         self.save(workspace)
 
@@ -468,3 +470,39 @@ class WorkspaceManager:
         if not gen_cands:
             return 0
         return len(gen_cands.get("filtered", []))
+     
+    def update_scored_candidates(
+        self,
+        scored_candidates: List[Dict[str, Any]]
+    ) -> None:
+        """
+        Update scored candidates list (after batch scoring).
+        
+        Args:
+            scored_candidates: List of candidates with scores and analysis
+        """
+        workspace = self.load()
+        
+        if "generated_candidates" not in workspace:
+            raise ValueError("No generated candidates to score")
+        
+        workspace["generated_candidates"]["scored"] = scored_candidates
+        
+        self.save(workspace)
+    
+    def get_scored_candidates_count(self) -> int:
+        """Get count of scored candidates."""
+        gen_cands = self.get_generated_candidates()
+        if not gen_cands:
+            return 0
+        return len(gen_cands.get("scored", []))
+    
+    def clear_scored_candidates(self) -> None:
+        """Clear only scored candidates from workspace."""
+        workspace = self.load()
+        
+        if "generated_candidates" in workspace:
+            workspace["generated_candidates"]["scored"] = []
+            self.save(workspace)
+
+

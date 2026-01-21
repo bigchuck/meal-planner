@@ -6,15 +6,16 @@ Analyzes meal gaps/excesses and suggests additions, portions, or swaps.
 """
 import shlex
 from typing import List, Dict, Any, Optional, Tuple
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from .base import Command, CommandHistoryMixin, register_command
 from meal_planner.analyzers.meal_analyzer import MealAnalyzer
 from meal_planner.models.analysis_result import DailyContext
 from meal_planner.parsers import parse_selection_to_items
 from meal_planner.utils.time_utils import categorize_time, normalize_meal_name, MEAL_NAMES
 from meal_planner.models.scoring_context import MealLocation, ScoringContext
-from meal_planner.analyzers.meal_analyzer import MealAnalyzer
-from meal_planner.generators import MealGenerator
+from meal_planner.generators.meal_generator import MealGenerator
+from meal_planner.models.scoring_context import ScoringContext, MealLocation
+from meal_planner.reports.report_builder import ReportBuilder
 
 import pandas as pd        
 
@@ -22,7 +23,7 @@ import pandas as pd
 class RecommendCommand(Command, CommandHistoryMixin):
     """Generate recommendations for meal optimization."""
     
-    name = "recommend"
+    name = ("recommend", "reco")
     help_text = "Get optimization suggestions (recommend <id|meal_name>)"
     
     def execute(self, args: str) -> None:
@@ -141,11 +142,11 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("      recommend filter --verbose")
         print()
         
-        print("  recommend score <meal_id>")
-        print("    Debug scorer output for a specific meal")
+        print("  recommend score [--verbose]")
+        print("    Score all filtered candidates and rank by score")
         print("    Examples:")
-        print("      recommend score 123a")
-        print("      recommend score pending --meal breakfast")
+        print("      recommend score")
+        print("      recommend score --verbose")
         print()
         
         print("  recommend discard [array]")
@@ -161,7 +162,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("  2. recommend show                # Preview candidates")
         print("  3. recommend filter              # Apply pre-score filters")
         print("  4. recommend show                # View filtered candidates")
-        print("  5. recommend score               # Score filtered candidates (future)")
+        print("  5. recommend score               # Score filtered candidates")
         print("  6. recommend accept G3           # Accept a recommendation (future)")
         print("  7. recommend discard             # Clean up when done")
         print()
@@ -412,26 +413,20 @@ class RecommendCommand(Command, CommandHistoryMixin):
 
     def _score(self, args: List[str]) -> None:
         """
-        Debug scorer output for a meal.
+        Score all filtered candidates (batch operation).
+        
+        Replaces the old debug scoring command. Now scores all filtered
+        candidates, ranks them, and saves results to workspace.
+        
+        Usage:
+            recommend score           # Score all filtered candidates
+            recommend score --verbose # Show detailed scoring info
         
         Args:
-            args: [meal_id, optional --meal flag, optional --template flag]
-        
-        Examples:
-            recommend score 123a
-            recommend score N1
-            recommend score pending --meal breakfast
-            recommend score 20 --template lunch.balanced
+            args: Optional [--verbose] flag
         """
-        if not args:
-            print("\nUsage: recommend score <meal_id> [--meal <category>] [--template <path>]")
-            print("\nExamples:")
-            print("  recommend score 123a")
-            print("  recommend score N1")
-            print("  recommend score pending --meal breakfast")
-            print("  recommend score 20 --template lunch.balanced")
-            print()
-            return
+        # Check for verbose flag
+        verbose = "--verbose" in args or "-v" in args
         
         # Check dependencies
         if not self.ctx.scorers:
@@ -440,29 +435,252 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
             return
         
-        # Parse arguments
-        meal_id = args[0]
-        meal_category = None
-        template_override = None
+        # Check for filtered candidates
+        gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
         
-        i = 1
-        while i < len(args):
-            if args[i] == "--meal" and i + 1 < len(args):
-                meal_category = args[i + 1]
-                i += 2
-            elif args[i] == "--template" and i + 1 < len(args):
-                template_override = args[i + 1]
-                i += 2
-            else:
-                i += 1
-        
-        # Build scoring context (now with template override support)
-        context = self._build_scoring_context(meal_id, meal_category, template_override)
-        if not context:
+        if not gen_cands:
+            print("\nNo generated candidates to score")
+            print("Run 'recommend generate <meal_type>' first")
+            print()
             return
         
-        # Score the meal
-        self._score_meal(context)
+        filtered_candidates = gen_cands.get("filtered", [])
+        meal_type = gen_cands.get("meal_type", "unknown")
+        
+        if not filtered_candidates:
+            print("\nNo filtered candidates to score")
+            print("Run 'recommend filter' first")
+            print()
+            return
+        
+        # Check if already scored (prevent accidental re-scoring)
+        scored_candidates = gen_cands.get("scored", [])
+        if scored_candidates:
+            print("\nCandidates already scored")
+            print(f"Found {len(scored_candidates)} scored candidates")
+            print()
+            print("To re-score, first discard scored candidates:")
+            print("  recommend discard scored")
+            print()
+            return
+        
+        # Get template for this meal type
+        template_path = self._get_template_for_meal(meal_type)
+        
+        print(f"\n=== SCORING {len(filtered_candidates)} {meal_type.upper()} CANDIDATES ===\n")
+        
+        if template_path:
+            print(f"Using template: {template_path}")
+        else:
+            print(f"Warning: No template for '{meal_type}' - using best guess")
+        print()
+        
+        # Score each candidate
+        scored_results = []
+        failed_candidates = []
+        
+        for i, candidate in enumerate(filtered_candidates, 1):
+            candidate_id = candidate.get("id", "???")
+            
+            if verbose:
+                print(f"Scoring {candidate_id}... ({i}/{len(filtered_candidates)})")
+            
+            try:
+                scored_candidate = self._score_candidate(
+                    candidate,
+                    meal_type,
+                    template_path
+                )
+                scored_results.append(scored_candidate)
+            except Exception as e:
+                failed_candidates.append((candidate_id, str(e)))
+                if verbose:
+                    print(f"  ERROR: {e}")
+        
+        # Sort by aggregate score (descending - best first)
+        scored_results.sort(key=lambda x: x["aggregate_score"], reverse=True)
+        
+        # Save to workspace
+        self.ctx.workspace_mgr.update_scored_candidates(scored_results)
+        
+        # Display results
+        success_count = len(scored_results)
+        print(f"\nScored {success_count}/{len(filtered_candidates)} candidates successfully")
+        
+        if failed_candidates:
+            print(f"\nFailed to score {len(failed_candidates)} candidates:")
+            for cand_id, error in failed_candidates:
+                print(f"  {cand_id}: {error}")
+        
+        print()
+        
+        # Show top candidates
+        self._display_scored_summary(scored_results, meal_type, verbose)
+        
+        print()
+        print("Next: recommend show <id> (detailed view)")
+        print("      recommend accept <id> (add to workspace)")
+        print()
+
+    def _score_candidate(
+        self,
+        candidate: Dict[str, Any],
+        meal_type: str,
+        template_path: Optional[str]
+    ) -> Dict[str, Any]:
+        """
+        Score a single candidate.
+        
+        Args:
+            candidate: Candidate dict with items, id, etc.
+            meal_type: Meal category (breakfast, lunch, etc.)
+            template_path: Template path for analysis
+        
+        Returns:
+            Scored candidate dict with scores and aggregate_score
+        """        
+        candidate_id = candidate.get("id")
+        items = candidate.get("items", [])
+        
+        # Calculate nutritional totals
+        report_builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
+        report = report_builder.build_from_items(items, title="Scoring")
+        totals = report.totals  # Get the DailyTotals object from the report
+        
+        # Run analysis
+        analyzer = MealAnalyzer(
+            self.ctx.master,
+            self.ctx.nutrients,
+            self.ctx.thresholds
+        )
+        
+        analysis_result = analyzer.calculate_analysis(
+            items=items,
+            template_path=template_path,
+            meal_name=meal_type,
+            meal_id=candidate_id
+        )
+        
+        # Build totals dict
+        totals_dict = {
+            'cal': getattr(totals, 'calories', 0),
+            'prot_g': getattr(totals, 'protein_g', 0),
+            'carbs_g': getattr(totals, 'carbs_g', 0),
+            'fat_g': getattr(totals, 'fat_g', 0),
+            'fiber_g': getattr(totals, 'fiber_g', 0),
+            'sugar_g': getattr(totals, 'sugar_g', 0),
+            'gl': getattr(totals, 'glycemic_load', 0)
+        }
+        
+        # Build scoring context
+        context = ScoringContext(
+            location=MealLocation.CANDIDATE,
+            meal_id=candidate_id,
+            meal_category=meal_type,
+            template_path=template_path,
+            items=items,
+            totals=totals_dict,
+            analysis_result=analysis_result
+        )
+        
+        # Run all scorers
+        scorer_results = {}
+        weights = self.ctx.thresholds.get_recommendation_weights()
+        
+        for scorer_name, scorer in self.ctx.scorers.items():
+            result = scorer.calculate_score(context)
+            weight = weights.get(scorer_name, 0.0)
+            
+            scorer_results[scorer_name] = {
+                "raw": result.raw_score,
+                "weighted": result.get_weighted_score(weight),
+                "details": result.details
+            }
+        
+        # Calculate aggregate score
+        aggregate_score = sum(
+            scorer_results[name]["weighted"]
+            for name in scorer_results
+        )
+        
+        # Build scored candidate
+        scored_candidate = {
+            **candidate,  # Include all original data
+            "totals": totals_dict,
+            "analysis": {
+                "gaps": [
+                    {
+                        "nutrient": g.nutrient,
+                        "current": g.current,
+                        "target_min": g.target_min,
+                        "target_max": g.target_max,
+                        "deficit": g.deficit,
+                        "priority": g.priority
+                    }
+                    for g in analysis_result.gaps
+                ],
+                "excesses": [
+                    {
+                        "nutrient": e.nutrient,
+                        "current": e.current,
+                        "threshold": e.threshold,
+                        "overage": e.overage,
+                        "priority": e.priority
+                    }
+                    for e in analysis_result.excesses
+                ]
+            },
+            "scores": scorer_results,
+            "aggregate_score": aggregate_score,
+            "scored_at": datetime.now().isoformat()
+        }
+        
+        return scored_candidate
+    
+    def _display_scored_summary(
+        self,
+        scored_candidates: List[Dict[str, Any]],
+        meal_type: str,
+        verbose: bool
+    ) -> None:
+        """
+        Display summary of scored candidates.
+        
+        Args:
+            scored_candidates: List of scored candidates (sorted by score)
+            meal_type: Meal category
+            verbose: Show detailed info
+        """
+        print(f"\n=== RANKED {meal_type.upper()} CANDIDATES ===")
+        print()
+        print(f"{'Rank':<6}{'ID':<8}{'Score':<8}Description")
+        print(f"{'-'*6}{'-'*8}{'-'*8}{'-'*50}")
+        
+        for rank, candidate in enumerate(scored_candidates, 1):
+            candidate_id = candidate.get("id", "???")
+            score = candidate.get("aggregate_score", 0.0)
+            description = candidate.get("description", "No description")
+            
+            # Truncate long descriptions
+            if len(description) > 47:
+                description = description[:44] + "..."
+            
+            print(f"{rank:<6}{candidate_id:<8}{score:<8.3f}{description}")
+            
+            # Verbose: show gap/excess summary
+            if verbose:
+                analysis = candidate.get("analysis", {})
+                gaps = analysis.get("gaps", [])
+                excesses = analysis.get("excesses", [])
+                
+                if gaps:
+                    gap_strs = [f"{g['nutrient']}(-{g['deficit']:.1f})" for g in gaps[:3]]
+                    print(f"{'':>14}Gaps: {', '.join(gap_strs)}")
+                if excesses:
+                    excess_strs = [f"{e['nutrient']}(+{e['overage']:.1f})" for e in excesses[:3]]
+                    print(f"{'':>14}Excesses: {', '.join(excess_strs)}")
+        
+        print()
 
     def _build_scoring_context(
         self, 
@@ -909,10 +1127,10 @@ class RecommendCommand(Command, CommandHistoryMixin):
         pre_filter = PreScoreFilter(locks=locks, user_prefs=self.ctx.user_prefs)
         
         # Apply filters
-        filtered_candidates = pre_filter.filter_candidates(raw_candidates)
+        filtered_candidates, filtered_out = pre_filter.filter_candidates(raw_candidates)
         
         # Save filtered candidates
-        self.ctx.workspace_mgr.update_filtered_candidates(filtered_candidates)
+        self.ctx.workspace_mgr.update_filtered_candidates(filtered_candidates, filtered_out)
         
         # Display results
         stats = pre_filter.get_filter_stats(len(raw_candidates), len(filtered_candidates))
@@ -949,6 +1167,9 @@ class RecommendCommand(Command, CommandHistoryMixin):
         """
         Show generated candidates.
         
+        MODIFIED: Now displays scored candidates if available,
+        with ranking and scores visible.
+        
         Usage:
             recommend show          # Show all candidates (one-line summaries)
             recommend show G3       # Show detailed view of G3
@@ -956,6 +1177,11 @@ class RecommendCommand(Command, CommandHistoryMixin):
         Args:
             args: Optional [candidate_id]
         """
+            # Check for 'rejected' keyword
+        if args and args[0].lower() == "rejected":
+            self._show_rejected()
+            return
+        
         # Check for generated candidates
         gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
         
@@ -967,12 +1193,20 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         meal_type = gen_cands.get("meal_type", "unknown")
         
-        # Determine which list to show (filtered if available, else raw)
+        # Determine which list to show (scored > filtered > raw)
+        scored = gen_cands.get("scored", [])
         filtered = gen_cands.get("filtered", [])
         raw = gen_cands.get("raw", [])
         
-        candidates = filtered if filtered else raw
-        list_type = "filtered" if filtered else "raw"
+        if scored:
+            candidates = scored
+            list_type = "scored"
+        elif filtered:
+            candidates = filtered
+            list_type = "filtered"
+        else:
+            candidates = raw
+            list_type = "raw"
         
         if not candidates:
             print(f"\nNo {list_type} candidates")
@@ -997,44 +1231,42 @@ class RecommendCommand(Command, CommandHistoryMixin):
         """
         Show all candidates with one-line summaries.
         
+        MODIFIED: Include scores in display if candidates are scored.
+        
         Args:
             candidates: List of candidate dicts
             meal_type: Meal type
-            list_type: "raw" or "filtered"
+            list_type: "raw", "filtered", or "scored"
         """
         print(f"\n=== {meal_type.upper()} CANDIDATES ({list_type.upper()}) ===")
         print()
         
-        for candidate in candidates:
+        # Different header based on whether scored
+        if list_type == "scored":
+            print(f"{'Rank':<6}{'ID':<8}{'Score':<8}Description")
+            print(f"{'-'*6}{'-'*8}{'-'*8}{'-'*50}")
+        else:
+            print(f"{'ID':<8}Description")
+            print(f"{'-'*8}{'-'*60}")
+        
+        for i, candidate in enumerate(candidates, 1):
             candidate_id = candidate.get("id", "???")
-            description = candidate.get("description", "")
+            description = candidate.get("description", "No description")
             
-            # Get item codes
-            items = candidate.get("items", [])
-            codes = [item["code"] for item in items if "code" in item]
+            # Truncate long descriptions
+            if len(description) > 47:
+                description = description[:44] + "..."
             
-            # Calculate quick stats using ReportBuilder
-            from meal_planner.reports import ReportBuilder
-            builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
-            report = builder.build_from_items(items, title="temp")
-            totals = report.totals
-            
-            # Format one-line summary
-            cal = totals.calories
-            pro = totals.protein_g
-            carb = totals.carbs_g
-            gl = totals.glycemic_load
-            
-            codes_str = ", ".join(codes[:4])  # First 4 codes
-            if len(codes) > 4:
-                codes_str += f" +{len(codes)-4}"
-            
-            print(f"{candidate_id:4s} {description:15s} | {codes_str:35s} | "
-                f"{cal:4.0f}cal {pro:4.1f}p {carb:4.1f}c GL{gl:4.1f}")
+            if list_type == "scored":
+                score = candidate.get("aggregate_score", 0.0)
+                print(f"{i:<6}{candidate_id:<8}{score:<8.3f}{description}")
+            else:
+                print(f"{candidate_id:<8}{description}")
         
         print()
         print(f"Total: {len(candidates)} candidates")
-        print(f"Use 'recommend show <id>' for details")
+        print()
+        print("Use 'recommend show <id>' for detailed view")
         print()
 
     def _show_candidate_detail(
@@ -1046,85 +1278,166 @@ class RecommendCommand(Command, CommandHistoryMixin):
         """
         Show detailed view of a specific candidate.
         
+        MODIFIED: Include scoring details if candidate is scored.
+        
         Args:
-            candidates: List of candidate dicts
+            candidates: List of candidates
             candidate_id: ID to show (e.g., "G3")
             meal_type: Meal type
         """
         # Find candidate
         candidate = None
-        for c in candidates:
-            if c.get("id", "").upper() == candidate_id:
-                candidate = c
+        for cand in candidates:
+            if cand.get("id", "").upper() == candidate_id:
+                candidate = cand
                 break
         
         if not candidate:
-            print(f"\nCandidate '{candidate_id}' not found")
-            print(f"Available: {', '.join([c.get('id', '?') for c in candidates])}")
+            print(f"\nCandidate {candidate_id} not found")
             print()
             return
         
-        # Display detailed view
-        print(f"\n=== CANDIDATE {candidate_id}: {meal_type.upper()} ===")
-        print()
+        # Header
+        is_scored = "aggregate_score" in candidate
+        score_label = " (SCORED)" if is_scored else ""
         
-        # Metadata
-        print(f"Source: {candidate.get('description', 'Unknown')}")
-        print(f"Method: {candidate.get('generation_method', 'Unknown')}")
-        if "filter_passed" in candidate:
-            print(f"Filter: {'PASSED' if candidate['filter_passed'] else 'REJECTED'}")
+        print(f"\n=== CANDIDATE {candidate_id}{score_label} ===")
+        
+        # Source info
+        source_date = candidate.get("source_date", "unknown")
+        source_time = candidate.get("source_time", "")
+        print(f"Source: {source_date} {meal_type}")
+        if source_time:
+            print(f"Time: {source_time}")
+        
+        # Score if available
+        if is_scored:
+            score = candidate.get("aggregate_score", 0.0)
+            print(f"Aggregate Score: {score:.3f}")
+        
         print()
         
         # Items
-        items = candidate.get("items", [])
         print("Items:")
+        items = candidate.get("items", [])
         for item in items:
-            if "code" not in item:
-                continue
-            
-            code = item["code"]
-            mult = item.get("mult", 1.0)
-            
-            # Get food name
-            row = self.ctx.master.lookup_code(code)
-            if row:
-                food_name = row[self.ctx.master.cols.option]
-            else:
-                food_name = "Unknown"
-            
-            if abs(mult - 1.0) < 0.01:
-                print(f"  {code:8s} {food_name}")
-            else:
-                print(f"  {code:8s} x{mult:g} {food_name}")
+            if "code" in item:
+                code = item["code"]
+                multiplier = item.get("mult", 1.0)
+                
+                # Get description from master
+                desc = ""
+                try:
+                    food_data = self.ctx.master.lookup_code(code)
+                    if food_data:
+                        desc = food_data.get('option', '')
+                except:
+                    pass
+                
+                mult_str = f" x{multiplier:.1f}"
+                desc_str = f"  ({desc})" if desc else ""
+                print(f"  - {code}{mult_str}{desc_str}")
+        
+        # Totals if available
+        totals = candidate.get("totals", {})
+        if totals:
+            print()
+            print("Totals:")
+            print(f"  Calories: {totals.get('cal', 0):.0f}")
+            print(f"  Protein:  {totals.get('prot_g', 0):.1f}g")
+            print(f"  Carbs:    {totals.get('carbs_g', 0):.1f}g")
+            print(f"  Fat:      {totals.get('fat_g', 0):.1f}g")
+            print(f"  Fiber:    {totals.get('fiber_g', 0):.1f}g")
+            print(f"  GL:       {totals.get('gl', 0):.1f}")
+        
+        # Scoring details if scored
+        if is_scored:
+            print()
+            self._display_candidate_scoring_details(candidate)
         
         print()
+
+    def _show_rejected(self):
+        """Show filtered-out candidates with rejection reasons."""
+        gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
+        filtered_out = gen_cands.get("filtered_out", [])
         
-        # Nutritional analysis
-        from meal_planner.reports import ReportBuilder
-        builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
-        report = builder.build_from_items(items, title="Analysis")
+        if not filtered_out:
+            print("\nNo rejected candidates")
+            return
         
-        # Display totals
-        totals = report.totals
-        print("Nutritional Totals:")
-        print(f"  Calories:  {totals.calories:.0f}")
-        print(f"  Protein:   {totals.protein_g:.1f}g")
-        print(f"  Carbs:     {totals.carbs_g:.1f}g")
-        print(f"  Fat:       {totals.fat_g:.1f}g")
-        print(f"  Fiber:     {totals.fiber_g:.1f}g")
-        print(f"  Sugar:     {totals.sugar_g:.1f}g")
-        print(f"  GL:        {totals.glycemic_load:.1f}")
+        print(f"\n=== REJECTED CANDIDATES ({len(filtered_out)}) ===\n")
+        print(f"{'ID':<8}{'Reasons':<30}Description")
+        print(f"{'-'*8}{'-'*30}{'-'*40}")
+        
+        for candidate in filtered_out:
+            cid = candidate.get("id", "???")
+            reasons = ", ".join(candidate.get("rejection_reasons", []))
+            desc = candidate.get("description", "")[:37] + "..."
+            print(f"{cid:<8}{reasons:<30}{desc}")
+        
         print()
+
+    def _display_candidate_scoring_details(self, candidate: Dict[str, Any]) -> None:
+        """
+        Display scoring details for a candidate.
+        
+        Args:
+            candidate: Scored candidate dict
+        """
+        scores = candidate.get("scores", {})
+        analysis = candidate.get("analysis", {})
+        
+        # Show each scorer's contribution
+        for scorer_name, scorer_data in scores.items():
+            raw = scorer_data.get("raw", 0.0)
+            weighted = scorer_data.get("weighted", 0.0)
+            
+            print(f"=== {scorer_name.upper()} ===")
+            print(f"Raw Score: {raw:.3f}")
+            print(f"Weighted Score: {weighted:.3f}")
+            print()
+            
+            # Show scorer-specific details
+            details = scorer_data.get("details", {})
+            if scorer_name == "nutrient_gap":
+                self._display_nutrient_gap_details(details)
+            # Future scorers can add their display logic here
+        
+        # Show gaps/excesses summary
+        gaps = analysis.get("gaps", [])
+        excesses = analysis.get("excesses", [])
+        
+        if gaps or excesses:
+            print("=== NUTRITIONAL ANALYSIS ===")
+            
+            if gaps:
+                print(f"Gaps ({len(gaps)}):")
+                for gap in gaps:
+                    nutrient = gap["nutrient"]
+                    deficit = gap["deficit"]
+                    print(f"  - {nutrient}: -{deficit:.1f}")
+            
+            if excesses:
+                print(f"Excesses ({len(excesses)}):")
+                for excess in excesses:
+                    nutrient = excess["nutrient"]
+                    overage = excess["overage"]
+                    print(f"  - {nutrient}: +{overage:.1f}")
+            
+            print()
 
     def _discard(self, args: List[str]) -> None:
         """
-        Discard generated candidates from workspace.
+        Discard generated candidates with confirmation.
+        
+        MODIFIED: Now properly handles scored array.
         
         Usage:
             recommend discard           # Discard all (raw, filtered, scored)
             recommend discard raw       # Discard only raw candidates
             recommend discard filtered  # Discard only filtered candidates
-            recommend discard scored    # Discard only scored candidates (future)
+            recommend discard scored    # Discard only scored candidates
         
         Args:
             args: Optional [array_name]
@@ -1161,7 +1474,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         meal_type = gen_cands.get("meal_type", "unknown")
         raw_count = len(gen_cands.get("raw", []))
         filtered_count = len(gen_cands.get("filtered", []))
-        scored_count = len(gen_cands.get("scored", []))  # Future
+        scored_count = len(gen_cands.get("scored", []))
         
         # Show what will be lost
         print(f"\n=== DISCARD {target_label.upper()} ===")
@@ -1218,3 +1531,5 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print(f"\nDiscarded {target_label} ({total_to_discard} total)")
         
         print()
+
+

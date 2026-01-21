@@ -5,7 +5,7 @@ Pre-score filtering for meal candidates.
 Applies availability and lock constraints before scoring to reduce
 the candidate pool to only viable options.
 """
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any, Set, Tuple 
 import re
 
 
@@ -38,7 +38,7 @@ class PreScoreFilter:
     def filter_candidates(
         self,
         candidates: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Apply all pre-score filters to candidates.
         
@@ -49,19 +49,27 @@ class PreScoreFilter:
             List of candidates that pass all filters
         """
         filtered = []
+        filtered_out = []
         
         for candidate in candidates:
             # Extract food codes from candidate
             codes = self._extract_codes(candidate)
+                    # Track rejection reasons
+            rejection_reasons = []
             
-            # Apply filters
-            if self._passes_lock_filters(codes):
-                if self._passes_availability_filter(codes):
-                    # Mark as passed
-                    candidate["filter_passed"] = True
-                    filtered.append(candidate)
-        
-        return filtered
+            if not self._passes_lock_filters(codes):
+                rejection_reasons.append("lock_constraint")
+            if not self._passes_availability_filter(codes):
+                rejection_reasons.append("availability")
+            
+            if rejection_reasons:
+                candidate["rejection_reasons"] = rejection_reasons
+                filtered_out.append(candidate)
+            else:
+                candidate["filter_passed"] = True
+                filtered.append(candidate)
+
+        return filtered, filtered_out
     
     def _extract_codes(self, candidate: Dict[str, Any]) -> Set[str]:
         """

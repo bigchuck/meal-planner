@@ -139,67 +139,39 @@ class MealGenerator:
             if not items:
                 continue
             
-            # Extract meal segments by categorizing time markers
-            meal_segments = self._segment_by_meal_type(items)
-            
-            # Find segments matching our target meal type
-            for segment_meal_type, segment_items in meal_segments:
-                if segment_meal_type.lower() == meal_type.lower():
-                    # Found a matching meal
-                    candidate = {
-                        "meal_type": meal_type,  # CHANGED from meal_name
-                        "items": segment_items,
-                        "source_date": meal_date,
-                        "generation_method": "history_search",
-                        "description": f"From {meal_date}"
-                    }
-                    candidates.append(candidate)
+            meal_items = self._filter_to_meal(items, meal_type)
+            if meal_items:
+                candidate = {
+                    "meal_type": meal_type,  # CHANGED from meal_name
+                    "items": meal_items,
+                    "source_date": meal_date,
+                    "generation_method": "history_search",
+                    "description": f"From {meal_date}"
+                }
+                candidates.append(candidate)
                     
-                    if len(candidates) >= max_results:
-                        return candidates
+                if len(candidates) >= max_results:
+                    return candidates
         
         return candidates
     
-    def _segment_by_meal_type(
-        self,
-        items: List[Dict[str, Any]]
-    ) -> List[tuple[str, List[Dict[str, Any]]]]:
-        """
-        Segment a day's items by meal type based on time markers.
-        
-        Args:
-            items: List of items (includes time markers and food codes)
-        
-        Returns:
-            List of (meal_type, items) tuples
-        """
-        segments = []
+    def _filter_to_meal(self, items: List[Dict[str, Any]], meal_name: str) -> List[Dict[str, Any]]:
+        """Filter items to only those in the specified meal (matches report_command logic)."""
+        filtered = []
         current_meal = None
-        current_items = []
         
         for item in items:
-            # Time marker - start new segment
-            if 'time' in item and 'code' not in item:
-                # Save previous segment
-                if current_meal and current_items:
-                    segments.append((current_meal, current_items))
-                
-                # Start new segment
+            # Check if this is a time marker (has 'time' key but no 'code' key)
+            if isinstance(item, dict) and 'time' in item and 'code' not in item:
+                # Categorize meal name from time
                 time_str = item.get('time', '')
                 meal_override = item.get('meal_override')
                 current_meal = categorize_time(time_str, meal_override)
-                current_items = []
-                continue
-            
-            # Food item - add to current segment
-            if 'code' in item and current_meal:
-                current_items.append(item)
+            elif current_meal and current_meal.lower() == meal_name.lower():
+                # Include this item if we're in the target meal
+                filtered.append(item)
         
-        # Save final segment
-        if current_meal and current_items:
-            segments.append((current_meal, current_items))
-        
-        return segments
+        return filtered
     
     # =========================================================================
     # Future: Template-based generation (placeholders)
