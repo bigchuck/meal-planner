@@ -372,3 +372,99 @@ class WorkspaceManager:
         
         meal = workspace["meals"][plan_id]
         return meal.get("history", [])
+    
+        
+    # =========================================================================
+    # Generated Candidates Management
+    # =========================================================================
+
+    def get_generated_candidates(self) -> Optional[Dict[str, Any]]:
+        """
+        Get generated candidates section from workspace.
+        
+        Returns:
+            Dict with meal_type, generated_at, raw, filtered
+            None if no generated candidates exist
+        """
+        workspace = self.load()
+        return workspace.get("generated_candidates")
+
+    def set_generated_candidates(
+        self,
+        meal_type: str,
+        raw_candidates: List[Dict[str, Any]]
+    ) -> None:
+        """
+        Set generated candidates in workspace (replaces existing).
+        Assigns G-IDs to each candidate.
+        
+        Args:
+            meal_type: Meal category (breakfast, lunch, etc.)
+            raw_candidates: List of raw generated candidate dicts (without IDs)
+        """
+        workspace = self.load()
+        
+        # Assign IDs to candidates (G1, G2, G3, ...)
+        for i, candidate in enumerate(raw_candidates, 1):
+            candidate["id"] = f"G{i}"
+        
+        workspace["generated_candidates"] = {
+            "meal_type": meal_type,
+            "generated_at": datetime.now().isoformat(),
+            "next_id": len(raw_candidates) + 1,  # Next available ID
+            "raw": raw_candidates,
+            "filtered": []  # Empty until filter step
+        }
+        
+        self.save(workspace)
+
+    def update_filtered_candidates(
+        self,
+        filtered_candidates: List[Dict[str, Any]]
+    ) -> None:
+        """
+        Update filtered candidates list (after pre-score filtering).
+        
+        Args:
+            filtered_candidates: List of candidates that passed filters
+        """
+        workspace = self.load()
+        
+        if "generated_candidates" not in workspace:
+            raise ValueError("No generated candidates to filter")
+        
+        workspace["generated_candidates"]["filtered"] = filtered_candidates
+        
+        self.save(workspace)
+
+    def clear_generated_candidates(self) -> None:
+        """Clear generated candidates from workspace."""
+        workspace = self.load()
+        
+        if "generated_candidates" in workspace:
+            del workspace["generated_candidates"]
+            self.save(workspace)
+
+    def has_generated_candidates(self) -> bool:
+        """
+        Check if workspace has generated candidates.
+        
+        Returns:
+            True if generated candidates exist
+        """
+        workspace = self.load()
+        return "generated_candidates" in workspace
+
+    def get_raw_candidates_count(self) -> int:
+        """Get count of raw generated candidates."""
+        gen_cands = self.get_generated_candidates()
+        if not gen_cands:
+            return 0
+        return len(gen_cands.get("raw", []))
+
+    def get_filtered_candidates_count(self) -> int:
+        """Get count of filtered candidates."""
+        gen_cands = self.get_generated_candidates()
+        if not gen_cands:
+            return 0
+        return len(gen_cands.get("filtered", []))

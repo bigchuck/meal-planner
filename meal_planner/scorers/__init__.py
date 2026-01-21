@@ -8,17 +8,10 @@ aspect and returns a 0-1 normalized score.
 """
 from .base_scorer import Scorer
 from .nutrient_gap_scorer import NutrientGapScorer
-from .preference_scorer import PreferenceScorer
 
 # Scorer registry - maps scorer names to classes
 SCORER_REGISTRY = {
     "nutrient_gap": NutrientGapScorer,
-    "preference": PreferenceScorer,
-    # Future scorers will be added here:
-    # "portion_efficiency": PortionEfficiencyScorer,
-    # "variety": VarietyScorer,
-    # "staple_food": StapleFoodScorer,
-    # "cost_practicality": CostPracticalityScorer,
 }
 
 

@@ -14,6 +14,8 @@ from meal_planner.parsers import parse_selection_to_items
 from meal_planner.utils.time_utils import categorize_time, normalize_meal_name, MEAL_NAMES
 from meal_planner.models.scoring_context import MealLocation, ScoringContext
 from meal_planner.analyzers.meal_analyzer import MealAnalyzer
+from meal_planner.generators import MealGenerator
+
 import pandas as pd        
 
 @register_command
@@ -61,7 +63,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
 
         # No args or help request
         if not parts or parts[0] == "help":
-            self._show_help()
+            self._help()
             return
         
         # Parse target and template flag
@@ -72,7 +74,23 @@ class RecommendCommand(Command, CommandHistoryMixin):
         if subcommand == "score":
             self._score(subargs)
             return
-        
+        elif subcommand == "generate":
+            self._generate_candidates(subargs)
+            return
+        elif subcommand == "filter":  # NEW
+            self._filter(subargs)
+            return
+        elif subcommand == "show":  
+            self._show(subargs)
+            return
+        elif subcommand == "help":
+            self._help()
+            return
+        else:
+            print(f"\nUnknown subcommand: {subcommand}")
+            # self._help([])
+
+        # the following is the old recommend command support, which was paired with the analyze command
         target = None
         template_override = None
         meal_name = None
@@ -953,30 +971,49 @@ class RecommendCommand(Command, CommandHistoryMixin):
               f"GL {totals.glycemic_load:.0f} | "
               f"{totals.sugar_g:.1f}g sugar")
     
-    def _show_help(self) -> None:
-        """Show help message."""
-        print("\nUsage: recommend <id|meal_name> --template <template>")
-        print("\nFor workspace meals:")
-        print("  recommend 123a --template lunch.balanced")
-        print("  recommend 2a --template breakfast.protein_focus")
-        print("  (If already analyzed, template is optional)")
-        print("\nFor pending meals:")
-        print("  recommend breakfast --template breakfast.balanced")
-        print("  recommend lunch --template lunch.low_carb")
-        print("  recommend dinner --template dinner.standard")
-        print("\nProvides:")
-        print("  - Gap closure suggestions (add items/increase portions)")
-        print("  - Excess management tips (reduce/remove items)")
-        print("  - Leftover ideas (lunch only)")
-        print("  - Snack bridge options")
-        print("\nrecommend score <meal_id>")
-        print("  Debug scorer output for a complete meal")
-        print("  Shows detailed breakdown of how the meal is scored")
-    
-        print("\nExamples:")
-        print("  recommend score 123a")
-        print("  recommend score N1")
-        print("  recommend score pending --meal breakfast")
+    def _help(self) -> None:
+        """Display help for recommend command."""
+        print("\nRECOMMEND - Meal recommendation pipeline")
+        print()
+        print("Subcommands:")
+        print()
+        
+        print("  recommend generate <meal_type> [count]")
+        print("    Generate meal candidates from history")
+        print("    Examples:")
+        print("      recommend generate lunch")
+        print("      recommend generate breakfast 20")
+        print()
+        
+        print("  recommend show [id]")
+        print("    Show generated candidates")
+        print("    Examples:")
+        print("      recommend show          # All candidates (one-line summaries)")
+        print("      recommend show G3       # Detailed view of G3")
+        print()
+        
+        print("  recommend filter [--verbose]")
+        print("    Apply pre-score filters (locks, availability)")
+        print("    Filters raw candidates before scoring")
+        print("    Examples:")
+        print("      recommend filter")
+        print("      recommend filter --verbose")
+        print()
+        
+        print("  recommend score <meal_id>")
+        print("    Debug scorer output for a specific meal")
+        print("    Examples:")
+        print("      recommend score 123a")
+        print("      recommend score pending --meal breakfast")
+        print()
+        
+        print("Pipeline flow:")
+        print("  1. recommend generate lunch      # Generate raw candidates")
+        print("  2. recommend show                # Preview candidates")
+        print("  3. recommend filter              # Apply pre-score filters")
+        print("  4. recommend show                # View filtered candidates")
+        print("  5. recommend score               # Score filtered candidates (future)")
+        print("  6. recommend accept G3           # Accept a recommendation (future)")
         print()
 
     def _score(self, args: List[str]) -> None:
@@ -1456,8 +1493,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
         """Display scorer-specific details."""
         if scorer_name == "nutrient_gap":
             self._display_nutrient_gap_details(details)
-        elif scorer_name == "preference":
-                self._display_preference_details(details)
 
     def _display_nutrient_gap_details(self, details: Dict[str, Any]) -> None:
         """Display nutrient gap scorer details."""
@@ -1519,47 +1554,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print(f"  Perfect Match Bonus: {bonus:.2f}")
         print(f"  ")
         print(f"  Base Score: {details.get('base_score', 1.0):.2f}")
-        print(f"  Final Score: {details.get('final_score', 0.0):.2f}")
-
-    def _display_preference_details(self, details: Dict[str, Any]) -> None:
-        """Display preference scorer details."""
-        print("Preference Analysis:")
-        
-        total_items = details.get("total_items", 0)
-        frozen_count = details.get("frozen_count", 0)
-        staple_count = details.get("staple_count", 0)
-        unavailable_count = details.get("unavailable_count", 0)
-        
-        print(f"  Total Items: {total_items}")
-        print(f"  Frozen Items: {frozen_count}")
-        
-        if frozen_count > 0:
-            frozen_items = details.get("frozen_items", [])
-            print(f"    {', '.join(frozen_items)}")
-        
-        print(f"  Staple Items: {staple_count}")
-        
-        if staple_count > 0:
-            staple_items = details.get("staple_items", [])
-            print(f"    {', '.join(staple_items)}")
-        
-        print(f"  Unavailable Items: {unavailable_count}")
-        
-        if unavailable_count > 0:
-            unavailable_items = details.get("unavailable_items", [])
-            print(f"    {', '.join(unavailable_items)}")
-        
-        # Show score calculation
-        base = details.get("base_score", 0.5)
-        frozen_bonus = details.get("frozen_bonus", 0.0)
-        staple_bonus = details.get("staple_bonus", 0.0)
-        unavailable_penalty = details.get("unavailable_penalty", 0.0)
-        
-        print(f"\n  Base Score: {base:.2f}")
-        print(f"  Frozen Bonus: +{frozen_bonus:.2f}")
-        print(f"  Staple Bonus: +{staple_bonus:.2f}")
-        print(f"  Unavailable Penalty: -{unavailable_penalty:.2f}")
-        print(f"  ")
         print(f"  Final Score: {details.get('final_score', 0.0):.2f}")
 
     def _get_template_for_meal(self, meal_category: str, template_override: Optional[str] = None) -> Optional[str]:
@@ -1640,3 +1634,334 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 meal_items.append(item)
         
         return meal_items
+
+    def _generate_candidates(self, args: List[str]) -> None:
+        """
+        Generate meal candidates using history search.
+        
+        Args:
+            args: [meal_type, optional count]
+        
+        Examples:
+            recommend generate lunch
+            recommend generate breakfast 20
+        """
+        # Set defaults
+        meal_type = None
+        count = 10
+        
+        # Parse arguments
+        if len(args) >= 1:
+            meal_type = args[0].lower()  # normalize to lowercase
+            
+        if len(args) >= 2:
+            try:
+                count = int(args[1])
+                if count < 1 or count > 50:
+                    print("\nError: count must be between 1 and 50")
+                    print()
+                    return
+            except ValueError:
+                print(f"\nError: Invalid count '{args[1]}' - must be a number")
+                print()
+                return
+        
+        # Validate required meal_type
+        if not meal_type:
+            print("\nUsage: recommend generate <meal_type> [count]")
+            print("\nExamples:")
+            print("  recommend generate lunch")
+            print("  recommend generate breakfast 15")
+            print()
+            return
+        
+        # Optional: Validate meal_type against known templates
+        if self.ctx.thresholds:
+            valid_meals = self.ctx.thresholds.get_default_meal_sequence()
+            if valid_meals and meal_type not in valid_meals:
+                print(f"\nWarning: '{meal_type}' is not in standard meal sequence")
+                print(f"Valid types: {', '.join(valid_meals)}")
+                print("Continuing anyway...\n")
+        
+        # Generate candidates
+        print(f"\nGenerating {count} candidates for {meal_type}...")
+        
+        from meal_planner.generators import MealGenerator
+        generator = MealGenerator(self.ctx.master, self.ctx.log)
+        
+        candidates = generator.generate_candidates(
+            meal_type=meal_type,
+            max_candidates=count,
+            lookback_days=60
+        )
+        
+        if not candidates:
+            print(f"\nNo {meal_type} meals found in history")
+            print("Try:")
+            print("  - Different meal type")
+            print("  - Increasing lookback days (future feature)")
+            print()
+            return
+        
+        # Save to workspace
+        self.ctx.workspace_mgr.set_generated_candidates(
+            meal_type=meal_type,
+            raw_candidates=candidates
+        )
+        
+        # Display results
+        print(f"\nGenerated {len(candidates)} raw candidates for {meal_type}")
+        print()
+    
+    def _filter(self, args: List[str]) -> None:
+        """
+        Apply pre-score filters to raw generated candidates.
+        
+        Filters applied:
+        - Lock constraints (include/exclude)
+        - Availability constraints (exclude_from_recommendations)
+        
+        Usage:
+            recommend filter
+            recommend filter --verbose
+        
+        Args:
+            args: Optional flags (--verbose for detailed output)
+        """
+        # Check for verbose flag
+        verbose = "--verbose" in args or "-v" in args
+        
+        # Check for generated candidates
+        gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
+        
+        if not gen_cands:
+            print("\nNo generated candidates to filter")
+            print("Run 'recommend generate <meal_type>' first")
+            print()
+            return
+        
+        raw_candidates = gen_cands.get("raw", [])
+        meal_type = gen_cands.get("meal_type", "unknown")
+        
+        if not raw_candidates:
+            print("\nNo raw candidates found")
+            print()
+            return
+        
+        print(f"\n=== FILTERING {len(raw_candidates)} {meal_type.upper()} CANDIDATES ===\n")
+        
+        # Load locks from workspace
+        workspace = self.ctx.workspace_mgr.load()
+        locks = workspace.get("locks", {"include": {}, "exclude": []})
+        
+        # Initialize filter
+        from meal_planner.filters import PreScoreFilter
+        pre_filter = PreScoreFilter(locks=locks, user_prefs=self.ctx.user_prefs)
+        
+        # Apply filters
+        filtered_candidates = pre_filter.filter_candidates(raw_candidates)
+        
+        # Save filtered candidates
+        self.ctx.workspace_mgr.update_filtered_candidates(filtered_candidates)
+        
+        # Display results
+        stats = pre_filter.get_filter_stats(len(raw_candidates), len(filtered_candidates))
+        print(stats)
+        print()
+        
+        if verbose and len(filtered_candidates) < len(raw_candidates):
+            # Show what was rejected
+            rejected_count = len(raw_candidates) - len(filtered_candidates)
+            print(f"\nRejection breakdown:")
+            
+            # Identify rejected candidates
+            filtered_dates = {c.get("source_date") for c in filtered_candidates}
+            rejected = [c for c in raw_candidates if c.get("source_date") not in filtered_dates]
+            
+            for i, candidate in enumerate(rejected[:10], 1):  # Show first 10
+                codes = [item["code"] for item in candidate.get("items", []) if "code" in item]
+                codes_str = ", ".join(codes)
+                print(f"  {i}. {candidate.get('description')}: {codes_str}")
+            
+            if rejected_count > 10:
+                print(f"  ... and {rejected_count - 10} more")
+            print()
+        
+        if filtered_candidates:
+            print(f"Filtered candidates ready for scoring")
+            print(f"Next: recommend score (or recommend show to preview)")
+        else:
+            print(f"All candidates filtered out - adjust locks or generate more")
+        
+        print()
+
+    def _show(self, args: List[str]) -> None:
+        """
+        Show generated candidates.
+        
+        Usage:
+            recommend show          # Show all candidates (one-line summaries)
+            recommend show G3       # Show detailed view of G3
+        
+        Args:
+            args: Optional [candidate_id]
+        """
+        # Check for generated candidates
+        gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
+        
+        if not gen_cands:
+            print("\nNo generated candidates to show")
+            print("Run 'recommend generate <meal_type>' first")
+            print()
+            return
+        
+        meal_type = gen_cands.get("meal_type", "unknown")
+        
+        # Determine which list to show (filtered if available, else raw)
+        filtered = gen_cands.get("filtered", [])
+        raw = gen_cands.get("raw", [])
+        
+        candidates = filtered if filtered else raw
+        list_type = "filtered" if filtered else "raw"
+        
+        if not candidates:
+            print(f"\nNo {list_type} candidates")
+            print()
+            return
+        
+        # Show specific candidate
+        if args:
+            candidate_id = args[0].upper()
+            self._show_candidate_detail(candidates, candidate_id, meal_type)
+            return
+        
+        # Show all candidates (one-line summaries)
+        self._show_all_candidates(candidates, meal_type, list_type)
+
+    def _show_all_candidates(
+        self,
+        candidates: List[Dict[str, Any]],
+        meal_type: str,
+        list_type: str
+    ) -> None:
+        """
+        Show all candidates with one-line summaries.
+        
+        Args:
+            candidates: List of candidate dicts
+            meal_type: Meal type
+            list_type: "raw" or "filtered"
+        """
+        print(f"\n=== {meal_type.upper()} CANDIDATES ({list_type.upper()}) ===")
+        print()
+        
+        for candidate in candidates:
+            candidate_id = candidate.get("id", "???")
+            description = candidate.get("description", "")
+            
+            # Get item codes
+            items = candidate.get("items", [])
+            codes = [item["code"] for item in items if "code" in item]
+            
+            # Calculate quick stats using ReportBuilder
+            from meal_planner.reports import ReportBuilder
+            builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
+            report = builder.build_from_items(items, title="temp")
+            totals = report.totals
+            
+            # Format one-line summary
+            cal = totals.calories
+            pro = totals.protein_g
+            carb = totals.carbs_g
+            gl = totals.glycemic_load
+            
+            codes_str = ", ".join(codes[:4])  # First 4 codes
+            if len(codes) > 4:
+                codes_str += f" +{len(codes)-4}"
+            
+            print(f"{candidate_id:4s} {description:15s} | {codes_str:35s} | "
+                f"{cal:4.0f}cal {pro:4.1f}p {carb:4.1f}c GL{gl:4.1f}")
+        
+        print()
+        print(f"Total: {len(candidates)} candidates")
+        print(f"Use 'recommend show <id>' for details")
+        print()
+
+    def _show_candidate_detail(
+        self,
+        candidates: List[Dict[str, Any]],
+        candidate_id: str,
+        meal_type: str
+    ) -> None:
+        """
+        Show detailed view of a specific candidate.
+        
+        Args:
+            candidates: List of candidate dicts
+            candidate_id: ID to show (e.g., "G3")
+            meal_type: Meal type
+        """
+        # Find candidate
+        candidate = None
+        for c in candidates:
+            if c.get("id", "").upper() == candidate_id:
+                candidate = c
+                break
+        
+        if not candidate:
+            print(f"\nCandidate '{candidate_id}' not found")
+            print(f"Available: {', '.join([c.get('id', '?') for c in candidates])}")
+            print()
+            return
+        
+        # Display detailed view
+        print(f"\n=== CANDIDATE {candidate_id}: {meal_type.upper()} ===")
+        print()
+        
+        # Metadata
+        print(f"Source: {candidate.get('description', 'Unknown')}")
+        print(f"Method: {candidate.get('generation_method', 'Unknown')}")
+        if "filter_passed" in candidate:
+            print(f"Filter: {'PASSED' if candidate['filter_passed'] else 'REJECTED'}")
+        print()
+        
+        # Items
+        items = candidate.get("items", [])
+        print("Items:")
+        for item in items:
+            if "code" not in item:
+                continue
+            
+            code = item["code"]
+            mult = item.get("mult", 1.0)
+            
+            # Get food name
+            row = self.ctx.master.lookup_code(code)
+            if row:
+                food_name = row[self.ctx.master.cols.option]
+            else:
+                food_name = "Unknown"
+            
+            if abs(mult - 1.0) < 0.01:
+                print(f"  {code:8s} {food_name}")
+            else:
+                print(f"  {code:8s} x{mult:g} {food_name}")
+        
+        print()
+        
+        # Nutritional analysis
+        from meal_planner.reports import ReportBuilder
+        builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
+        report = builder.build_from_items(items, title="Analysis")
+        
+        # Display totals
+        totals = report.totals
+        print("Nutritional Totals:")
+        print(f"  Calories:  {totals.calories:.0f}")
+        print(f"  Protein:   {totals.protein_g:.1f}g")
+        print(f"  Carbs:     {totals.carbs_g:.1f}g")
+        print(f"  Fat:       {totals.fat_g:.1f}g")
+        print(f"  Fiber:     {totals.fiber_g:.1f}g")
+        print(f"  Sugar:     {totals.sugar_g:.1f}g")
+        print(f"  GL:        {totals.glycemic_load:.1f}")
+        print()

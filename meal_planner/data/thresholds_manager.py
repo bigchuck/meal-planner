@@ -130,27 +130,108 @@ class ThresholdsManager:
             return None
         return self._thresholds.get('explain_messages')
     
-    def get_value_for_range(self, value: float, ranges: List[Dict]) -> Optional[Dict]:
+    def get_daily_planning(self) -> Optional[Dict[str, Any]]:
+        """Get daily planning section."""
+        if not self.is_valid:
+            return None
+        return self._thresholds.get('daily_planning')
+
+    def get_default_meal_sequence(self) -> List[str]:
         """
-        Find the appropriate range entry for a value.
-        
-        Args:
-            value: Numeric value to classify
-            ranges: List of range dicts with 'max' keys
+        Get default meal sequence for daily planning.
         
         Returns:
-            The matching range dict, or None if ranges invalid
+            List of meal names in sequence order, or empty list if not available
         """
-        if not ranges:
+        if not self.is_valid:
+            return []
+        
+        planning = self._thresholds.get('daily_planning', {})
+        return planning.get('default_meal_sequence', [])
+
+    def get_snack_bridge_rules(self) -> Optional[Dict[str, Any]]:
+        """
+        Get snack bridge rules configuration.
+        
+        Returns:
+            Dict with enable_auto_snack_suggestions, min_gap_to_trigger, snack_categories
+        """
+        if not self.is_valid:
             return None
         
-        for range_def in ranges:
-            max_val = range_def.get('max')
-            if max_val is None or value <= max_val:
-                return range_def
+        planning = self._thresholds.get('daily_planning', {})
+        return planning.get('snack_bridge_rules')
+
+    def get_context_propagation(self) -> Optional[Dict[str, Any]]:
+        """
+        Get context propagation configuration.
         
-        # Fallback to last range
-        return ranges[-1]
+        Returns:
+            Dict with track_cumulative_totals, propagate_deficits, propagate_excesses, reset_on_new_day
+        """
+        if not self.is_valid:
+            return None
+        
+        planning = self._thresholds.get('daily_planning', {})
+        return planning.get('context_propagation')
+
+    def should_propagate_deficit(self, nutrient: str) -> bool:
+        """
+        Check if a nutrient deficit should propagate across meals.
+        
+        Args:
+            nutrient: Nutrient name (e.g., 'protein', 'fiber')
+        
+        Returns:
+            True if deficit should carry forward between meals
+        """
+        context_config = self.get_context_propagation()
+        if not context_config:
+            return False
+        
+        propagate_list = context_config.get('propagate_deficits', [])
+        return nutrient in propagate_list
+
+    def should_propagate_excess(self, nutrient: str) -> bool:
+        """
+        Check if a nutrient excess should propagate across meals.
+        
+        Args:
+            nutrient: Nutrient name (e.g., 'sugar', 'gl')
+        
+        Returns:
+            True if excess should carry forward between meals
+        """
+        context_config = self.get_context_propagation()
+        if not context_config:
+            return False
+        
+        propagate_list = context_config.get('propagate_excesses', [])
+        return nutrient in propagate_list
+
+
+        
+        def get_value_for_range(self, value: float, ranges: List[Dict]) -> Optional[Dict]:
+            """
+            Find the appropriate range entry for a value.
+            
+            Args:
+                value: Numeric value to classify
+                ranges: List of range dicts with 'max' keys
+            
+            Returns:
+                The matching range dict, or None if ranges invalid
+            """
+            if not ranges:
+                return None
+            
+            for range_def in ranges:
+                max_val = range_def.get('max')
+                if max_val is None or value <= max_val:
+                    return range_def
+            
+            # Fallback to last range
+            return ranges[-1]
     
     def _validate_structure(self) -> None:
         """Validate thresholds structure and content."""
@@ -164,7 +245,8 @@ class ThresholdsManager:
             'glucose_scoring',
             'curve_classification',
             'explain_messages',
-            'meal_templates'
+            'meal_templates',
+            'daily_planning'
         ]
         missing = [k for k in required_sections if k not in self._thresholds]
         if missing:
@@ -188,7 +270,7 @@ class ThresholdsManager:
         if 'explain_messages' in self._thresholds:
             self._validate_explain_messages()
 
-            # Validate meal categories exist
+        # Validate meal categories exist
         if 'meal_templates' in self._thresholds:
             meal_templates = self._thresholds['meal_templates']
             if not isinstance(meal_templates, dict):
@@ -200,6 +282,11 @@ class ThresholdsManager:
                 if missing_meals:
                     # Warning only - don't fail validation
                     print(f"Warning: Missing meal template categories: {', '.join(missing_meals)}")
+    
+        # Validate daily_planning
+        if 'daily_planning' in self._thresholds:
+            self._validate_daily_planning()
+
     
     def _validate_daily_targets(self) -> None:
         """Validate daily_targets section."""
@@ -330,7 +417,83 @@ class ThresholdsManager:
                             self._validation_errors.append(
                                 f"explain_messages.{field}[{i}] missing 'message'"
                             )
-    
+
+    def _validate_daily_planning(self) -> None:
+        """Validate daily_planning section."""
+        planning = self._thresholds['daily_planning']
+        
+        if not isinstance(planning, dict):
+            self._validation_errors.append("daily_planning must be an object")
+            return
+        
+        # Validate default_meal_sequence
+        if 'default_meal_sequence' not in planning:
+            self._validation_errors.append("daily_planning missing: 'default_meal_sequence'")
+        else:
+            sequence = planning['default_meal_sequence']
+            if not isinstance(sequence, list):
+                self._validation_errors.append("default_meal_sequence must be an array")
+            elif len(sequence) == 0:
+                self._validation_errors.append("default_meal_sequence cannot be empty")
+        
+        # Validate snack_bridge_rules
+        if 'snack_bridge_rules' not in planning:
+            self._validation_errors.append("daily_planning missing: 'snack_bridge_rules'")
+        else:
+            rules = planning['snack_bridge_rules']
+            if not isinstance(rules, dict):
+                self._validation_errors.append("snack_bridge_rules must be an object")
+            else:
+                # Check enable_auto_snack_suggestions
+                if 'enable_auto_snack_suggestions' not in rules:
+                    self._validation_errors.append("snack_bridge_rules missing: 'enable_auto_snack_suggestions'")
+                elif not isinstance(rules['enable_auto_snack_suggestions'], bool):
+                    self._validation_errors.append("enable_auto_snack_suggestions must be boolean")
+                
+                # Check min_gap_to_trigger
+                if 'min_gap_to_trigger' not in rules:
+                    self._validation_errors.append("snack_bridge_rules missing: 'min_gap_to_trigger'")
+                elif not isinstance(rules['min_gap_to_trigger'], dict):
+                    self._validation_errors.append("min_gap_to_trigger must be an object")
+                
+                # Check snack_categories
+                if 'snack_categories' not in rules:
+                    self._validation_errors.append("snack_bridge_rules missing: 'snack_categories'")
+                elif not isinstance(rules['snack_categories'], list):
+                    self._validation_errors.append("snack_categories must be an array")
+        
+        # Validate context_propagation
+        if 'context_propagation' not in planning:
+            self._validation_errors.append("daily_planning missing: 'context_propagation'")
+        else:
+            context = planning['context_propagation']
+            if not isinstance(context, dict):
+                self._validation_errors.append("context_propagation must be an object")
+            else:
+                # Check track_cumulative_totals
+                if 'track_cumulative_totals' not in context:
+                    self._validation_errors.append("context_propagation missing: 'track_cumulative_totals'")
+                elif not isinstance(context['track_cumulative_totals'], bool):
+                    self._validation_errors.append("track_cumulative_totals must be boolean")
+                
+                # Check propagate_deficits
+                if 'propagate_deficits' not in context:
+                    self._validation_errors.append("context_propagation missing: 'propagate_deficits'")
+                elif not isinstance(context['propagate_deficits'], list):
+                    self._validation_errors.append("propagate_deficits must be an array")
+                
+                # Check propagate_excesses
+                if 'propagate_excesses' not in context:
+                    self._validation_errors.append("context_propagation missing: 'propagate_excesses'")
+                elif not isinstance(context['propagate_excesses'], list):
+                    self._validation_errors.append("propagate_excesses must be an array")
+                
+                # Check reset_on_new_day
+                if 'reset_on_new_day' not in context:
+                    self._validation_errors.append("context_propagation missing: 'reset_on_new_day'")
+                elif not isinstance(context['reset_on_new_day'], bool):
+                    self._validation_errors.append("reset_on_new_day must be boolean")
+
     def _validate_range_array(self, ranges: Any, path: str) -> None:
         """Validate a range array structure."""
         if not isinstance(ranges, list):
