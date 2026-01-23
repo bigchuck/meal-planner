@@ -4,6 +4,7 @@ Base command classes and registry.
 from abc import ABC, abstractmethod
 from typing import Dict, Type, Optional, List, Set
 from pathlib import Path
+import sys 
 
 from meal_planner.data import MasterLoader, LogManager, PendingManager, ThresholdsManager
 from meal_planner.utils.time_utils import initialize_meal_boundaries
@@ -52,15 +53,24 @@ class CommandContext:
         self.recipes = RecipesManager(recipes_file) if recipes_file else None
         self.aliases = AliasManager(aliases_file) if aliases_file else None
 
-        self.thresholds = None
+        thresholds = ThresholdsManager(thresholds_file)
+        if not thresholds.load():
+            print("\nCONFIGURATION ERROR: Thresholds validation failed")
+            print("\nErrors found in meal_plan_config.json:")
+            for error in thresholds.validation_errors:
+                print(f"  - {error}")
+            print("\nFix these errors before running the app.")
+            sys.exit(1)  # Hard exit, no fallback
+
         self.thresholds_error = None
-        if thresholds_file:
-            self.thresholds = ThresholdsManager(thresholds_file)
-            if not self.thresholds.load():
-                # Store error message for commands to display
-                self.thresholds_error = self.thresholds.get_error_message()
-                # Set thresholds to None to disable dependent features
-                self.thresholds = None
+
+        code_errors = thresholds.validate_food_codes(self.master)
+        if code_errors:
+            print("\nERROR: Invalid food codes in component_pools")
+            for error in code_errors:
+                print(f"  - {error}")
+            sys.exit(1)
+        self.thresholds = thresholds
 
         self.user_prefs = None
         self.user_prefs_error = None

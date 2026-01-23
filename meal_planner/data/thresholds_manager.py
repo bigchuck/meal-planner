@@ -65,7 +65,7 @@ class ThresholdsManager:
         
         # Validate structure
         self._validate_structure()
-        
+
         if self._validation_errors:
             self._is_valid = False
             self._thresholds = None
@@ -83,23 +83,6 @@ class ThresholdsManager:
     def validation_errors(self) -> List[str]:
         """Get list of validation error messages."""
         return self._validation_errors.copy()
-    
-    def get_error_message(self) -> str:
-        """
-        Get formatted error message for display.
-        
-        Returns:
-            Single-line error summary
-        """
-        if not self._validation_errors:
-            return "Thresholds not loaded"
-        
-        if len(self._validation_errors) == 1:
-            return self._validation_errors[0]
-        
-        print(self._validation_errors)
-
-        return f"Multiple errors in thresholds file ({len(self._validation_errors)} issues)"
     
     @property
     def thresholds(self) -> Optional[Dict[str, Any]]:
@@ -208,30 +191,28 @@ class ThresholdsManager:
         
         propagate_list = context_config.get('propagate_excesses', [])
         return nutrient in propagate_list
-
-
         
-        def get_value_for_range(self, value: float, ranges: List[Dict]) -> Optional[Dict]:
-            """
-            Find the appropriate range entry for a value.
-            
-            Args:
-                value: Numeric value to classify
-                ranges: List of range dicts with 'max' keys
-            
-            Returns:
-                The matching range dict, or None if ranges invalid
-            """
-            if not ranges:
-                return None
-            
-            for range_def in ranges:
-                max_val = range_def.get('max')
-                if max_val is None or value <= max_val:
-                    return range_def
-            
-            # Fallback to last range
-            return ranges[-1]
+    def get_value_for_range(self, value: float, ranges: List[Dict]) -> Optional[Dict]:
+        """
+        Find the appropriate range entry for a value.
+        
+        Args:
+            value: Numeric value to classify
+            ranges: List of range dicts with 'max' keys
+        
+        Returns:
+            The matching range dict, or None if ranges invalid
+        """
+        if not ranges:
+            return None
+        
+        for range_def in ranges:
+            max_val = range_def.get('max')
+            if max_val is None or value <= max_val:
+                return range_def
+        
+        # Fallback to last range
+        return ranges[-1]
     
     def _validate_structure(self) -> None:
         """Validate thresholds structure and content."""
@@ -283,9 +264,17 @@ class ThresholdsManager:
                     # Warning only - don't fail validation
                     print(f"Warning: Missing meal template categories: {', '.join(missing_meals)}")
     
-        # Validate daily_planning
+        # Validate daily_planning for multi-meal 
         if 'daily_planning' in self._thresholds:
             self._validate_daily_planning()
+
+        # Validate component_pools (optional but if present must be valid)
+        if 'component_pools' in self._thresholds:
+            self._validate_component_pools()
+     
+        # Validate meal_generation (optional but if present must be valid)
+        if 'meal_generation' in self._thresholds:
+            self._validate_meal_generation()
 
     
     def _validate_daily_targets(self) -> None:
@@ -547,3 +536,537 @@ class ThresholdsManager:
         """Get configuration for specific scorer."""
         scorers = self.thresholds.get("scorers", {})
         return scorers.get(scorer_name, {})
+    
+    """
+    Additional validation methods for ThresholdsManager to support component_pools
+    and meal_generation sections.
+
+    """
+
+    def _validate_component_pools(self) -> None:
+        """Validate component_pools section."""
+        pools = self._thresholds['component_pools']
+        
+        if not isinstance(pools, dict):
+            self._validation_errors.append("component_pools must be an object")
+            return
+        
+        # Track all pool names for reference validation
+        pool_names = set(pools.keys())
+        
+        # Validate each pool
+        for pool_name, pool_contents in pools.items():
+            if not isinstance(pool_contents, list):
+                self._validation_errors.append(
+                    f"component_pools.{pool_name} must be an array"
+                )
+                continue
+            
+            if len(pool_contents) == 0:
+                self._validation_errors.append(
+                    f"component_pools.{pool_name} cannot be empty"
+                )
+                continue
+            
+            # Check each item in pool
+            for i, item in enumerate(pool_contents):
+                if not isinstance(item, str):
+                    self._validation_errors.append(
+                        f"component_pools.{pool_name}[{i}] must be a string"
+                    )
+                    continue
+                
+                # If it's a reference (starts with @), validate target exists
+                if item.startswith('@'):
+                    ref_name = item[1:]  # Strip @
+                    if ref_name not in pool_names:
+                        self._validation_errors.append(
+                            f"component_pools.{pool_name}[{i}]: reference '@{ref_name}' not found"
+                        )
+                # Otherwise it should be a food code (basic format check)
+                elif not item or '.' not in item:
+                    self._validation_errors.append(
+                        f"component_pools.{pool_name}[{i}]: invalid food code '{item}' (expected format: XX.YY)"
+                    )
+        
+        # Check for circular references
+        self._check_circular_pool_references(pools)
+
+
+    def _check_circular_pool_references(self, pools: Dict[str, List[str]]) -> None:
+        """Check for circular references in component pools."""
+        
+        def has_cycle(pool_name: str, path: set) -> bool:
+            """DFS to detect cycles using only path tracking."""
+            if pool_name in path:
+                return True  # Found a back edge - cycle!
+            
+            if pool_name not in pools:
+                return False
+            
+            path.add(pool_name)
+            
+            # Check all references
+            for item in pools[pool_name]:
+                if isinstance(item, str) and item.startswith('@'):
+                    ref_name = item[1:]
+                    if has_cycle(ref_name, path):
+                        return True
+            
+            path.remove(pool_name)
+            return False
+        
+        # Check each pool for cycles
+        for pool_name in pools:
+            if has_cycle(pool_name, set()):
+                self._validation_errors.append(
+                    f"component_pools: circular reference detected involving '{pool_name}'"
+                )
+                break
+
+    def _validate_meal_generation(self) -> None:
+        """Validate meal_generation section."""
+        meal_gen = self._thresholds['meal_generation']
+        
+        if not isinstance(meal_gen, dict):
+            self._validation_errors.append("meal_generation must be an object")
+            return
+        
+        # Get component pools for validation
+        pools = self._thresholds.get('component_pools', {})
+        pool_names = set(pools.keys()) if isinstance(pools, dict) else set()
+        
+        # Get meal_templates for targets_ref validation
+        meal_templates = self._thresholds.get('meal_templates', {})
+        
+        # Validate each meal category
+        for meal_name, templates in meal_gen.items():
+            if not isinstance(templates, dict):
+                self._validation_errors.append(
+                    f"meal_generation.{meal_name} must be an object"
+                )
+                continue
+            
+            # Validate each generation template
+            for template_name, template in templates.items():
+                path = f"meal_generation.{meal_name}.{template_name}"
+                self._validate_generation_template(template, path, pool_names, meal_templates)
+
+
+    def _validate_generation_template(
+        self, 
+        template: Any, 
+        path: str,
+        pool_names: set,
+        meal_templates: Dict[str, Any]
+    ) -> None:
+        """
+        Validate a single generation template.
+        
+        Args:
+            template: Generation template dict
+            path: Dot-notation path for error messages
+            pool_names: Set of valid pool names
+            meal_templates: Meal templates for targets_ref validation
+        """
+        if not isinstance(template, dict):
+            self._validation_errors.append(f"{path} must be an object")
+            return
+        
+        # Validate targets_ref
+        if 'targets_ref' not in template:
+            self._validation_errors.append(f"{path} missing: 'targets_ref'")
+        else:
+            targets_ref = template['targets_ref']
+            if not isinstance(targets_ref, str):
+                self._validation_errors.append(f"{path}.targets_ref must be a string")
+            else:
+                # Validate targets_ref path exists
+                self._validate_targets_ref(targets_ref, path, meal_templates)
+        
+        # Validate components
+        if 'components' not in template:
+            self._validation_errors.append(f"{path} missing: 'components'")
+        else:
+            components = template['components']
+            if not isinstance(components, dict):
+                self._validation_errors.append(f"{path}.components must be an object")
+            elif len(components) == 0:
+                self._validation_errors.append(f"{path}.components cannot be empty")
+            else:
+                for comp_name, comp_spec in components.items():
+                    self._validate_component_spec(
+                        comp_spec, 
+                        f"{path}.components.{comp_name}",
+                        pool_names
+                    )
+        
+        # Validate constraints (optional)
+        if 'constraints' in template:
+            constraints = template['constraints']
+            if not isinstance(constraints, dict):
+                self._validation_errors.append(f"{path}.constraints must be an object")
+            else:
+                self._validate_constraints(constraints, f"{path}.constraints")
+
+
+    def _validate_targets_ref(
+        self,
+        targets_ref: str,
+        path: str,
+        meal_templates: Dict[str, Any]
+    ) -> None:
+        """
+        Validate that targets_ref path exists in meal_templates.
+        
+        Args:
+            targets_ref: Path like "meal_templates.breakfast.protein_low_carb"
+            path: Current validation path for error messages
+            meal_templates: meal_templates section
+        """
+        # Must start with meal_templates
+        if not targets_ref.startswith("meal_templates."):
+            self._validation_errors.append(
+                f"{path}.targets_ref must start with 'meal_templates.'"
+            )
+            return
+        
+        # Navigate the path
+        parts = targets_ref.split(".")[1:]  # Skip 'meal_templates'
+        current = meal_templates
+        
+        for part in parts:
+            if not isinstance(current, dict) or part not in current:
+                self._validation_errors.append(
+                    f"{path}.targets_ref: path '{targets_ref}' not found in meal_templates"
+                )
+                return
+            current = current[part]
+        
+        # Verify it has targets
+        if isinstance(current, dict) and 'targets' not in current:
+            self._validation_errors.append(
+                f"{path}.targets_ref: '{targets_ref}' has no 'targets' section"
+            )
+
+
+    def _validate_component_spec(
+        self,
+        comp_spec: Any,
+        path: str,
+        pool_names: set
+    ) -> None:
+        """
+        Validate a component specification.
+        
+        Args:
+            comp_spec: Component spec dict
+            path: Dot-notation path for error messages
+            pool_names: Set of valid pool names
+        """
+        if not isinstance(comp_spec, dict):
+            self._validation_errors.append(f"{path} must be an object")
+            return
+        
+        # Must have either pool_ref OR pool (but not both)
+        has_pool_ref = 'pool_ref' in comp_spec
+        has_pool = 'pool' in comp_spec
+        
+        if not has_pool_ref and not has_pool:
+            self._validation_errors.append(
+                f"{path} must have either 'pool_ref' or 'pool'"
+            )
+        elif has_pool_ref and has_pool:
+            self._validation_errors.append(
+                f"{path} cannot have both 'pool_ref' and 'pool'"
+            )
+        
+        # Validate pool_ref if present
+        if has_pool_ref:
+            pool_ref = comp_spec['pool_ref']
+            if not isinstance(pool_ref, str):
+                self._validation_errors.append(f"{path}.pool_ref must be a string")
+            elif pool_ref not in pool_names:
+                self._validation_errors.append(
+                    f"{path}.pool_ref: pool '{pool_ref}' not found in component_pools"
+                )
+        
+        # Validate pool if present
+        if has_pool:
+            pool = comp_spec['pool']
+            if not isinstance(pool, list):
+                self._validation_errors.append(f"{path}.pool must be an array")
+            elif len(pool) == 0:
+                self._validation_errors.append(f"{path}.pool cannot be empty")
+        
+        # Validate count
+        if 'count' not in comp_spec:
+            self._validation_errors.append(f"{path} missing: 'count'")
+        else:
+            count = comp_spec['count']
+            if not isinstance(count, dict):
+                self._validation_errors.append(f"{path}.count must be an object")
+            else:
+                # Validate min/max
+                if 'min' not in count:
+                    self._validation_errors.append(f"{path}.count missing: 'min'")
+                elif not isinstance(count['min'], int) or count['min'] < 0:
+                    self._validation_errors.append(
+                        f"{path}.count.min must be a non-negative integer"
+                    )
+                
+                if 'max' not in count:
+                    self._validation_errors.append(f"{path}.count missing: 'max'")
+                elif not isinstance(count['max'], int) or count['max'] < 0:
+                    self._validation_errors.append(
+                        f"{path}.count.max must be a non-negative integer"
+                    )
+                
+                # Check min <= max
+                if 'min' in count and 'max' in count:
+                    if isinstance(count['min'], int) and isinstance(count['max'], int):
+                        if count['min'] > count['max']:
+                            self._validation_errors.append(
+                                f"{path}.count: min ({count['min']}) > max ({count['max']})"
+                            )
+        
+        # Validate required
+        if 'required' not in comp_spec:
+            self._validation_errors.append(f"{path} missing: 'required'")
+        elif not isinstance(comp_spec['required'], bool):
+            self._validation_errors.append(f"{path}.required must be a boolean")
+
+
+    def _validate_constraints(self, constraints: Dict[str, Any], path: str) -> None:
+        """
+        Validate constraints section.
+        
+        Args:
+            constraints: Constraints dict
+            path: Dot-notation path for error messages
+        """
+        # Validate max_total_components (optional)
+        if 'max_total_components' in constraints:
+            max_comp = constraints['max_total_components']
+            if not isinstance(max_comp, int) or max_comp < 1:
+                self._validation_errors.append(
+                    f"{path}.max_total_components must be a positive integer"
+                )
+        
+        # Validate base_code_uniqueness (optional)
+        if 'base_code_uniqueness' in constraints:
+            uniqueness = constraints['base_code_uniqueness']
+            if not isinstance(uniqueness, bool):
+                self._validation_errors.append(
+                    f"{path}.base_code_uniqueness must be a boolean"
+                )
+        
+        # Validate nutrient_limits (optional)
+        if 'nutrient_limits' in constraints:
+            limits = constraints['nutrient_limits']
+            if not isinstance(limits, dict):
+                self._validation_errors.append(f"{path}.nutrient_limits must be an object")
+            else:
+                for nutrient, limit_spec in limits.items():
+                    self._validate_nutrient_limit(
+                        limit_spec,
+                        f"{path}.nutrient_limits.{nutrient}"
+                    )
+
+
+    def _validate_nutrient_limit(self, limit_spec: Any, path: str) -> None:
+        """
+        Validate a nutrient limit specification.
+        
+        Args:
+            limit_spec: Nutrient limit dict
+            path: Dot-notation path for error messages
+        """
+        if not isinstance(limit_spec, dict):
+            self._validation_errors.append(f"{path} must be an object")
+            return
+        
+        # Validate numeric fields
+        numeric_fields = ['hard_min', 'hard_max', 'soft_min', 'soft_max', 
+                        'soft_max_tolerance', 'tolerance']
+        for field in numeric_fields:
+            if field in limit_spec:
+                value = limit_spec[field]
+                if not isinstance(value, (int, float)) or value < 0:
+                    self._validation_errors.append(
+                        f"{path}.{field} must be a non-negative number"
+                    )
+        
+        # Validate boolean fields
+        boolean_fields = ['reject_below_min', 'reject_above_max', 'no_minimum',
+                        'penalty_above_max', 'penalty_out_of_range']
+        for field in boolean_fields:
+            if field in limit_spec:
+                value = limit_spec[field]
+                if not isinstance(value, bool):
+                    self._validation_errors.append(
+                        f"{path}.{field} must be a boolean"
+                    )
+        
+        # Logical validations
+        if 'hard_min' in limit_spec and 'soft_min' in limit_spec:
+            if limit_spec['hard_min'] > limit_spec['soft_min']:
+                self._validation_errors.append(
+                    f"{path}: hard_min cannot be greater than soft_min"
+                )
+        
+        if 'soft_max' in limit_spec and 'hard_max' in limit_spec:
+            if limit_spec['soft_max'] > limit_spec['hard_max']:
+                self._validation_errors.append(
+                    f"{path}: soft_max cannot be greater than hard_max"
+                )
+        
+        if 'soft_max_tolerance' in limit_spec:
+            if 'soft_max' not in limit_spec:
+                self._validation_errors.append(
+                    f"{path}: soft_max_tolerance requires soft_max to be defined"
+                )
+            elif limit_spec['soft_max_tolerance'] < 1.0:
+                self._validation_errors.append(
+                    f"{path}.soft_max_tolerance must be >= 1.0"
+                )
+
+
+    # Add these getter methods to the ThresholdsManager class:
+
+    def get_component_pools(self) -> Optional[Dict[str, List[str]]]:
+        """
+        Get component pools section.
+        
+        Returns:
+            Dict of pool_name -> list of food codes/references, or None if not valid
+        """
+        if not self.is_valid:
+            return None
+        return self._thresholds.get('component_pools')
+
+
+    def get_meal_generation(self) -> Optional[Dict[str, Any]]:
+        """
+        Get meal generation section.
+        
+        Returns:
+            Dict of meal categories -> generation templates, or None if not valid
+        """
+        if not self.is_valid:
+            return None
+        return self._thresholds.get('meal_generation')
+
+
+    def get_generation_template(self, meal_type: str, template_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific generation template.
+        
+        Args:
+            meal_type: Meal category (e.g., 'breakfast', 'lunch')
+            template_name: Template name (e.g., 'protein_low_carb')
+        
+        Returns:
+            Generation template dict, or None if not found
+        """
+        if not self.is_valid:
+            return None
+        
+        meal_gen = self._thresholds.get('meal_generation', {})
+        if meal_type not in meal_gen:
+            return None
+        
+        return meal_gen[meal_type].get(template_name)
+
+
+    def expand_pool(self, pool_name: str) -> List[str]:
+        """
+        Expand a component pool, resolving @references recursively.
+        
+        Args:
+            pool_name: Name of pool to expand
+        
+        Returns:
+            List of food codes (no @references), or empty list if pool not found
+        
+        Example:
+            pools = {
+                "eggs": ["EG.1", "EG.B1"],
+                "meats": ["MT.4b", "LE.5a"],
+                "breakfast_proteins": ["@eggs", "@meats"]
+            }
+            expand_pool("breakfast_proteins") -> ["EG.1", "EG.B1", "MT.4b", "LE.5a"]
+        """
+        if not self.is_valid:
+            return []
+        
+        pools = self._thresholds.get('component_pools', {})
+        if pool_name not in pools:
+            return []
+        
+        # Track visited pools to prevent infinite recursion
+        visited = set()
+        
+        def expand_recursive(name: str) -> List[str]:
+            if name in visited:
+                return []  # Circular reference, already validated
+            
+            if name not in pools:
+                return []
+            
+            visited.add(name)
+            result = []
+            
+            for item in pools[name]:
+                if item.startswith('@'):
+                    # Recursive expansion
+                    ref_name = item[1:]
+                    result.extend(expand_recursive(ref_name))
+                else:
+                    # Direct food code
+                    result.append(item)
+            
+            return result
+        
+        return expand_recursive(pool_name)
+    
+    def validate_food_codes(self, master_loader) -> List[str]:
+        """
+        Validate that all food codes in component pools exist in master.csv.
+        
+        Call this AFTER load() succeeds with MasterLoader available.
+        Uses master_loader.lookup_code() which triggers lazy load.
+        
+        Args:
+            master_loader: MasterLoader instance
+        
+        Returns:
+            List of validation errors (empty if all valid)
+        """
+        errors = []
+        
+        if not self.is_valid or 'component_pools' not in self._thresholds:
+            return errors
+        
+        # Check each pool
+        pools = self._thresholds['component_pools']
+        for pool_name, pool_contents in pools.items():
+            if not isinstance(pool_contents, list):
+                continue
+            
+            for item in pool_contents:
+                if not isinstance(item, str):
+                    continue
+                
+                # Skip references
+                if item.startswith('@'):
+                    continue
+                
+                # Check food code exists (triggers master load if needed)
+                code = item.upper()
+                if master_loader.lookup_code(code) is None:
+                    errors.append(
+                        f"component_pools.{pool_name}: food code '{code}' not found in master.csv"
+                    )
+        
+        return errors

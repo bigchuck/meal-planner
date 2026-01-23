@@ -371,5 +371,76 @@
       "perfect_match_bonus": 0.1,
       "tolerance_pct": 0.10
     }
+  },
+
+  "component_pools": {
+    "eggs": ["EG.1"],
+    "lean_meats": ["MT.4a"],
+    "breakfast_meats": ["MT.4a"],
+    "fish": ["FI.8", "FI.3"],
+    "leafy_greens": ["VE.12"],
+    "low_carb_veg": ["VE.T1"],
+    "breakfast_veg_small": ["VE.T1"],
+    "breakfast_veg_large": ["VE.T2"],
+    
+    "breakfast_proteins": ["@eggs", "@breakfast_meats"],
+    "breakfast_vegetables": ["@breakfast_veg_small", "@breakfast_veg_large", "@low_carb_veg"],
+    "breakfast_dairy": ["OT.9"]
+  },
+    
+  "meal_generation": {
+    "breakfast": {
+      "protein_low_carb": {
+        "targets_ref": "meal_templates.breakfast.protein_low_carb",
+        "components": {
+          "protein": {
+            "pool_ref": "breakfast_proteins",
+            "count": {"min": 1, "max": 2},
+            "required": true
+          },
+          "vegetable": {
+            "pool_ref": "breakfast_vegetables",
+            "count": {"min": 0, "max": 3},
+            "required": false
+          },
+          "dairy": {
+            "pool_ref": "breakfast_dairy",
+            "count": {"min": 0, "max": 1},
+            "required": false
+          }
+        },
+        "constraints": {
+          "max_total_components": 4,
+          "base_code_uniqueness": true,
+          "nutrient_limits": {
+            "protein": {
+              "hard_min": 25,
+              "soft_max": 35,
+              "soft_max_tolerance": 1.10,
+              "reject_below_min": true,
+              "penalty_above_max": true
+            },
+            "gl": {
+              "hard_max": 12,
+              "reject_above_max": true,
+              "no_minimum": true
+            },
+            "carbs": {
+              "soft_min": 10,
+              "soft_max": 25,
+              "tolerance": 2.0,
+              "penalty_out_of_range": true
+            },
+            "fat": {
+              "soft_min": 15,
+              "soft_max": 20,
+              "tolerance": 1.5,
+              "penalty_out_of_range": true
+            }
+          }
+        }
+      }
+    }
   }
- }
+
+}
