@@ -407,6 +407,8 @@ class WorkspaceManager:
         # Assign IDs to candidates (G1, G2, G3, ...)
         for i, candidate in enumerate(raw_candidates, 1):
             candidate["id"] = f"G{i}"
+            if not candidate.get("meal_name"):
+                candidate["meal_name"] = meal_type
         
         workspace["generated_candidates"] = {
             "meal_type": meal_type,

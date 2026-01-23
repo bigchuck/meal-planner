@@ -70,6 +70,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
             self._discard(subargs)
         elif subcommand == "help":
             self._help()
+        elif subcommand == "accept":
+            self._accept(subargs)
         else:
             print(f"\nUnknown subcommand: {subcommand}")
             self._help()
@@ -132,6 +134,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("    Examples:")
         print("      recommend show          # All candidates (one-line summaries)")
         print("      recommend show G3       # Detailed view of G3")
+        print("      recommend show rejected     # All rejected candidates")
+        print("      recommend show rejected G5  # Detailed view of rejected G5")
         print()
         
         print("  recommend filter [--verbose]")
@@ -148,7 +152,15 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("      recommend score")
         print("      recommend score --verbose")
         print()
-        
+
+        print("  recommend accept <G-ID> [--as <id>] [--desc <text>]")
+        print("    Accept scored candidate and move to planning workspace")
+        print("    Examples:")
+        print("      recommend accept G3")
+        print("      recommend accept G3 --as lunch-friday")
+        print("      recommend accept G5 --desc \"high protein\"")
+        print()
+
         print("  recommend discard [array]")
         print("    Discard generated candidates (requires confirmation)")
         print("    Arrays: raw, filtered, scored (omit to discard all)")
@@ -163,7 +175,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("  3. recommend filter              # Apply pre-score filters")
         print("  4. recommend show                # View filtered candidates")
         print("  5. recommend score               # Score filtered candidates")
-        print("  6. recommend accept G3           # Accept a recommendation (future)")
+        print("  6. recommend accept G3           # Accept a recommendation")
         print("  7. recommend discard             # Clean up when done")
         print()
 
@@ -1088,6 +1100,9 @@ class RecommendCommand(Command, CommandHistoryMixin):
         Filters applied:
         - Lock constraints (include/exclude)
         - Availability constraints (exclude_from_recommendations)
+        - Reserved items (inventory)
+        - Depleted rotating items
+        - Leftover portion matching (exact multiplier required)
         
         Usage:
             recommend filter
@@ -1118,48 +1133,102 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         print(f"\n=== FILTERING {len(raw_candidates)} {meal_type.upper()} CANDIDATES ===\n")
         
-        # Load locks from workspace
+        # Load workspace data
         workspace = self.ctx.workspace_mgr.load()
         locks = workspace.get("locks", {"include": {}, "exclude": []})
+        inventory = workspace.get("inventory", {
+            "leftovers": {},
+            "batch": {},
+            "rotating": {}
+        })
         
-        # Initialize filter
+        # Apply pre-score filter (locks, availability, reservations, depletion)
         from meal_planner.filters import PreScoreFilter
-        pre_filter = PreScoreFilter(locks=locks, user_prefs=self.ctx.user_prefs)
+        pre_filter = PreScoreFilter(
+            locks=locks,
+            user_prefs=self.ctx.user_prefs,
+            inventory=inventory
+        )
         
-        # Apply filters
-        filtered_candidates, filtered_out = pre_filter.filter_candidates(raw_candidates)
+        phase1_passed, phase1_rejected = pre_filter.filter_candidates(raw_candidates)
+        
+        if verbose:
+            stats1 = pre_filter.get_filter_stats(len(raw_candidates), len(phase1_passed))
+            print(f"Phase 1 (locks/availability/reservations): {stats1}")
+        
+        # Apply leftover match filter
+        from meal_planner.filters import LeftoverMatchFilter
+        leftover_filter = LeftoverMatchFilter(
+            inventory=inventory,
+            allow_under_use=False  # Strict matching for now
+        )
+        
+        phase2_passed, phase2_rejected = leftover_filter.filter_candidates(phase1_passed)
+        
+        if verbose:
+            stats2 = leftover_filter.get_filter_stats(len(phase1_passed), len(phase2_passed))
+            print(f"Phase 2 (leftover matching): {stats2}")
+        
+        # Combine all rejected candidates
+        all_rejected = phase1_rejected + phase2_rejected
+        final_passed = phase2_passed
         
         # Save filtered candidates
-        self.ctx.workspace_mgr.update_filtered_candidates(filtered_candidates, filtered_out)
+        self.ctx.workspace_mgr.update_filtered_candidates(final_passed, all_rejected)
         
-        # Display results
-        stats = pre_filter.get_filter_stats(len(raw_candidates), len(filtered_candidates))
-        print(stats)
+        # Display summary
+        total_rejected = len(all_rejected)
+        print(f"\nFiltered: {len(final_passed)}/{len(raw_candidates)} candidates passed")
+        
+        if total_rejected > 0:
+            print(f"Rejected: {total_rejected} candidates")
+            
+            if verbose:
+                # Breakdown by rejection reason
+                reason_counts = {}
+                for candidate in all_rejected:
+                    reasons = candidate.get("rejection_reasons", [])
+                    for reason in reasons:
+                        # Normalize reason (strip details after colon)
+                        base_reason = reason.split(":")[0]
+                        reason_counts[base_reason] = reason_counts.get(base_reason, 0) + 1
+                
+                if reason_counts:
+                    print("\nRejection breakdown:")
+                    for reason, count in sorted(reason_counts.items()):
+                        print(f"  {reason}: {count}")
+        
         print()
         
-        if verbose and len(filtered_candidates) < len(raw_candidates):
-            # Show what was rejected
-            rejected_count = len(raw_candidates) - len(filtered_candidates)
-            print(f"\nRejection breakdown:")
-            
-            # Identify rejected candidates
-            filtered_dates = {c.get("source_date") for c in filtered_candidates}
-            rejected = [c for c in raw_candidates if c.get("source_date") not in filtered_dates]
-            
-            for i, candidate in enumerate(rejected[:10], 1):  # Show first 10
-                codes = [item["code"] for item in candidate.get("items", []) if "code" in item]
+        if verbose and all_rejected:
+            print("Rejected candidates (showing first 10):")
+            for i, candidate in enumerate(all_rejected[:10], 1):
+                cid = candidate.get("id", "?")
+                reasons = candidate.get("rejection_reasons", [])
+                codes = [item.get("code", "?") for item in candidate.get("items", [])[:5]]
+                
+                # Format reasons
+                reason_str = ", ".join(reasons[:3])
+                if len(reasons) > 3:
+                    reason_str += f" +{len(reasons)-3} more"
+                
+                # Format codes
                 codes_str = ", ".join(codes)
-                print(f"  {i}. {candidate.get('description')}: {codes_str}")
+                if len(candidate.get("items", [])) > 5:
+                    codes_str += "..."
+                
+                print(f"  {i}. {cid}: {reason_str}")
+                print(f"     Items: {codes_str}")
             
-            if rejected_count > 10:
-                print(f"  ... and {rejected_count - 10} more")
+            if len(all_rejected) > 10:
+                print(f"  ... and {len(all_rejected) - 10} more")
             print()
         
-        if filtered_candidates:
-            print(f"Filtered candidates ready for scoring")
-            print(f"Next: recommend score (or recommend show to preview)")
+        if final_passed:
+            print(f"Next: recommend score (score {len(final_passed)} candidates)")
         else:
-            print(f"All candidates filtered out - adjust locks or generate more")
+            print("No candidates passed filtering")
+            print("Try adjusting locks, availability settings, or inventory")
         
         print()
 
@@ -1173,13 +1242,22 @@ class RecommendCommand(Command, CommandHistoryMixin):
         Usage:
             recommend show          # Show all candidates (one-line summaries)
             recommend show G3       # Show detailed view of G3
+            recommend show rejected     # Show all rejected candidates
+            recommend show rejected G3  # Show detailed view of rejected G3
         
         Args:
             args: Optional [candidate_id]
         """
             # Check for 'rejected' keyword
+            # Check for 'rejected' keyword
         if args and args[0].lower() == "rejected":
-            self._show_rejected()
+            if len(args) > 1:
+                # Show specific rejected candidate
+                candidate_id = args[1].upper()
+                self._show_rejected_detail(candidate_id)
+            else:
+                # Show all rejected candidates (summary)
+                self._show_rejected()
             return
         
         # Check for generated candidates
@@ -1360,6 +1438,10 @@ class RecommendCommand(Command, CommandHistoryMixin):
     def _show_rejected(self):
         """Show filtered-out candidates with rejection reasons."""
         gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
+        if gen_cands is None or not gen_cands:
+            print("\nNo generated candidates")
+            print("Run 'recommend generate <meal_type>' first")
+            return
         filtered_out = gen_cands.get("filtered_out", [])
         
         if not filtered_out:
@@ -1375,6 +1457,109 @@ class RecommendCommand(Command, CommandHistoryMixin):
             reasons = ", ".join(candidate.get("rejection_reasons", []))
             desc = candidate.get("description", "")[:37] + "..."
             print(f"{cid:<8}{reasons:<30}{desc}")
+        
+        print()
+
+    def _show_rejected_detail(self, candidate_id: str) -> None:
+        """
+        Show detailed view of a specific rejected candidate.
+        
+        Args:
+            candidate_id: ID to show (e.g., "G3")
+        """
+        gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
+        if gen_cands is None or not gen_cands:
+            print("\nNo generated candidates")
+            print("Run 'recommend generate <meal_type>' first")
+            return
+        
+        filtered_out = gen_cands.get("filtered_out", [])
+        
+        if not filtered_out:
+            print("\nNo rejected candidates")
+            print()
+            return
+        
+        # Find candidate
+        candidate = None
+        for cand in filtered_out:
+            if cand.get("id", "").upper() == candidate_id:
+                candidate = cand
+                break
+        
+        if not candidate:
+            print(f"\nRejected candidate {candidate_id} not found")
+            print(f"Use 'recommend show rejected' to see all rejected candidates")
+            print()
+            return
+        
+        meal_type = gen_cands.get("meal_type", "unknown")
+        
+        # Header
+        print(f"\n=== REJECTED CANDIDATE {candidate_id} ===")
+        
+        # Rejection reasons (prominent)
+        reasons = candidate.get("rejection_reasons", [])
+        if reasons:
+            print(f"\nREJECTION REASONS ({len(reasons)}):")
+            for reason in reasons:
+                # Parse reason for better display
+                if ":" in reason:
+                    reason_type, details = reason.split(":", 1)
+                    print(f"  - {reason_type}: {details}")
+                else:
+                    print(f"  - {reason}")
+        
+        # Source info
+        print(f"\nSource: {candidate.get('source_date', 'unknown')} {meal_type}")
+        source_time = candidate.get("source_time", "")
+        if source_time:
+            print(f"Time: {source_time}")
+        
+        # Items
+        print("\nItems:")
+        items = candidate.get("items", [])
+        for item in items:
+            if "code" in item:
+                code = item["code"]
+                multiplier = item.get("mult", 1.0)
+                
+                # Get description from master
+                desc = ""
+                try:
+                    food_data = self.ctx.master.lookup_code(code)
+                    if food_data:
+                        desc = food_data.get('option', '')
+                except:
+                    pass
+                
+                mult_str = f" x{multiplier:g}"
+                desc_str = f"  ({desc})" if desc else ""
+                print(f"  - {code}{mult_str}{desc_str}")
+        
+        # Totals if available
+        totals = candidate.get("totals", {})
+        if totals:
+            print("\nTotals:")
+            print(f"  Calories: {totals.get('cal', 0):.0f}")
+            print(f"  Protein:  {totals.get('prot_g', 0):.1f}g")
+            print(f"  Carbs:    {totals.get('carbs_g', 0):.1f}g")
+            print(f"  Fat:      {totals.get('fat_g', 0):.1f}g")
+            print(f"  Fiber:    {totals.get('fiber_g', 0):.1f}g")
+            if 'gl' in totals:
+                print(f"  GL:       {totals.get('gl', 0):.1f}")
+        
+        # Description if available
+        desc = candidate.get("description", "")
+        if desc:
+            print(f"\nDescription: {desc}")
+        
+        # Under-use warnings if present (from leftover filter)
+        under_use = candidate.get("leftover_under_use", [])
+        if under_use:
+            print(f"\nLeftover Under-use Warnings:")
+            for warning in under_use:
+                print(f"  - {warning}")
         
         print()
 
@@ -1532,4 +1717,242 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         print()
 
+    def _accept(self, args: List[str]) -> None:
+        """
+        Accept a scored candidate and move it to planning workspace.
+        
+        Syntax:
+            recommend accept <G-ID> [--as <custom_id>] [--desc <text>]
+        
+        Args:
+            args: [G-ID] and optional flags
+        
+        Examples:
+            recommend accept G3
+            recommend accept G3 --as lunch-friday
+            recommend accept G5 --desc "high protein option"
+            recommend accept G7 --as dinner-v1 --desc "vegetarian"
+        """
+        if not args:
+            print("\nUsage: recommend accept <G-ID> [--as <custom_id>] [--desc <text>]")
+            print("\nExamples:")
+            print("  recommend accept G3")
+            print("  recommend accept G3 --as lunch-friday")
+            print("  recommend accept G5 --desc \"high protein option\"")
+            print()
+            return
+        
+        # Parse arguments
+        g_id = args[0].upper()
+        custom_id = None
+        description = None
+        
+        i = 1
+        while i < len(args):
+            if args[i] == "--as" and i + 1 < len(args):
+                custom_id = args[i + 1]
+                i += 2
+            elif args[i] == "--desc" and i + 1 < len(args):
+                # Join remaining args as description
+                description = " ".join(args[i + 1:])
+                # Remove quotes if present
+                if description.startswith('"') and description.endswith('"'):
+                    description = description[1:-1]
+                elif description.startswith("'") and description.endswith("'"):
+                    description = description[1:-1]
+                break
+            else:
+                i += 1
+        
+        # Validate G-ID format
+        if not g_id.startswith("G"):
+            print(f"\nError: Invalid ID '{g_id}' - must be a G-ID (e.g., G3)")
+            print()
+            return
+        
+        # Get scored candidates
+        gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
+        
+        if not gen_cands:
+            print("\nNo generated candidates found")
+            print("Run the recommendation pipeline first")
+            print()
+            return
+        
+        scored_candidates = gen_cands.get("scored", [])
+        
+        if not scored_candidates:
+            print("\nNo scored candidates found")
+            print("Run 'recommend score' first")
+            print()
+            return
+        
+        # Find the candidate
+        candidate = None
+        for c in scored_candidates:
+            if c.get("id", "").upper() == g_id:
+                candidate = c
+                break
+        
+        if not candidate:
+            print(f"\nCandidate '{g_id}' not found in scored candidates")
+            print(f"Available: {', '.join(c.get('id', '?') for c in scored_candidates)}")
+            print()
+            return
+        
+        # Determine target ID
+        target_id = custom_id if custom_id else g_id
+        
+        # Load workspace and check for collisions
+        workspace = self.ctx.workspace_mgr.load()
+        
+        if target_id in workspace.get("meals", {}):
+            print(f"\nError: Meal ID '{target_id}' already exists in workspace")
+            print("Choose a different ID with --as flag")
+            print()
+            return
+        
+        # Prepare meal data for workspace
+        meal_data = {
+            "description": description if description else candidate.get("description", ""),
+            "analyzed_as": candidate.get("analyzed_as"),
+            "created": datetime.now().isoformat(),
+            "meal_name": candidate.get("meal_name"),
+            "type": "recommendation",
+            "items": candidate.get("items", []),
+            "totals": candidate.get("totals", {}),
+            "source_date": candidate.get("source_date"),
+            "source_time": candidate.get("source_time"),
+            "parent_id": candidate.get("parent_id"),
+            "ancestor_id": candidate.get("ancestor_id"),
+            "modification_log": candidate.get("modification_log", []),
+            "meets_constraints": candidate.get("meets_constraints", True),
+            "immutable": True,  # Always immutable when accepted
+            "history": []
+        }
+        
+        # Add history entry
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+        history_note = f"Accepted from recommend {g_id}"
+        
+        # Process inventory - reserve leftovers, note batch/rotating usage
+        leftover_reserved = []
+        batch_used = []
+        rotating_used = []
+        rotating_depleted_warnings = []
+        
+        inventory = workspace.get("inventory", {
+            "leftovers": {},
+            "batch": {},
+            "rotating": {}
+        })
+        
+        for item in meal_data["items"]:
+            code = item.get("code", "").upper()
+            mult = item.get("mult", 1.0)
+            
+            # Check leftovers
+            if code in inventory["leftovers"]:
+                leftover_item = inventory["leftovers"][code]
+                leftover_item["reserved"] = True
+                leftover_reserved.append(f"{code} ({mult:g}x)")
+            
+            # Check batch items
+            if code in inventory["batch"]:
+                batch_used.append(f"{code} ({mult:g}x per serving, remains available)")
+            
+            # Check rotating items
+            if code in inventory["rotating"]:
+                rotating_item = inventory["rotating"][code]
+                status = rotating_item.get("status", "available")
+                
+                if status == "depleted":
+                    rotating_depleted_warnings.append(code)
+                else:
+                    rotating_used.append(code)
+        
+        # Update history note with inventory actions
+        if leftover_reserved:
+            history_note += f" | Reserved leftovers: {', '.join(leftover_reserved)}"
+        
+        meal_data["history"].append({
+            "timestamp": timestamp,
+            "command": f"accept {g_id}",
+            "note": history_note
+        })
+        
+        # Add to workspace
+        workspace["meals"][target_id] = meal_data
+        
+        # Remove from scored candidates array
+        scored_candidates.remove(candidate)
+        
+        # Get counts for reporting
+        raw_count = len(workspace["generated_candidates"].get("raw", []))
+        filtered_count = len(workspace["generated_candidates"].get("filtered", []))
+        rejected_count = len(workspace["generated_candidates"].get("filtered_out", []))
+        scored_count = len(scored_candidates)
+        
+        # Clear ALL generated candidate arrays (accept is terminal operation)
+        workspace["generated_candidates"]["raw"] = []
+        workspace["generated_candidates"]["filtered"] = []
+        workspace["generated_candidates"]["filtered_out"] = []
+        workspace["generated_candidates"]["scored"] = []
+        
+        # Save workspace
+        self.ctx.workspace_mgr.save(workspace)
+        
+        # CRITICAL: Refresh planning_workspace in context
+        self.ctx.planning_workspace = self.ctx.workspace_mgr.convert_to_planning_workspace(workspace)
+    
+        # Report clearing
+        print(f"\nCleared generation batch: {raw_count} raw, {filtered_count} filtered, "
+          f"{rejected_count} rejected, {scored_count} scored")
 
+        
+        # Save workspace
+        self.ctx.workspace_mgr.save(workspace)
+        self.ctx.planning_workspace = self.ctx.workspace_mgr.convert_to_planning_workspace(workspace)
+        
+        # Report success
+        meal_name = meal_data.get("meal_name", "meal")
+        cal = meal_data.get("totals", {}).get("cal", 0)
+        prot = meal_data.get("totals", {}).get("prot_g", 0)
+        
+        desc_str = f' - "{meal_data["description"]}"' if meal_data["description"] else ""
+        
+        print(f"\nAccepted {g_id} as meal #{target_id} ({meal_name}, {cal:.0f} cal, {prot:.0f}g prot){desc_str}")
+        print("Meal marked immutable - use 'plan modify' to create mutable variant")
+        print()
+        
+        # Show inventory actions
+        if leftover_reserved:
+            print(f"Reserved leftovers ({len(leftover_reserved)}):")
+            for item_desc in leftover_reserved:
+                print(f"  - {item_desc}")
+            print()
+        
+        if batch_used:
+            print(f"Used batch items ({len(batch_used)}):")
+            for item_desc in batch_used:
+                print(f"  - {item_desc}")
+            print()
+        
+        if rotating_used:
+            print(f"Used rotating items ({len(rotating_used)}):")
+            for code in rotating_used:
+                print(f"  - {code} (available)")
+            print()
+        
+        if rotating_depleted_warnings:
+            print(f"WARNING: Depleted rotating items in plan ({len(rotating_depleted_warnings)}):")
+            for code in rotating_depleted_warnings:
+                print(f"  - {code} (currently depleted)")
+            print()
+        
+        if not leftover_reserved and not batch_used and not rotating_used:
+            print("No inventory items used in this meal")
+            print()
+        
+        print(f"Use 'plan show {target_id}' to view details")
+        print()

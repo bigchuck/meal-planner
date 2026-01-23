@@ -182,13 +182,13 @@ Notes:
         # Validate against leftover constraints
         if code in leftovers:
             leftover_mult = leftovers[code]["multiplier"]
-            if multiplier > leftover_mult:
+            if abs(multiplier-leftover_mult) > 0.001 and "--force" not in args:
                 print(f"\nError: Multiplier {multiplier} exceeds leftover quantity {leftover_mult}")
                 print(f"Available in inventory: {leftover_mult}x")
                 print(f"Note: If using more than leftover quantity, this is not coming from leftovers")
                 print()
                 return
-        
+
         # Add to include list
         workspace["locks"]["include"][code] = multiplier
         

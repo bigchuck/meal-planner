@@ -5,7 +5,7 @@ Pre-score filtering for meal candidates.
 Applies availability and lock constraints before scoring to reduce
 the candidate pool to only viable options.
 """
-from typing import List, Dict, Any, Set, Tuple 
+from typing import List, Dict, Any, Set, Tuple, Optional
 import re
 
 
@@ -23,7 +23,7 @@ class PreScoreFilter:
     - Complexity constraints
     """
     
-    def __init__(self, locks: Dict[str, Any], user_prefs=None):
+    def __init__(self, locks: Dict[str, Any], user_prefs=None, inventory: Optional[Dict[str, Any]] = None):
         """
         Initialize pre-score filter.
         
@@ -34,6 +34,7 @@ class PreScoreFilter:
         """
         self.locks = locks
         self.user_prefs = user_prefs
+        self.inventory = inventory or {"leftovers": {}, "batch": {}, "rotating": {}}
     
     def filter_candidates(
         self,
@@ -61,7 +62,17 @@ class PreScoreFilter:
                 rejection_reasons.append("lock_constraint")
             if not self._passes_availability_filter(codes):
                 rejection_reasons.append("availability")
+
+            # Check for reserved items
+            reserved_items = self._check_reserved_items(codes)
+            if reserved_items:
+                rejection_reasons.extend([f"reserved:{code}" for code in reserved_items])
             
+            # Check for depleted rotating items
+            depleted_items = self._check_depleted_rotating(codes)
+            if depleted_items:
+                rejection_reasons.extend([f"depleted:{code}" for code in depleted_items])
+
             if rejection_reasons:
                 candidate["rejection_reasons"] = rejection_reasons
                 filtered_out.append(candidate)
@@ -154,33 +165,45 @@ class PreScoreFilter:
         include_locks: Dict[str, List[str]]
     ) -> bool:
         """
-        Check if candidate contains at least one included item.
+        Check if candidate contains ALL included items (AND logic).
         
         Args:
             codes: Food codes in candidate
             include_locks: Dict of pattern -> [codes] or code -> []
         
         Returns:
-            True if candidate contains at least one locked item (ACCEPT)
+            True if candidate contains ALL locked items (PASS)
+            False if candidate missing ANY locked item (REJECT)
         """
+        # Must satisfy ALL lock entries
         for lock_key, lock_codes in include_locks.items():
+            found = False
+            
             if lock_key.endswith(".*"):
                 # Pattern lock - check if any code matches pattern
                 pattern = lock_key[:-2]
                 for code in codes:
                     if code.startswith(pattern):
-                        return True
+                        found = True
+                        break
                 
-                # Check specific codes in the pattern lock
-                for lock_code in lock_codes:
-                    if lock_code.upper() in codes:
-                        return True
+                # Also check specific codes in the pattern lock
+                if not found:
+                    for lock_code in lock_codes:
+                        if lock_code.upper() in codes:
+                            found = True
+                            break
             else:
                 # Specific code lock
                 if lock_key.upper() in codes:
-                    return True
+                    found = True
+            
+            # If this lock entry not satisfied, reject
+            if not found:
+                return False
         
-        return False
+        # All lock entries satisfied
+        return True
     
     def _passes_availability_filter(self, codes: Set[str]) -> bool:
         """
@@ -223,7 +246,8 @@ class PreScoreFilter:
     def get_filter_stats(
         self,
         original_count: int,
-        filtered_count: int
+        filtered_count: int,
+        rejected_by_type: Optional[Dict[str, int]] = None
     ) -> str:
         """
         Get human-readable filter statistics.
@@ -231,6 +255,7 @@ class PreScoreFilter:
         Args:
             original_count: Number of raw candidates
             filtered_count: Number after filtering
+            rejected_by_type: Optional breakdown of rejection reasons
         
         Returns:
             Formatted stats string
@@ -242,4 +267,70 @@ class PreScoreFilter:
         
         percent = (rejected / original_count * 100) if original_count > 0 else 0
         
-        return f"Filtered {rejected}/{original_count} candidates ({percent:.1f}% rejected)"
+        base_stats = f"Filtered {rejected}/{original_count} candidates ({percent:.1f}% rejected)"
+        
+        if rejected_by_type:
+            details = []
+            for reason, count in rejected_by_type.items():
+                details.append(f"{reason}: {count}")
+            if details:
+                base_stats += " [" + ", ".join(details) + "]"
+    
+        return base_stats
+
+    def _check_reserved_items(self, codes: Set[str]) -> List[str]:
+        '''
+        Check if any codes are reserved in inventory.
+        
+        Args:
+            codes: Food codes in candidate
+        
+        Returns:
+            List of reserved codes found
+        '''
+        reserved_codes = []
+        
+        # Check leftovers
+        for code in codes:
+            if code in self.inventory.get("leftovers", {}):
+                leftover_item = self.inventory["leftovers"][code]
+                if leftover_item.get("reserved", False):
+                    reserved_codes.append(code)
+            
+            # Check batch items
+            if code in self.inventory.get("batch", {}):
+                batch_item = self.inventory["batch"][code]
+                if batch_item.get("reserved", False):
+                    reserved_codes.append(code)
+            
+            # Check rotating items
+            if code in self.inventory.get("rotating", {}):
+                rotating_item = self.inventory["rotating"][code]
+                if rotating_item.get("reserved", False):
+                    reserved_codes.append(code)
+        
+        return reserved_codes
+    
+    def _check_depleted_rotating(self, codes: Set[str]) -> List[str]:
+        '''
+        Check if any codes are depleted rotating items.
+        
+        Args:
+            codes: Food codes in candidate
+        
+        Returns:
+            List of depleted rotating codes found
+        '''
+        depleted_codes = []
+        
+        rotating_items = self.inventory.get("rotating", {})
+        
+        for code in codes:
+            if code in rotating_items:
+                status = rotating_items[code].get("status", "available")
+                if status == "depleted":
+                    depleted_codes.append(code)
+        
+        return depleted_codes
+    
+    

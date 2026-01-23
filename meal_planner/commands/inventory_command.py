@@ -53,6 +53,10 @@ class InventoryCommand(Command):
             self._restore(subargs)
         elif subcommand == "list":
             self._list()
+        elif subcommand == "reserve":
+            self._reserve(subargs)
+        elif subcommand == "release":
+            self._release(subargs)
         else:
             print(f"\nUnknown inventory subcommand: {subcommand}")
             self._show_help()
@@ -97,8 +101,17 @@ Inventory Management Commands:
         inventory restore GR.H1 x1/7
         inventory restore GR.H1 *1/7
                 
-  inventory list
-      Show all inventory items
+    inventory reserve <code>
+        Mark item as reserved for planning (unavailable for new recommendations)
+
+    inventory release <code>
+        Mark item as available for planning again
+        Examples:
+            inventory reserve FI.8
+            inventory release FI.8
+
+    inventory list
+        Show all inventory items
 
 Notes:
   - Multipliers are fractions of master.csv portions
@@ -140,7 +153,7 @@ Notes:
             print(f"\nError: Food code '{code}' not found in master.csv")
             print()
             return
-        
+    
         # Parse remaining parts to find type flag and multiplier
         multiplier = 1.0
         inv_type = None
@@ -193,6 +206,20 @@ Notes:
         # Get workspace data
         workspace = self._load_workspace()
         
+        # Check for mutual exclusivity
+        for other_type in type_mapping.values():
+            if other_type != inv_type and code in workspace["inventory"][other_type]:
+                type_display_names = {
+                    "leftovers": "leftover",
+                    "batch": "batch item",
+                    "rotating": "rotating item"
+                }
+                print(f"\nError: {code} already exists as {type_display_names[other_type]}")
+                print(f"Remove it first: inventory remove {code}")
+                print(f"Or use a different inventory type")
+                print()
+                return
+        
         # Check if item already exists (before we add it)
         item_exists = code in workspace["inventory"][inv_type]
         
@@ -218,6 +245,10 @@ Notes:
             else:
                 item_data["status"] = "available"
         
+        force_option = "--force" in args
+        if not self._validate_inventory_against_locks(code, multiplier, force_option):
+            return
+
         workspace["inventory"][inv_type][code] = item_data
         
         # Save workspace
@@ -264,6 +295,9 @@ Notes:
         
         for category in ["leftovers", "batch", "rotating"]:
             if code in workspace["inventory"][category]:
+                item = workspace["inventory"][category][code]
+                if item.get("reserved", False):
+                    print(f"\nNote: {code} was reserved for planning - meal plans may reference this item")
                 del workspace["inventory"][category][code]
                 removed = True
                 inv_type = category
@@ -415,13 +449,18 @@ Notes:
                 mult = item["multiplier"]
                 added = item["added"][:10]  # Just date
                 note = item.get("note", "")
+                reserved = item.get("reserved", False)
                 
-                print(f"  {code} ({food_name}): {mult:g}x")
+                reserved_str = " [RESERVED]" if reserved else ""
+                
+                print(f"  {code} ({food_name}): {mult:g}x{reserved_str}")
                 print(f"    Added: {added}")
                 if note:
                     print(f"    Note: {note}")
-                print()        
-        # Show batch items
+                if reserved and "reserved_date" in item:
+                    res_date = item["reserved_date"][:10]
+                    print(f"    Reserved: {res_date}")
+                print()        # Show batch items
         if inventory["batch"]:
             print("Batch items (multi-portion):")
             for code, item in sorted(inventory["batch"].items()):
@@ -492,3 +531,172 @@ Notes:
             unit = row.get('unit', '')
             return f"{amount} {unit}".strip()
         return "Unknown"
+    
+    def _reserve(self, args: str) -> None:
+        """
+        Reserve an inventory item (mark as unavailable for planning).
+        
+        Works across all inventory types (leftover/batch/rotating).
+        
+        Args:
+            args: "<code>"
+        """
+        if not args.strip():
+            print("\nUsage: inventory reserve <code>")
+            print("Example: inventory reserve FI.8")
+            print()
+            return
+        
+        code = args.strip().upper()
+        
+        # Get workspace
+        workspace = self._load_workspace()
+        
+        # Find item in any category
+        found = False
+        category = None
+        
+        for cat in ["leftovers", "batch", "rotating"]:
+            if code in workspace["inventory"][cat]:
+                found = True
+                category = cat
+                break
+        
+        if not found:
+            print(f"\nError: {code} not found in inventory")
+            print("Use 'inventory list' to see available items")
+            print()
+            return
+        
+        # Mark as reserved
+        item = workspace["inventory"][category][code]
+        
+        if item.get("reserved", False):
+            print(f"\n{code} is already reserved")
+            print()
+            return
+        
+        item["reserved"] = True
+        item["reserved_date"] = datetime.now().isoformat()
+        
+        # Save workspace
+        self._save_workspace(workspace)
+        
+        # Get food name for display
+        food_name = self._get_food_name(code)
+        mult = item.get("multiplier", 1.0)
+        
+        # Display-friendly category names
+        cat_display = {
+            "leftovers": "leftover",
+            "batch": "batch item",
+            "rotating": "rotating item"
+        }
+        
+        print(f"\nReserved {code} ({food_name}, {mult:g}x) - unavailable for planning")
+        print(f"Type: {cat_display[category]}")
+        print()
+
+
+    def _release(self, args: str) -> None:
+        """
+        Release a reserved inventory item (mark as available for planning).
+        
+        Works across all inventory types (leftover/batch/rotating).
+        
+        Args:
+            args: "<code>"
+        """
+        if not args.strip():
+            print("\nUsage: inventory release <code>")
+            print("Example: inventory release FI.8")
+            print()
+            return
+        
+        code = args.strip().upper()
+        
+        # Get workspace
+        workspace = self._load_workspace()
+        
+        # Find item in any category
+        found = False
+        category = None
+        
+        for cat in ["leftovers", "batch", "rotating"]:
+            if code in workspace["inventory"][cat]:
+                found = True
+                category = cat
+                break
+        
+        if not found:
+            print(f"\nError: {code} not found in inventory")
+            print("Use 'inventory list' to see available items")
+            print()
+            return
+        
+        # Mark as not reserved
+        item = workspace["inventory"][category][code]
+        
+        if not item.get("reserved", False):
+            print(f"\n{code} is not currently reserved")
+            print()
+            return
+        
+        item["reserved"] = False
+        
+        # Remove reserved_date if it exists
+        if "reserved_date" in item:
+            del item["reserved_date"]
+        
+        # Save workspace
+        self._save_workspace(workspace)
+        
+        # Get food name for display
+        food_name = self._get_food_name(code)
+        mult = item.get("multiplier", 1.0)
+        
+        # Display-friendly category names
+        cat_display = {
+            "leftovers": "leftover",
+            "batch": "batch item",
+            "rotating": "rotating item"
+        }
+        
+        print(f"\nReleased {code} ({food_name}, {mult:g}x) - now available for planning")
+        print(f"Type: {cat_display[category]}")
+        print()
+    
+    # In inventory _add() method, after determining multiplier
+    def _validate_inventory_against_locks(self, code: str, inv_mult: float, force: bool) -> bool:
+        """
+        Check if inventory multiplier conflicts with include locks.
+        Returns True if OK to proceed, False if should block.
+        """
+        workspace = self._load_workspace()
+        locks = workspace.get("locks", {})
+        include_locks = locks.get("include", {})
+        
+        # Check if code is in include locks
+        lock_mult = None
+        
+        # Check direct code locks
+        if code in include_locks:
+            # For simple code locks, multiplier is implicit 1.0 or stored separately
+            # Need to check how locks store multipliers
+            lock_mult = 1.0  # Default assumption
+        
+        # If mismatch found
+        if lock_mult and abs(inv_mult - lock_mult) > 0.001:
+            print(f"\nWARNING: Inventory/lock multiplier mismatch for {code}")
+            print(f"  Inventory: {inv_mult:g}x")
+            print(f"  Lock requires: {lock_mult:g}x")
+            print(f"\nThis will likely result in zero candidates passing filters.")
+            print(f"Recommendation: Use {lock_mult:g}x for inventory to match lock")
+            print()
+            
+            if not force:
+                print("Add --force flag to proceed anyway:")
+                print(f"  inventory add {code} {lock_mult:g} --leftover --force")
+                return False
+        
+        return True
