@@ -1146,6 +1146,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         from meal_planner.filters import PreScoreFilter
         pre_filter = PreScoreFilter(
             locks=locks,
+            meal_type=meal_type,
             user_prefs=self.ctx.user_prefs,
             inventory=inventory
         )

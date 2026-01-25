@@ -2,6 +2,7 @@
 """
 Lock command - manage include/exclude locks for recommendation engine.
 """
+from typing import Optional, Tuple, List
 from .base import Command, register_command
 from meal_planner.parsers.code_parser import eval_multiplier_expression, parse_one_code_mult
 from meal_planner.utils.time_utils import MEAL_NAMES, normalize_meal_name
@@ -175,7 +176,7 @@ Notes:
         
         # Determine target meals
         if meal_type == "all":
-            target_meals = MEAL_NAMES
+            target_meals = self._get_meal_keys()
             meal_desc = "all meals"
         else:
             target_meals = [meal_type]
@@ -252,7 +253,7 @@ Notes:
         
         # Determine target meals
         if meal_type == "all":
-            target_meals = MEAL_NAMES
+            target_meals = self._get_meal_keys()
             meal_desc = "all meals"
         else:
             target_meals = [meal_type]
@@ -312,7 +313,7 @@ Notes:
         
         # Determine target meals
         if meal_type == "all":
-            target_meals = MEAL_NAMES
+            target_meals = self._get_meal_keys()
         else:
             target_meals = [meal_type]
         
@@ -370,16 +371,16 @@ Notes:
         # Parse optional meal type filter
         filter_meal = None
         if args.strip():
-            normalized = normalize_meal_name(args.strip())
-            if normalized not in MEAL_NAMES:
+            filter_meal = normalize_meal_name(args.strip()).lower()
+            if filter_meal not in self._get_meal_keys():
                 print(f"\nError: Invalid meal type '{args.strip()}'")
-                print(f"Valid types: {', '.join([m.lower() for m in MEAL_NAMES])}")
+                print(f"Valid types: {', '.join(self._get_meal_keys())}")
                 print()
                 return
-            filter_meal = normalized
         
         # Determine which meals to show
-        meals_to_show = [filter_meal] if filter_meal else MEAL_NAMES
+        meals_to_show = [filter_meal] if filter_meal else self._get_meal_keys()
+        print(f"{self._get_meal_keys()}")
         
         # Check if any locks exist in target meals
         has_any_locks = False
@@ -391,7 +392,7 @@ Notes:
         
         if not has_any_locks:
             if filter_meal:
-                print(f"\nNo locks set for {filter_meal.lower()}")
+                print(f"\nNo locks set for {filter_meal}")
             else:
                 print("\nNo locks currently set for any meal")
             print()
@@ -412,7 +413,7 @@ Notes:
                 len(meal_locks["exclude"]) == 0):
                 continue
             
-            print(f"{meal}:")
+            print(f"{meal.upper()}:")  # Display uppercase
             
             # Show include list
             if meal_locks["include"]:
@@ -458,21 +459,21 @@ Notes:
                 normalized = normalize_meal_name(args.strip())
                 if normalized not in MEAL_NAMES:
                     print(f"\nError: Invalid meal type '{args.strip()}'")
-                    print(f"Valid types: {', '.join([m.lower() for m in MEAL_NAMES])}, all")
+                    print(f"Valid types: {', '.join(self._get_meal_keys())}, all")
                     print()
                     return
-                meal_type = normalized
+                meal_type = normalized.lower()  # Use lowercase
         else:
             meal_type = "all"
         
         # Determine target meals
         if meal_type == "all":
-            target_meals = MEAL_NAMES
+            target_meals = self._get_meal_keys()
             meal_desc = "all meals"
         else:
             target_meals = [meal_type]
-            meal_desc = meal_type.lower()
-        
+            meal_desc = meal_type
+
         # Check if any locks exist in target meals
         has_locks = False
         total_include = 0
@@ -598,7 +599,7 @@ Notes:
             args: Full argument string
         
         Returns:
-            Tuple of (meal_type, remaining_args)
+            Tuple of (meal_type_lowercase, remaining_args)
             Returns (None, args) if no valid meal type found
         """
         parts = args.strip().split(maxsplit=1)
@@ -619,7 +620,16 @@ Notes:
         # Check if it's a valid meal type
         if normalized in MEAL_NAMES:
             remaining = parts[1] if len(parts) > 1 else ""
-            return normalized, remaining
+            return normalized.lower(), remaining  # Return lowercase for workspace keys
         
         # No meal type found - treat entire args as code/pattern
         return None, args
+    
+    def _get_meal_keys(self) -> List[str]:
+        """
+        Get lowercase meal type keys for workspace storage.
+        
+        Returns:
+            List of lowercase meal type strings matching workspace format
+        """
+        return [m.lower() for m in MEAL_NAMES]

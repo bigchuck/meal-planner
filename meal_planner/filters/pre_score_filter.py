@@ -22,17 +22,20 @@ class PreScoreFilter:
     - Ingredient blacklist
     - Complexity constraints
     """
-    
-    def __init__(self, locks: Dict[str, Any], user_prefs=None, inventory: Optional[Dict[str, Any]] = None):
+    def __init__(self, locks: Dict[str, Any], meal_type: str, user_prefs=None, inventory: Optional[Dict[str, Any]] = None):
         """
         Initialize pre-score filter.
         
         Args:
-            locks: Lock configuration from workspace
-                   {"include": {"SO.*": ["SO.1", "SO.11"]}, "exclude": ["DN."]}
+            locks: Full lock configuration from workspace
+                {"breakfast": {"include": {...}, "exclude": [...]}, "lunch": {...}, ...}
+            meal_type: Meal type to filter for (e.g., "breakfast", "lunch")
             user_prefs: Optional UserPreferencesManager for exclude patterns
+            inventory: Inventory data for reservation/depletion checks
         """
-        self.locks = locks
+        # Extract meal-specific locks
+        meal_locks = locks.get(meal_type, {"include": {}, "exclude": []})
+        self.locks = meal_locks
         self.user_prefs = user_prefs
         self.inventory = inventory or {"leftovers": {}, "batch": {}, "rotating": {}}
     
