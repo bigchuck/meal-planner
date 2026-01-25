@@ -4,6 +4,7 @@ Lock command - manage include/exclude locks for recommendation engine.
 """
 from .base import Command, register_command
 from meal_planner.parsers.code_parser import eval_multiplier_expression, parse_one_code_mult
+from meal_planner.utils.time_utils import MEAL_NAMES, normalize_meal_name
 import re
 
 
@@ -50,9 +51,9 @@ class LockCommand(Command):
         elif subcommand == "remove":
             self._remove(subargs)
         elif subcommand == "list":
-            self._list()
+            self._list(subargs)
         elif subcommand == "clear":
-            self._clear()
+            self._clear(subargs)
         else:
             print(f"\nUnknown lock subcommand: {subcommand}")
             self._show_help()
@@ -114,113 +115,122 @@ Notes:
     
     def _include(self, args: str) -> None:
         """
-        Add food to include list.
+        Add food to include list for specific meal or all meals.
         
         Args:
-            args: "<code> [<multiplier>]"
+            args: "[meal_type|all] <code> [<multiplier>]"
         """
-        if not args.strip():
-            print("\nUsage: lock include <code> [<multiplier>]")
-            print("Example: lock include FI.8 0.225")
-            print("         lock include FI.8 .9/4")
+        # Parse meal type
+        meal_type, remaining_args = self._parse_meal_and_args(args)
+        
+        if not meal_type:
+            print("\nUsage: lock include [meal_type|all] <code> [<multiplier>]")
+            print("Example: lock include lunch FI.8 0.5")
+            print("         lock include all EG.1")
+            print("         lock include dinner SO.13d 0.225")
+            print(f"\nValid meal types: {', '.join([m.lower() for m in MEAL_NAMES])}, all")
             print()
             return
         
-        parts = args.split()
-        code = parts[0].upper()  # Case-insensitive input, stored as uppercase
+        # Parse code and optional multiplier
+        parts = remaining_args.strip().split()
         
-        # Check for wildcard (not allowed in include)
-        if '*' in code:
-            print("\nError: Wildcards not allowed in include list")
-            print("Wildcards are only supported for exclude")
+        if not parts:
+            print("\nError: Missing food code")
+            print("Usage: lock include [meal_type|all] <code> [<multiplier>]")
             print()
             return
         
-        # Validate code exists in master
+        code = parts[0].upper()
+        
+        # Validate code exists
         if not self._validate_code(code):
             print(f"\nError: Food code '{code}' not found in master.csv")
             print()
             return
         
-        # Get workspace
+        # Parse multiplier (default to 1.0 or leftover quantity)
         workspace = self._load_workspace()
+        leftovers = workspace.get("inventory", {}).get("leftovers", {})
         
-        # Check if in exclude list
-        if code in workspace["locks"]["exclude"]:
-            print(f"\nError: {code} is currently in exclude list")
-            print(f"Use 'lock remove {code}' first, then 'lock include {code}'")
-            print()
-            return
-        
-        # Check inventory for leftovers and determine default multiplier
-        inventory = workspace.get("inventory", {})
-        leftovers = inventory.get("leftovers", {})
-        
-        # Smart default: use leftover quantity if available, else 1.0
-        default_multiplier = leftovers[code]["multiplier"] if code in leftovers else 1.0
-        user_provided_multiplier = len(parts) > 1
-        
-        # Parse optional multiplier (supports x1/7, *1/7, 1/7, .9/4, etc.)
-        if user_provided_multiplier:
-            # Try parsing with code prefix first (handles x1/7, *1/7)
-            test_snippet = f"DUMMY {parts[1]}"
-            parsed = parse_one_code_mult(test_snippet)
-            
-            if parsed and 'mult' in parsed:
-                multiplier = parsed['mult']
-                if multiplier <= 0:
-                    print(f"\nError: Multiplier must be positive, got {multiplier}")
-                    print()
-                    return
-            else:
-                print(f"\nError: Invalid multiplier '{parts[1]}'")
-                print()
-                return
+        if len(parts) > 1:
+            multiplier = self._parse_multiplier(parts[1], code, leftovers)
+            if multiplier is None:
+                return  # Error already printed
         else:
-            multiplier = default_multiplier
+            # Smart default: use leftover quantity if available, else 1.0
+            if code in leftovers:
+                multiplier = leftovers[code]["multiplier"]
+            else:
+                multiplier = 1.0
         
-        # Validate against leftover constraints
+        # Validate multiplier doesn't exceed leftover
         if code in leftovers:
             leftover_mult = leftovers[code]["multiplier"]
-            if abs(multiplier-leftover_mult) > 0.001 and "--force" not in args:
-                print(f"\nError: Multiplier {multiplier} exceeds leftover quantity {leftover_mult}")
-                print(f"Available in inventory: {leftover_mult}x")
-                print(f"Note: If using more than leftover quantity, this is not coming from leftovers")
+            if multiplier > leftover_mult + 0.001:  # Small tolerance
+                print(f"\nError: Multiplier {multiplier:g}x exceeds leftover quantity {leftover_mult:g}x")
+                print(f"Maximum allowed: {leftover_mult:g}x")
                 print()
                 return
-
-        # Add to include list
-        workspace["locks"]["include"][code] = multiplier
+        
+        # Determine target meals
+        if meal_type == "all":
+            target_meals = MEAL_NAMES
+            meal_desc = "all meals"
+        else:
+            target_meals = [meal_type]
+            meal_desc = meal_type.lower()
+        
+        # Apply to target meals
+        for meal in target_meals:
+            # Check if in exclude list for this meal
+            if code in workspace["locks"][meal]["exclude"]:
+                print(f"\nError: {code} is in exclude list for {meal.lower()}")
+                print(f"Use 'lock remove {meal.lower()} {code}' first")
+                print()
+                return
+            
+            # Add to include list
+            workspace["locks"][meal]["include"][code] = multiplier
         
         # Save workspace
         self._save_workspace(workspace)
         
-        # Get food name for display
+        # Show confirmation
         food_name = self._get_food_name(code)
+        leftover_tag = f" [from leftover: {leftovers[code]['multiplier']:g}x]" if code in leftovers else ""
         
-        print(f"\nLocked {code} ({food_name}) for inclusion")
-        print(f"  Multiplier: {multiplier:g}x")
-        if code in leftovers and not user_provided_multiplier:
-            print(f"  Note: Defaulted to leftover quantity")
-        print()
-    
+        print(f"\nLocked {code} ({food_name}): {multiplier:g}x for {meal_desc}{leftover_tag}")
+        print()    
+
     def _exclude(self, args: str) -> None:
         """
-        Add food or pattern to exclude list.
+        Add food/pattern to exclude list for specific meal or all meals.
         
         Args:
-            args: "<code|pattern>"
+            args: "[meal_type|all] <code|pattern>"
         """
-        if not args.strip():
-            print("\nUsage: lock exclude <code|pattern>")
-            print("Example: lock exclude 11124")
-            print("         lock exclude SO.*")
+        # Parse meal type
+        meal_type, remaining_args = self._parse_meal_and_args(args)
+        
+        if not meal_type:
+            print("\nUsage: lock exclude [meal_type|all] <code|pattern>")
+            print("Example: lock exclude lunch VE.14")
+            print("         lock exclude all SO.*")
+            print("         lock exclude dinner DN.*")
+            print(f"\nValid meal types: {', '.join([m.lower() for m in MEAL_NAMES])}, all")
             print()
             return
         
-        code_or_pattern = args.strip().upper()
+        if not remaining_args.strip():
+            print("\nError: Missing food code or pattern")
+            print("Usage: lock exclude [meal_type|all] <code|pattern>")
+            print()
+            return
         
-        # Check if pattern (contains wildcard)
+        code_or_pattern = remaining_args.strip().upper()
+        
+        # Check if pattern
         is_pattern = '*' in code_or_pattern
         
         if is_pattern:
@@ -240,60 +250,94 @@ Notes:
         # Get workspace
         workspace = self._load_workspace()
         
-        # Check if in include list
-        if code_or_pattern in workspace["locks"]["include"]:
-            print(f"\nError: {code_or_pattern} is currently in include list")
-            print(f"Use 'lock remove {code_or_pattern}' first, then 'lock exclude {code_or_pattern}'")
-            print()
-            return
+        # Determine target meals
+        if meal_type == "all":
+            target_meals = MEAL_NAMES
+            meal_desc = "all meals"
+        else:
+            target_meals = [meal_type]
+            meal_desc = meal_type.lower()
         
-        # Add to exclude list (avoid duplicates)
-        if code_or_pattern not in workspace["locks"]["exclude"]:
-            workspace["locks"]["exclude"].append(code_or_pattern)
+        # Apply to target meals
+        for meal in target_meals:
+            # Check if in include list for this meal
+            if code_or_pattern in workspace["locks"][meal]["include"]:
+                print(f"\nError: {code_or_pattern} is in include list for {meal.lower()}")
+                print(f"Use 'lock remove {meal.lower()} {code_or_pattern}' first")
+                print()
+                return
+            
+            # Add to exclude list (avoid duplicates)
+            if code_or_pattern not in workspace["locks"][meal]["exclude"]:
+                workspace["locks"][meal]["exclude"].append(code_or_pattern)
         
         # Save workspace
         self._save_workspace(workspace)
         
         if is_pattern:
-            print(f"\nLocked pattern '{code_or_pattern}' for exclusion")
-            print(f"  This will exclude all matching food codes")
+            print(f"\nLocked pattern '{code_or_pattern}' for exclusion from {meal_desc}")
         else:
             food_name = self._get_food_name(code_or_pattern)
-            print(f"\nLocked {code_or_pattern} ({food_name}) for exclusion")
+            print(f"\nLocked {code_or_pattern} ({food_name}) for exclusion from {meal_desc}")
         print()
-    
+
     def _remove(self, args: str) -> None:
         """
-        Remove lock from either include or exclude list.
+        Remove lock from specific meal or all meals.
         
         Args:
-            args: "<code|pattern>"
+            args: "[meal_type|all] <code|pattern>"
         """
-        if not args.strip():
-            print("\nUsage: lock remove <code|pattern>")
-            print("Example: lock remove FI.8")
-            print("         lock remove SO.*")
+        # Parse meal type
+        meal_type, remaining_args = self._parse_meal_and_args(args)
+        
+        if not meal_type:
+            print("\nUsage: lock remove [meal_type|all] <code|pattern>")
+            print("Example: lock remove lunch FI.8")
+            print("         lock remove all SO.*")
+            print(f"\nValid meal types: {', '.join([m.lower() for m in MEAL_NAMES])}, all")
             print()
             return
         
-        code_or_pattern = args.strip().upper()
+        if not remaining_args.strip():
+            print("\nError: Missing food code or pattern")
+            print("Usage: lock remove [meal_type|all] <code|pattern>")
+            print()
+            return
+        
+        code_or_pattern = remaining_args.strip().upper()
         
         # Get workspace
         workspace = self._load_workspace()
         
-        # Try to remove from include
-        removed_from = None
-        if code_or_pattern in workspace["locks"]["include"]:
-            del workspace["locks"]["include"][code_or_pattern]
-            removed_from = "include"
+        # Determine target meals
+        if meal_type == "all":
+            target_meals = MEAL_NAMES
+        else:
+            target_meals = [meal_type]
         
-        # Try to remove from exclude
-        elif code_or_pattern in workspace["locks"]["exclude"]:
-            workspace["locks"]["exclude"].remove(code_or_pattern)
-            removed_from = "exclude"
+        # Track removals
+        removed_from = []
         
-        if removed_from is None:
-            print(f"\nError: {code_or_pattern} not found in locks")
+        for meal in target_meals:
+            removed_type = None
+            
+            # Try to remove from include
+            if code_or_pattern in workspace["locks"][meal]["include"]:
+                del workspace["locks"][meal]["include"][code_or_pattern]
+                removed_type = "include"
+            
+            # Try to remove from exclude
+            elif code_or_pattern in workspace["locks"][meal]["exclude"]:
+                workspace["locks"][meal]["exclude"].remove(code_or_pattern)
+                removed_type = "exclude"
+            
+            if removed_type:
+                removed_from.append((meal, removed_type))
+        
+        if not removed_from:
+            meal_desc = "any meal" if meal_type == "all" else meal_type.lower()
+            print(f"\nError: {code_or_pattern} not found in locks for {meal_desc}")
             print("Use 'lock list' to see current locks")
             print()
             return
@@ -301,87 +345,157 @@ Notes:
         # Save workspace
         self._save_workspace(workspace)
         
-        # Check if pattern
+        # Show confirmation
         is_pattern = '*' in code_or_pattern
+        food_name = "pattern" if is_pattern else self._get_food_name(code_or_pattern)
         
-        if is_pattern:
-            print(f"\nRemoved pattern '{code_or_pattern}' from {removed_from} list")
+        if len(removed_from) == 1:
+            meal, lock_type = removed_from[0]
+            print(f"\nRemoved {code_or_pattern} ({food_name}) from {lock_type} list for {meal.lower()}")
         else:
-            food_name = self._get_food_name(code_or_pattern)
-            print(f"\nRemoved {code_or_pattern} ({food_name}) from {removed_from} list")
+            print(f"\nRemoved {code_or_pattern} ({food_name}) from {len(removed_from)} meals:")
+            for meal, lock_type in removed_from:
+                print(f"  {meal.lower()}: {lock_type}")
         print()
-    
-    def _list(self) -> None:
-        """Show all current locks."""
+
+    def _list(self, args: str = "") -> None:
+        """
+        Show locks for specific meal or all meals.
+        
+        Args:
+            args: Optional "[meal_type]" to filter display
+        """
         workspace = self._load_workspace()
         
-        # Check if any locks exist
-        has_locks = (
-            len(workspace["locks"]["include"]) > 0 or
-            len(workspace["locks"]["exclude"]) > 0
-        )
+        # Parse optional meal type filter
+        filter_meal = None
+        if args.strip():
+            normalized = normalize_meal_name(args.strip())
+            if normalized not in MEAL_NAMES:
+                print(f"\nError: Invalid meal type '{args.strip()}'")
+                print(f"Valid types: {', '.join([m.lower() for m in MEAL_NAMES])}")
+                print()
+                return
+            filter_meal = normalized
         
-        if not has_locks:
-            print("\nNo locks currently set")
+        # Determine which meals to show
+        meals_to_show = [filter_meal] if filter_meal else MEAL_NAMES
+        
+        # Check if any locks exist in target meals
+        has_any_locks = False
+        for meal in meals_to_show:
+            if (len(workspace["locks"][meal]["include"]) > 0 or
+                len(workspace["locks"][meal]["exclude"]) > 0):
+                has_any_locks = True
+                break
+        
+        if not has_any_locks:
+            if filter_meal:
+                print(f"\nNo locks set for {filter_meal.lower()}")
+            else:
+                print("\nNo locks currently set for any meal")
             print()
             return
         
         print("\n=== RECOMMENDATION LOCKS ===")
         print()
         
-        # Show include list
-        if workspace["locks"]["include"]:
-            print("Include (MUST use):")
-            
-            # Get leftover inventory for reference
-            leftovers = workspace.get("inventory", {}).get("leftovers", {})
-            
-            for code, multiplier in sorted(workspace["locks"]["include"].items()):
-                food_name = self._get_food_name(code)
-                
-                # Check if from leftovers
-                leftover_tag = ""
-                if code in leftovers:
-                    leftover_mult = leftovers[code]["multiplier"]
-                    leftover_tag = f" [leftover: {leftover_mult:g}x]"
-                
-                print(f"  {code} ({food_name}): {multiplier:g}x{leftover_tag}")
-            print()
+        # Get leftover inventory for reference
+        leftovers = workspace.get("inventory", {}).get("leftovers", {})
         
-        # Show exclude list
-        if workspace["locks"]["exclude"]:
-            print("Exclude (MUST NOT use):")
-            for item in sorted(workspace["locks"]["exclude"]):
-                # Check if pattern
-                if '*' in item:
-                    print(f"  {item} (pattern - matches multiple codes)")
-                else:
-                    food_name = self._get_food_name(item)
-                    print(f"  {item} ({food_name})")
+        # Show locks by meal type
+        for meal in meals_to_show:
+            meal_locks = workspace["locks"][meal]
+            
+            # Skip meals with no locks
+            if (len(meal_locks["include"]) == 0 and
+                len(meal_locks["exclude"]) == 0):
+                continue
+            
+            print(f"{meal}:")
+            
+            # Show include list
+            if meal_locks["include"]:
+                print("  Include (MUST use):")
+                for code, multiplier in sorted(meal_locks["include"].items()):
+                    food_name = self._get_food_name(code)
+                    
+                    # Check if from leftovers
+                    leftover_tag = ""
+                    if code in leftovers:
+                        leftover_mult = leftovers[code]["multiplier"]
+                        leftover_tag = f" [leftover: {leftover_mult:g}x]"
+                    
+                    print(f"    {code} ({food_name}): {multiplier:g}x{leftover_tag}")
+            
+            # Show exclude list
+            if meal_locks["exclude"]:
+                print("  Exclude (MUST NOT use):")
+                for item in sorted(meal_locks["exclude"]):
+                    # Check if pattern
+                    if '*' in item:
+                        print(f"    {item} (pattern)")
+                    else:
+                        food_name = self._get_food_name(item)
+                        print(f"    {item} ({food_name})")
+            
             print()
     
-    def _clear(self) -> None:
-        """Clear all locks with confirmation."""
+    def _clear(self, args: str = "") -> None:
+        """
+        Clear locks for specific meal or all meals.
+        
+        Args:
+            args: Optional "[meal_type|all]" to target specific meal(s)
+        """
         workspace = self._load_workspace()
         
-        # Check if any locks exist
-        has_locks = (
-            len(workspace["locks"]["include"]) > 0 or
-            len(workspace["locks"]["exclude"]) > 0
-        )
+        # Parse optional meal type
+        if args.strip():
+            if args.strip().lower() == "all":
+                meal_type = "all"
+            else:
+                normalized = normalize_meal_name(args.strip())
+                if normalized not in MEAL_NAMES:
+                    print(f"\nError: Invalid meal type '{args.strip()}'")
+                    print(f"Valid types: {', '.join([m.lower() for m in MEAL_NAMES])}, all")
+                    print()
+                    return
+                meal_type = normalized
+        else:
+            meal_type = "all"
+        
+        # Determine target meals
+        if meal_type == "all":
+            target_meals = MEAL_NAMES
+            meal_desc = "all meals"
+        else:
+            target_meals = [meal_type]
+            meal_desc = meal_type.lower()
+        
+        # Check if any locks exist in target meals
+        has_locks = False
+        total_include = 0
+        total_exclude = 0
+        
+        for meal in target_meals:
+            include_count = len(workspace["locks"][meal]["include"])
+            exclude_count = len(workspace["locks"][meal]["exclude"])
+            
+            if include_count > 0 or exclude_count > 0:
+                has_locks = True
+                total_include += include_count
+                total_exclude += exclude_count
         
         if not has_locks:
-            print("\nNo locks to clear")
+            print(f"\nNo locks to clear for {meal_desc}")
             print()
             return
         
-        # Count locks for confirmation message
-        include_count = len(workspace["locks"]["include"])
-        exclude_count = len(workspace["locks"]["exclude"])
-        
-        print(f"\nAbout to clear ALL locks:")
-        print(f"  Include: {include_count} items")
-        print(f"  Exclude: {exclude_count} items")
+        # Show what will be cleared
+        print(f"\nAbout to clear locks for {meal_desc}:")
+        print(f"  Include: {total_include} items")
+        print(f"  Exclude: {total_exclude} items")
         print()
         
         # Confirmation prompt
@@ -392,14 +506,15 @@ Notes:
             print()
             return
         
-        # Clear all locks
-        workspace["locks"]["include"] = {}
-        workspace["locks"]["exclude"] = []
+        # Clear locks for target meals
+        for meal in target_meals:
+            workspace["locks"][meal]["include"] = {}
+            workspace["locks"][meal]["exclude"] = []
         
         # Save workspace
         self._save_workspace(workspace)
         
-        print("\nAll locks cleared")
+        print(f"\nCleared all locks for {meal_desc}")
         print()
     
     # Helper methods
@@ -423,18 +538,23 @@ Notes:
         """Load workspace data from disk."""
         workspace = self.ctx.workspace_mgr.load()
         
-        # Initialize locks if missing (backward compatibility)
+        # Initialize locks with meal-oriented structure if missing
         if "locks" not in workspace:
-            workspace["locks"] = {
-                "include": {},
-                "exclude": []
-            }
-        else:
-            # Ensure both lists exist
-            if "include" not in workspace["locks"]:
-                workspace["locks"]["include"] = {}
-            if "exclude" not in workspace["locks"]:
-                workspace["locks"]["exclude"] = []
+            workspace["locks"] = {}
+        
+        # Ensure all meal types exist
+        for meal_type in MEAL_NAMES:
+            if meal_type not in workspace["locks"]:
+                workspace["locks"][meal_type] = {
+                    "include": {},
+                    "exclude": []
+                }
+            else:
+                # Ensure both include/exclude exist
+                if "include" not in workspace["locks"][meal_type]:
+                    workspace["locks"][meal_type]["include"] = {}
+                if "exclude" not in workspace["locks"][meal_type]:
+                    workspace["locks"][meal_type]["exclude"] = []
         
         return workspace
     
@@ -469,3 +589,37 @@ Notes:
         if row is not None:
             return row[self.ctx.master.cols.option]
         return "Unknown"
+
+    def _parse_meal_and_args(self, args: str) -> Tuple[Optional[str], str]:
+        """
+        Parse meal type from args string.
+        
+        Args:
+            args: Full argument string
+        
+        Returns:
+            Tuple of (meal_type, remaining_args)
+            Returns (None, args) if no valid meal type found
+        """
+        parts = args.strip().split(maxsplit=1)
+        
+        if not parts:
+            return None, ""
+        
+        potential_meal = parts[0]
+        
+        # Check for "all"
+        if potential_meal.lower() == "all":
+            remaining = parts[1] if len(parts) > 1 else ""
+            return "all", remaining
+        
+        # Try to normalize to canonical meal name
+        normalized = normalize_meal_name(potential_meal)
+        
+        # Check if it's a valid meal type
+        if normalized in MEAL_NAMES:
+            remaining = parts[1] if len(parts) > 1 else ""
+            return normalized, remaining
+        
+        # No meal type found - treat entire args as code/pattern
+        return None, args
