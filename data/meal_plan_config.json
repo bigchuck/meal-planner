@@ -154,6 +154,50 @@
       {"max": null, "message": "Large spike very likely"}
     ]
   },
+
+  "command_history_size": {
+    "description": "Number of command history entries to retain per command/meal",
+    "value": 10,
+    "notes": "Controls how many previous threshold/analyze/recommend commands are saved in workspace"
+  },
+
+  "meal_time_boundaries": {
+    "description": "Time ranges for automatic meal categorization (24-hour format)",
+    "boundaries": {
+        "BREAKFAST": {
+            "start": "05:00",
+            "end": "10:29",
+            "description": "Early morning meal"
+        },
+        "MORNING SNACK": {
+            "start": "10:30",
+            "end": "11:59",
+            "description": "Mid-morning snack"
+        },
+        "LUNCH": {
+            "start": "12:00",
+            "end": "14:29",
+            "description": "Midday meal"
+        },
+        "AFTERNOON SNACK": {
+            "start": "14:30",
+            "end": "15:59",
+            "description": "Mid-afternoon snack"
+        },
+        "DINNER": {
+            "start": "16:00",
+            "end": "19:59",
+            "description": "Evening meal"
+        },
+        "EVENING SNACK": {
+            "start": "20:00",
+            "end": "04:59",
+            "description": "Late evening/night snack (wraps past midnight)"
+        }
+     },
+    "notes": "Times in HH:MM format (24-hour). EVENING SNACK wraps around midnight (20:00-04:59 next day)."
+  },
+
   "meal_templates": {
     "breakfast": {
       "protein_low_carb": {
