@@ -13,7 +13,7 @@ from meal_planner.models.analysis_result import DailyContext
 from meal_planner.parsers import parse_selection_to_items
 from meal_planner.utils.time_utils import categorize_time, normalize_meal_name, MEAL_NAMES
 from meal_planner.models.scoring_context import MealLocation, ScoringContext
-from meal_planner.generators.meal_generator import MealGenerator
+from meal_planner.generators.history_meal_generator import HistoryMealGenerator
 from meal_planner.models.scoring_context import ScoringContext, MealLocation
 from meal_planner.reports.report_builder import ReportBuilder
 
@@ -1017,81 +1017,133 @@ class RecommendCommand(Command, CommandHistoryMixin):
 
     def _generate_candidates(self, args: List[str]) -> None:
         """
-        Generate meal candidates using history search.
+        Generate meal candidates using specified method.
+        
+        Usage:
+            recommend generate <meal_type> [--method history|exhaustive] [--count N] [--template NAME] [--reset]
         
         Args:
-            args: [meal_type, optional count]
-        
-        Examples:
-            recommend generate lunch
-            recommend generate breakfast 20
+            args: Command arguments
         """
-        # Set defaults
-        meal_type = None
-        count = 10
-        
         # Parse arguments
-        if len(args) >= 1:
-            meal_type = args[0].lower()  # normalize to lowercase
-            
-        if len(args) >= 2:
-            try:
-                count = int(args[1])
-                if count < 1 or count > 50:
-                    print("\nError: count must be between 1 and 50")
+        if not args:
+            print("\nUsage: recommend generate <meal_type> [--method history|exhaustive] [--count N] [--template NAME] [--reset]")
+            print("\nMethods:")
+            print("  history (default): Generate from meal history")
+            print("  exhaustive: Generate all combinations from component pools")
+            print()
+            return
+        
+        meal_type = args[0] if args else None
+        if not meal_type:
+            print("\nError: meal_type required")
+            print()
+            return
+        
+        # Parse flags
+        method = "history"
+        count = 50
+        reset = False
+        template_name = None
+        
+        i = 1
+        while i < len(args):
+            if args[i] == "--method" and i + 1 < len(args):
+                method = args[i + 1]
+                if method not in ["history", "exhaustive"]:
+                    print(f"\nError: Invalid method '{method}'")
+                    print("Valid methods: history, exhaustive")
                     print()
                     return
-            except ValueError:
-                print(f"\nError: Invalid count '{args[1]}' - must be a number")
+                i += 2
+            elif args[i] == "--count" and i + 1 < len(args):
+                try:
+                    count = int(args[i + 1])
+                    if count <= 0:
+                        print("\nError: --count must be positive")
+                        print()
+                        return
+                except ValueError:
+                    print(f"\nError: Invalid count '{args[i + 1]}'")
+                    print()
+                    return
+                i += 2
+            elif args[i] == "--template" and i + 1 < len(args):
+                template_name = args[i + 1]
+                i += 2
+            elif args[i] == "--reset":
+                reset = True
+                i += 1
+            else:
+                print(f"\nError: Unknown flag '{args[i]}'")
                 print()
                 return
         
-        # Validate required meal_type
-        if not meal_type:
-            print("\nUsage: recommend generate <meal_type> [count]")
-            print("\nExamples:")
-            print("  recommend generate lunch")
-            print("  recommend generate breakfast 15")
+        # Rest of method unchanged...
+        # (normalize meal type, handle reset, check for mismatches, route to generator)
+        
+        # Normalize meal type
+        from meal_planner.utils.time_utils import normalize_meal_name, MEAL_NAMES
+        normalized_meal = normalize_meal_name(meal_type)
+        if normalized_meal not in MEAL_NAMES:
+            print(f"\nError: Invalid meal type '{meal_type}'")
+            print(f"Valid types: {', '.join(MEAL_NAMES)}")
             print()
             return
         
-        # Optional: Validate meal_type against known templates
-        if self.ctx.thresholds:
-            valid_meals = self.ctx.thresholds.get_default_meal_sequence()
-            if valid_meals and meal_type not in valid_meals:
-                print(f"\nWarning: '{meal_type}' is not in standard meal sequence")
-                print(f"Valid types: {', '.join(valid_meals)}")
-                print("Continuing anyway...\n")
+        meal_key = normalized_meal.lower()
         
-        # Generate candidates
-        print(f"\nGenerating {count} candidates for {meal_type}...")
+        # Load workspace
+        workspace = self.ctx.workspace_mgr.load()
         
-        from meal_planner.generators import MealGenerator
-        generator = MealGenerator(self.ctx.master, self.ctx.log)
+        # Check for existing generation session
+        gen_state = workspace.get("generation_state", {})
+        existing_method = gen_state.get("method")
+        existing_meal = gen_state.get("meal_type")
         
-        candidates = generator.generate_candidates(
-            meal_type=meal_type,
-            max_candidates=count,
-            lookback_days=60
-        )
-        
-        if not candidates:
-            print(f"\nNo {meal_type} meals found in history")
-            print("Try:")
-            print("  - Different meal type")
-            print("  - Increasing lookback days (future feature)")
+        # Handle --reset
+        if reset:
+            if not gen_state:
+                print("\nNo active generation session to reset")
+                print()
+                return
+            
+            print(f"\nAbout to reset generation session:")
+            print(f"  Method: {existing_method}")
+            print(f"  Meal: {existing_meal}")
+            print(f"  Cursor: {gen_state.get('cursor', 'N/A')}")
+            print()
+            
+            response = input("Are you sure? (yes/no): ").strip().lower()
+            if response != "yes":
+                print("\nReset cancelled")
+                print()
+                return
+            
+            # Clear generation state
+            workspace["generation_state"] = {}
+            workspace["generated_candidates"] = {"raw": [], "filtered": [], "rejected": []}
+            self.ctx.workspace_mgr.save(workspace)
+            
+            print("\nGeneration session reset")
             print()
             return
         
-        # Save to workspace
-        self.ctx.workspace_mgr.set_generated_candidates(
-            meal_type=meal_type,
-            raw_candidates=candidates
-        )
+        # Check for method/meal mismatch
+        if gen_state and (existing_method != method or existing_meal != meal_key):
+            print(f"\nWarning: Active generation session exists:")
+            print(f"  Current: {existing_method} for {existing_meal}")
+            print(f"  Requested: {method} for {meal_key}")
+            print()
+            print("Use --reset to clear and start new session")
+            print()
+            return
         
-        # Display results
-        print(f"\nGenerated {len(candidates)} raw candidates for {meal_type}")
-        print()
+        # Route to appropriate generator
+        if method == "history":
+            self._generate_from_history(meal_key, count, workspace)
+        else:  # exhaustive
+            self._generate_exhaustive(meal_key, count, workspace, template_name)
     
     def _filter(self, args: List[str]) -> None:
         """
@@ -1615,9 +1667,10 @@ class RecommendCommand(Command, CommandHistoryMixin):
 
     def _discard(self, args: List[str]) -> None:
         """
-        Discard generated candidates with confirmation.
+        Discard generated candidates.
         
-        MODIFIED: Now properly handles scored array.
+        Fully clears both generated_candidates and generation_state,
+        allowing immediate re-generation without --reset.
         
         Usage:
             recommend discard           # Discard all (raw, filtered, scored)
@@ -1640,9 +1693,10 @@ class RecommendCommand(Command, CommandHistoryMixin):
         valid_arrays = ['raw', 'filtered', 'scored']
         
         if not args:
-            # Discard all
+            # Discard all - full reset
             target_arrays = ['raw', 'filtered', 'scored']
             target_label = "all candidates"
+            full_reset = True
         else:
             # Discard specific array
             array_name = args[0].lower()
@@ -1655,6 +1709,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
             
             target_arrays = [array_name]
             target_label = f"{array_name} candidates"
+            full_reset = False
         
         # Count what will be discarded
         meal_type = gen_cands.get("meal_type", "unknown")
@@ -1688,6 +1743,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         print()
         print(f"This will PERMANENTLY delete {total_to_discard} candidate(s)")
+        if full_reset:
+            print("Generation state will be fully reset (cursor and session cleared)")
         print()
         
         # Idiot check - require explicit "yes"
@@ -1698,15 +1755,20 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
             return
         
+        # Load workspace
+        workspace = self.ctx.workspace_mgr.load()
+        
         # Perform discard
-        if not args:
-            # Discard entire generated_candidates section
-            self.ctx.workspace_mgr.clear_generated_candidates()
-            print(f"\nDiscarded all candidates ({total_to_discard} total)")
-        else:
-            # Discard specific array(s)
-            workspace = self.ctx.workspace_mgr.load()
+        if full_reset:
+            # Complete reset - clear everything
+            workspace["generated_candidates"] = {}
+            workspace["generation_state"] = {}
+            self.ctx.workspace_mgr.save(workspace)
             
+            print(f"\nDiscarded all candidates ({total_to_discard} total)")
+            print("Generation state fully reset - ready for new generation")
+        else:
+            # Partial discard - clear specific arrays only
             if "generated_candidates" in workspace:
                 for array_name in target_arrays:
                     if array_name in workspace["generated_candidates"]:
@@ -1715,6 +1777,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 self.ctx.workspace_mgr.save(workspace)
             
             print(f"\nDiscarded {target_label} ({total_to_discard} total)")
+            print("Note: Generation state NOT reset. Use 'recommend discard' (no args) for full reset.")
         
         print()
 
@@ -1956,4 +2019,126 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
         
         print(f"Use 'plan show {target_id}' to view details")
+        print()
+
+    def _generate_from_history(self, meal_key: str, count: int, workspace: dict) -> None:
+        """
+        Generate candidates from meal history (original method).
+        
+        Args:
+            meal_key: Normalized meal type key
+            count: Number of candidates to generate
+            workspace: Workspace dict
+        """
+        print(f"\nGenerating {count} candidates from history for {meal_key.upper()}...")
+        
+        from meal_planner.generators import HistoryMealGenerator
+        generator = HistoryMealGenerator(self.ctx.master, self.ctx.log)
+        
+        candidates = generator.generate_candidates(
+            meal_type=meal_key,
+            max_candidates=count,
+            lookback_days=60
+        )
+        
+        if not candidates:
+            print(f"\nNo {meal_key} meals found in history")
+            print("Try:")
+            print("  - Different meal type")
+            print("  - Increasing lookback days (future feature)")
+            print()
+            return
+        
+        # Save to workspace
+        self.ctx.workspace_mgr.set_generated_candidates(
+            meal_type=meal_key,
+            raw_candidates=candidates
+        )
+        
+        # Reload workspace to get the updated version with generated_candidates
+        workspace = self.ctx.workspace_mgr.load()
+        
+        # Update generation state
+        workspace["generation_state"] = {
+            "method": "history",
+            "meal_type": meal_key,
+            "cursor": 0  # History doesn't use cursor
+        }
+        
+        # Save workspace with generation state
+        self.ctx.workspace_mgr.save(workspace)
+        
+        # Display results
+        print(f"\nGenerated {len(candidates)} raw candidates for {meal_key}")
+        print()
+
+    def _generate_exhaustive(self, meal_key: str, count: int, workspace: dict, template_name: Optional[str] = None) -> None:
+        """
+        Generate candidates exhaustively from component pools.
+        
+        Args:
+            meal_key: Normalized meal type key
+            count: Number of candidates to generate
+            workspace: Workspace dict
+            template_name: Specific template to use (None = use first available)
+        """
+        # Load or initialize generation state
+        gen_state = workspace.get("generation_state", {})
+        cursor = gen_state.get("cursor", 0)
+        
+        print(f"\n=== EXHAUSTIVE GENERATION: {meal_key.upper()} ===")
+        print(f"Generating {count} candidates starting from position {cursor}")
+        if template_name:
+            print(f"Using template: {template_name}")
+        print()
+        
+        from meal_planner.generators import ExhaustiveMealGenerator
+        generator = ExhaustiveMealGenerator(self.ctx.master, self.ctx.thresholds)
+        
+        candidates, new_cursor = generator.generate_batch(
+            meal_type=meal_key,
+            count=count,
+            cursor=cursor,
+            template_name=template_name
+        )
+        
+        if not candidates:
+            print("No more combinations available")
+            print()
+            return
+        
+        # Save to workspace (append if continuing session)
+        if cursor == 0:
+            # Fresh start - replace
+            self.ctx.workspace_mgr.set_generated_candidates(
+                meal_type=meal_key,
+                raw_candidates=candidates
+            )
+        else:
+            # Continuation - append
+            existing = self.ctx.workspace_mgr.get_generated_candidates()
+            if existing:
+                all_raw = existing.get("raw", []) + candidates
+                self.ctx.workspace_mgr.set_generated_candidates(
+                    meal_type=meal_key,
+                    raw_candidates=all_raw
+                )
+        
+        # Reload workspace to get updated version
+        workspace = self.ctx.workspace_mgr.load()
+        
+        # Update generation state
+        workspace["generation_state"] = {
+            "method": "exhaustive",
+            "meal_type": meal_key,
+            "cursor": new_cursor,
+            "template_name": template_name
+        }
+        
+        # Save workspace with generation state
+        self.ctx.workspace_mgr.save(workspace)
+        
+        # Display results
+        print(f"Generated {len(candidates)} candidates (positions {cursor}-{new_cursor-1})")
+        print(f"Total raw candidates in workspace: {new_cursor}")
         print()

@@ -2,6 +2,7 @@
 """
 Meal candidate generation for recommendation engine.
 """
-from .meal_generator import MealGenerator
+from .history_meal_generator import HistoryMealGenerator
+from .exhaustive_meal_generator import ExhaustiveMealGenerator
 
-__all__ = ['MealGenerator']
+__all__ = ['HistoryMealGenerator', 'ExhaustiveMealGenerator']

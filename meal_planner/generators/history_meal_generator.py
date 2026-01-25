@@ -15,7 +15,7 @@ from meal_planner.utils.time_utils import categorize_time
 from meal_planner.parsers import parse_selection_to_items
 
 
-class MealGenerator:
+class HistoryMealGenerator:
     """
     Generates meal candidates for recommendation engine.
     
