@@ -607,13 +607,13 @@ class MaterializeCommand(Command):
             cols.code: code,
             cols.section: section,
             cols.option: description,
-            cols.cal: nutrition['cal'],
-            cols.prot_g: nutrition['prot_g'],
-            cols.carbs_g: nutrition['carbs_g'],
-            cols.fat_g: nutrition['fat_g'],
-            cols.gi: nutrition['GI'],
-            cols.gl: nutrition['GL'],
-            cols.sugar_g: nutrition['sugar_g']
+            cols.cal: round(nutrition['cal'], 2),
+            cols.prot_g: round(nutrition['prot_g'], 2),
+            cols.carbs_g: round(nutrition['carbs_g'], 2),
+            cols.fat_g: round(nutrition['fat_g'], 2),
+            cols.gi: round(nutrition['GI'], 2),
+            cols.gl: round(nutrition['GL'], 2),
+            cols.sugar_g: round(nutrition['sugar_g'], 2)
         }
         
         # Add row
@@ -639,6 +639,8 @@ class MaterializeCommand(Command):
         
         # Build new row
         new_row = {'code': code}
+        for key, value in nutrients.items():
+            new_row[key] = round(value, 2)
         new_row.update(nutrients)
         
         # Add row
