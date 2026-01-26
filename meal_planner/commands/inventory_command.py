@@ -64,61 +64,16 @@ class InventoryCommand(Command):
     def _show_help(self) -> None:
         """Show inventory command help."""
         print("""
-Inventory Management Commands:
-
-  inventory add <code> [<mult>] --leftover|--batch|--rotating [note]
-      Add item to inventory
-      --leftover: Single-use item from previous meal
-      --batch: Multi-portion item (soup, meatballs, etc.)
-      --rotating: Persistent item that cycles (granola, cole slaw)
-      
-      Examples:
-        inventory add FI.8 0.225 --leftover "salmon from dinner"
-        inventory add SO.13d 0.5 --batch "lentil soup"
-        inventory add FI.8 x1/7 --leftover "fish"
-        inventory add FI.8 *1/7 --leftover "fish"
-        inventory add GR.H1 --rotating "homemade granola"
-  
-  inventory remove <code>
-      Remove item from inventory (consumed or discarded)
-      
-      Examples:
-        inventory remove FI.8
-        inventory remove SO.13d
-  
-  inventory depleted <code>
-      Mark rotating item as depleted (still tracked, not available)
-      
-      Examples:
-        inventory depleted GR.H1
-  
-  inventory restore <code> [<mult>]
-      Restore rotating item to available status
-      
-      Examples:
-        inventory restore GR.H1
-        inventory restore GR.H1 1.5
-        inventory restore GR.H1 x1/7
-        inventory restore GR.H1 *1/7
-                
+    Inventory Commands:
+    inventory add <code> [<mult>] --leftover|--batch|--rotating [note]
+    inventory remove <code>
+    inventory depleted <code>
+    inventory restore <code> [<mult>]
     inventory reserve <code>
-        Mark item as reserved for planning (unavailable for new recommendations)
-
     inventory release <code>
-        Mark item as available for planning again
-        Examples:
-            inventory reserve FI.8
-            inventory release FI.8
-
     inventory list
-        Show all inventory items
-
-Notes:
-  - Multipliers are fractions of master.csv portions
-  - Multipliers support: 1.5, 1/7, .9/4, x1/7, *1/7, etc.
-  - Default multiplier is 1.0 if omitted
-  - Inventory auto-saves after each change""")
-    
+    """)
+              
     def _add(self, args: str) -> None:
         """
         Add item to inventory.
@@ -183,7 +138,7 @@ Notes:
                 
                 # Try parsing with code prefix first (handles x1/7, *1/7)
                 # Create fake code to parse: "DUMMY x1/7" -> extracts multiplier
-                test_snippet = f"DUMMY {part}"
+                test_snippet = f"DUM.MY {part}"
                 parsed = parse_one_code_mult(test_snippet)
                 
                 if parsed and 'mult' in parsed:
@@ -382,7 +337,7 @@ Notes:
         multiplier = None
         if len(parts) > 1:
             # Try parsing with code prefix first (handles x1/7, *1/7)
-            test_snippet = f"DUMMY {parts[1]}"
+            test_snippet = f"DUM.MY {parts[1]}"
             parsed = parse_one_code_mult(test_snippet)
             
             if parsed and 'mult' in parsed:
@@ -439,11 +394,10 @@ Notes:
             return
         
         print("\n=== INVENTORY ===")
-        print()
         
         # Show leftovers
         if inventory["leftovers"]:
-            print("Leftovers (single-use items):")
+            print("\nLeftovers (single-use items):")
             for code, item in sorted(inventory["leftovers"].items()):
                 food_name = self._get_food_name(code)
                 mult = item["multiplier"]
@@ -452,31 +406,26 @@ Notes:
                 reserved = item.get("reserved", False)
                 
                 reserved_str = " [RESERVED]" if reserved else ""
+                note_str = f' - "{note}"' if note else ""
                 
-                print(f"  {code} ({food_name}): {mult:g}x{reserved_str}")
-                print(f"    Added: {added}")
-                if note:
-                    print(f"    Note: {note}")
-                if reserved and "reserved_date" in item:
-                    res_date = item["reserved_date"][:10]
-                    print(f"    Reserved: {res_date}")
-                print()        # Show batch items
+                print(f"  {code} ({food_name}): {mult:g}x, added {added}{reserved_str}{note_str}")
+        
+        # Show batch items
         if inventory["batch"]:
-            print("Batch items (multi-portion):")
+            print("\nBatch items (multi-portion):")
             for code, item in sorted(inventory["batch"].items()):
                 food_name = self._get_food_name(code)
                 mult = item["multiplier"]
                 added = item["added"][:10]
                 note = item.get("note", "")
                 
-                print(f"  {code} ({food_name}): {mult:g}x per use")
-                print(f"    Added: {added}")
-                if note:
-                    print(f"    Note: {note}")
-                print()
+                note_str = f' - "{note}"' if note else ""
+                
+                print(f"  {code} ({food_name}): {mult:g}x per use, added {added}{note_str}")
+        
         # Show rotating items
         if inventory["rotating"]:
-            print("Rotating items (persistent):")
+            print("\nRotating items (persistent):")
             for code, item in sorted(inventory["rotating"].items()):
                 food_name = self._get_food_name(code)
                 mult = item["multiplier"]
@@ -485,15 +434,16 @@ Notes:
                 note = item.get("note", "")
                 
                 status_str = "AVAILABLE" if status == "available" else "DEPLETED"
-                print(f"  {code} ({food_name}): {status_str}, {mult:g}x")
-                print(f"    Added: {added}")
+                depleted_str = ""
                 if status == "depleted" and "depleted_date" in item:
                     depleted = item["depleted_date"][:10]
-                    print(f"    Depleted: {depleted}")
-                if note:
-                    print(f"    Note: {note}")
-                print()
-    
+                    depleted_str = f", depleted {depleted}"
+                note_str = f' - "{note}"' if note else ""
+                
+                print(f"  {code} ({food_name}): {status_str}, {mult:g}x, added {added}{depleted_str}{note_str}")
+        
+        print()
+
     # Helper methods
     
     def _load_workspace(self):

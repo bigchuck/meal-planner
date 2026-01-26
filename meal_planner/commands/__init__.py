@@ -27,6 +27,7 @@ from . import stage_command
 from . import mode_command
 from . import inventory_command
 from . import lock_command
+from . import materialize_command
 
 __all__ = [
     'Command',

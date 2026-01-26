@@ -131,11 +131,45 @@ class RecipesManager:
         lines.append(f"[{code}] Ingredients:")
         lines.append("─" * 60)
         
-        # Split ingredients and format as list
-        ing_list = [ing.strip() for ing in ingredients.split(",")]
+        # Split ingredients by commas, but respect parentheses
+        ing_list = self._split_respecting_parens(ingredients)
         for ing in ing_list:
             lines.append(f"  • {ing}")
         
         lines.append("")
         
         return "\n".join(lines)
+
+    def _split_respecting_parens(self, text: str) -> list:
+        """
+        Split text on commas, but not commas inside parentheses.
+        
+        Args:
+            text: Text to split
+        
+        Returns:
+            List of parts
+        """
+        parts = []
+        current = []
+        paren_depth = 0
+        
+        for char in text:
+            if char == '(':
+                paren_depth += 1
+                current.append(char)
+            elif char == ')':
+                paren_depth -= 1
+                current.append(char)
+            elif char == ',' and paren_depth == 0:
+                # Comma outside parentheses - split here
+                parts.append(''.join(current).strip())
+                current = []
+            else:
+                current.append(char)
+        
+        # Add remaining
+        if current:
+            parts.append(''.join(current).strip())
+        
+        return parts

@@ -62,58 +62,14 @@ class LockCommand(Command):
     def _show_help(self) -> None:
         """Show lock command help."""
         print("""
-Lock Management Commands:
-
-  lock include <code> [<multiplier>]
-      Signal that this food MUST be used in next meal recommendation
-      Multiplier represents fraction of master.csv portion
-      - If code is in leftovers: defaults to leftover quantity
-      - Otherwise: defaults to 1.0
-      Multiplier supports arithmetic: 1.5, .9/4, 5.7/4, etc.
-      Cannot exceed leftover quantity if in inventory
-      
-      Examples:
-        lock include FI.8            # uses leftover quantity if available
-        lock include FI.8 0.225      # use 0.225x portion of fish
-        lock include FI.8 .9/4       # use (0.9/4)x portion
-        lock include FI.8 x1/7       # use x1/7 portion (like add command)
-        lock include FI.8 *1/7       # use *1/7 portion (like add command)
-        lock include SO.13d 0.5      # use 0.5x portion of soup
-        lock include GR.H1           # use 1.0x portion of granola
-  
-  lock exclude <code|pattern>
-      Signal that this food MUST NOT appear in meal recommendations
-      Supports wildcards for patterns (exclude only)
-      
-      Examples:
-        lock exclude 11124           # exclude specific code
-        lock exclude SO.*            # exclude all soups (pattern)
-  
-  lock remove <code|pattern>
-      Remove lock (from either include or exclude list)
-      
-      Examples:
-        lock remove FI.8
-        lock remove SO.*
-  
-  lock list
-      Show all current locks
-      Displays [leftover: X.XXx] tag for items from inventory
-  
-  lock clear
-      Remove all locks (requires confirmation)
-
-Notes:
-  - Locks persist across planning sessions
-  - Include = MUST use (hard requirement for recommendation engine)
-  - Exclude = MUST NOT use (absolute block)
-  - A code can only be in include OR exclude, not both
-  - Wildcards (e.g. SO.*) only allowed in exclude list
-  - Codes are case-insensitive: fi.8 and FI.8 are identical
-  - Smart defaulting: leftover items default to their inventory quantity
-  - Locks auto-save after each change
-""")
-    
+    Lock Commands:
+    lock include [meal_type|all] <code> [<multiplier>]
+    lock exclude [meal_type|all] <code|pattern>
+    lock remove <code|pattern>
+    lock list
+    lock clear
+    """)
+              
     def _include(self, args: str) -> None:
         """
         Add food to include list for specific meal or all meals.
@@ -633,3 +589,42 @@ Notes:
             List of lowercase meal type strings matching workspace format
         """
         return [m.lower() for m in MEAL_NAMES]
+    
+    def _parse_multiplier(self, mult_str: str, code: str, leftovers: dict) -> Optional[float]:
+        """
+        Parse multiplier string into float value.
+        
+        Args:
+            mult_str: Multiplier string (e.g., "1.5", "x1/7", "0.225")
+            code: Food code (for context in error messages)
+            leftovers: Leftovers dict (unused, for consistency)
+        
+        Returns:
+            Multiplier value or None if parsing failed
+        """
+        # Handle leading dot
+        if mult_str.startswith("."):
+            mult_str = "0" + mult_str
+        
+        # Try as bare expression first (0.225, 1/7, .9/4, etc.)
+        try:
+            multiplier = eval_multiplier_expression(mult_str)
+            if multiplier > 0:
+                return multiplier
+        except:
+            pass
+        
+        # Try with prefix using parse_one_code_mult (x1/7, *1/7)
+        test_snippet = f"DUM.MY {mult_str}"
+        parsed = parse_one_code_mult(test_snippet)
+        
+        if parsed and 'mult' in parsed:
+            multiplier = parsed['mult']
+            if multiplier > 0:
+                return multiplier
+        
+        # Failed to parse
+        print(f"\nError: Invalid multiplier '{mult_str}'")
+        print("Supported formats: 1.5, 0.225, 1/7, .9/4, x1/7, *1/7")
+        print()
+        return None
