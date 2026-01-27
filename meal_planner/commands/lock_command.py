@@ -62,7 +62,7 @@ class LockCommand(Command):
     def _show_help(self) -> None:
         """Show lock command help."""
         print("""
-    Lock Commands:
+  Lock Commands:
     lock include [meal_type|all] <code> [<multiplier>]
     lock exclude [meal_type|all] <code|pattern>
     lock remove <code|pattern>

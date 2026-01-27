@@ -85,74 +85,21 @@ class PlanCommand(Command):
         print("""
 === Meal Planning Workspace ===
 
-The planning workspace lets you search for historical meals, explore variants,
-and promote candidates to your pending day.
-
 Subcommands:
-
-  search <meal> [options]     Search for meals matching criteria
-                              Options:
-                                --history N (default 10)
-                                --<nutrient> min=X max=Y
-                                --code/--codes <expression>
-                              
-                              Example:
-                                plan search lunch --history 10 --carbs_g max=50
-                                plan search breakfast --codes "bf.1 and bv.4"
-                                plan search lunch --code mt.10 --cal max=500
-                                plan search "afternoon snack" --codes "mt.11 or mt.12"
-
-  show [id]                   Show workspace contents
-                              Without id: list all candidates
-                              With id: detailed view of candidate
-  
-  add <id> <codes>            Add items to candidate (creates variant)
-                              Example: plan add 2 VE.T1, FR.3
-  
-  copy <id>                   Copy meal, strip analyzed_as field
-                              Example: plan copy 123a
-
-  rename <from> <to>          Rename a workspace meal
-                              Example: plan rename 123a lunch-final
-  
-  describe <id> "text"        Set description for meal
-                              Example: plan describe N1 "Tomorrow's breakfast"
-
-  rm <id> <indices>           Remove items from candidate (creates variant)
-                              Example: plan rm 2 1,3
-  
-  setmult <id> <idx> <mult>   Set multiplier for item (creates variant)
-                              Example: plan setmult 2 3 1.5
-              
-  move <id> <idx> <idx>       Move the item to a different place in the plan
-                              Example: plan move 1 2 3
-
-  ins <id> <idx> <codes>      Insert the codes at the index in the plan (creates variant)
-                              Example: plan ins 1 2 SA.3
-  
-  promote <id> <HH:MM> [meal] Promote candidate to pending at time
-                              Optional: specify meal name to override time-based categorization
-                              Example: plan promote 2 12:30
-                              plan promote 2a 11:00 lunch
-                              plan promote 3 14:00 "afternoon snack"
-  
-  discard                     Clear entire planning workspace
-  
-  invent <meal_name>          Create blank candidate to build from scratch
-                              Example: plan invent lunch
-  
-  report <id> [--nutrients] [--verbose]   Show detailed breakdown for candidate
-                              Example: plan report 2 --nutrients
-
-Notes:
-  - Workspace auto-saves after each modification
-  - Workspace auto-loads on program startup
-  - Search automatically deduplicates by date/meal and composition
-  - Modifications create variants (2 -> 2a -> 2b)
-  - Invented meals use ID format N1, N2, etc.
-  - Original item order is preserved throughout
-  - Code filtering: Supports boolean logic (AND, OR, NOT), spaces = AND
-    Use quotes for multi-word meal names or complex expressions
+  add <id> <codes>
+  copy <id>
+  describe <id> "text"
+  discard
+  ins <id> <idx> <codes>
+  invent <meal_name>
+  move <id> <idx> <idx>
+  promote <id> <HH:MM> [meal]
+  rename <from> <to>
+  report <id> [--nutrients] [--verbose] [--stage]
+  rm <id> <indices>
+  search <meal> [--history N] [--<nutrient> min=X max=Y] [--code/--codes <expression>]
+  setmult <id> <idx> <mult>
+  show [<id>]
 """)
     
     # =========================================================================

@@ -11,7 +11,7 @@ from datetime import datetime
 class InventoryCommand(Command):
     """Manage inventory (leftovers, batch items, rotating items)."""
     
-    name = "inventory"
+    name = ("inventory", "inv")
     help_text = "Manage inventory (inventory add/remove/depleted/restore/list)"
     
     def execute(self, args: str) -> None:
@@ -64,7 +64,7 @@ class InventoryCommand(Command):
     def _show_help(self) -> None:
         """Show inventory command help."""
         print("""
-    Inventory Commands:
+  Inventory Commands:
     inventory add <code> [<mult>] --leftover|--batch|--rotating [note]
     inventory remove <code>
     inventory depleted <code>
@@ -425,6 +425,7 @@ class InventoryCommand(Command):
         
         # Show rotating items
         if inventory["rotating"]:
+            going_to_need_depleted = False
             print("\nRotating items (persistent):")
             for code, item in sorted(inventory["rotating"].items()):
                 food_name = self._get_food_name(code)
@@ -433,14 +434,36 @@ class InventoryCommand(Command):
                 added = item["added"][:10]
                 note = item.get("note", "")
                 
-                status_str = "AVAILABLE" if status == "available" else "DEPLETED"
-                depleted_str = ""
-                if status == "depleted" and "depleted_date" in item:
-                    depleted = item["depleted_date"][:10]
-                    depleted_str = f", depleted {depleted}"
-                note_str = f' - "{note}"' if note else ""
+                if status == "available":
+                    status_str = "AVAILABLE"
+                    depleted_str = ""
+                    if status == "depleted" and "depleted_date" in item:
+                        depleted = item["depleted_date"][:10]
+                        depleted_str = f", depleted {depleted}"
+                    note_str = f' - "{note}"' if note else ""
+                else:
+                    going_to_need_depleted = True
                 
                 print(f"  {code} ({food_name}): {status_str}, {mult:g}x, added {added}{depleted_str}{note_str}")
+
+            if going_to_need_depleted:
+                print("\nRotating items (depleted):")
+                for code, item in sorted(inventory["rotating"].items()):
+                    food_name = self._get_food_name(code)
+                    mult = item["multiplier"]
+                    status = item["status"]
+                    added = item["added"][:10]
+                    note = item.get("note", "")
+                    
+                    if status != "available":
+                        status_str = "DEPLETED"
+                        depleted_str = ""
+                        if status == "depleted" and "depleted_date" in item:
+                            depleted = item["depleted_date"][:10]
+                            depleted_str = f", depleted {depleted}"
+                        note_str = f' - "{note}"' if note else ""
+                    
+                    print(f"  {code} ({food_name}): {status_str}, {mult:g}x, added {added}{depleted_str}{note_str}")
         
         print()
 
