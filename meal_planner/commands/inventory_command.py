@@ -443,6 +443,7 @@ class InventoryCommand(Command):
                     note_str = f' - "{note}"' if note else ""
                 else:
                     going_to_need_depleted = True
+                    continue
                 
                 print(f"  {code} ({food_name}): {status_str}, {mult:g}x, added {added}{depleted_str}{note_str}")
 
@@ -455,13 +456,14 @@ class InventoryCommand(Command):
                     added = item["added"][:10]
                     note = item.get("note", "")
                     
-                    if status != "available":
-                        status_str = "DEPLETED"
-                        depleted_str = ""
-                        if status == "depleted" and "depleted_date" in item:
-                            depleted = item["depleted_date"][:10]
-                            depleted_str = f", depleted {depleted}"
-                        note_str = f' - "{note}"' if note else ""
+                    if status == "available":
+                        continue
+                    status_str = "DEPLETED"
+                    depleted_str = ""
+                    if status == "depleted" and "depleted_date" in item:
+                        depleted = item["depleted_date"][:10]
+                        depleted_str = f", depleted {depleted}"
+                    note_str = f' - "{note}"' if note else ""
                     
                     print(f"  {code} ({food_name}): {status_str}, {mult:g}x, added {added}{depleted_str}{note_str}")
         
