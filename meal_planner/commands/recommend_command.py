@@ -68,6 +68,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
             self._score(subargs)
         elif subcommand == "discard":
             self._discard(subargs)
+        elif subcommand == "reset":
+            self._reset(subargs)
         elif subcommand == "help":
             self._help()
         elif subcommand == "accept":
@@ -118,57 +120,17 @@ class RecommendCommand(Command, CommandHistoryMixin):
     def _help(self) -> None:
         """Display help for recommend command."""
         print("\nRECOMMEND - Meal recommendation pipeline")
-        print()
         print("Subcommands:")
-        print()
-        
-        print("  recommend generate <meal_type> [count]")
-        print("    Generate meal candidates from history")
-        print("    Examples:")
-        print("      recommend generate lunch")
-        print("      recommend generate breakfast 20")
-        print()
-        
-        print("  recommend show [id]")
-        print("    Show generated candidates")
-        print("    Examples:")
-        print("      recommend show          # All candidates (one-line summaries)")
-        print("      recommend show G3       # Detailed view of G3")
-        print("      recommend show rejected     # All rejected candidates")
-        print("      recommend show rejected G5  # Detailed view of rejected G5")
-        print()
-        
+        print("  recommend generate <meal_type> [--method <method>] [--count N] [--template <template>] ")
+        print("    <method> := [history|exhaustive]")
+        print("    <template> := [template name used for exhaustive]")
+        print("  recommend reset [--force]")
+        print("  recommend show [rejected] [[id]|--limit N [--skip N]]")
         print("  recommend filter [--verbose]")
-        print("    Apply pre-score filters (locks, availability)")
-        print("    Filters raw candidates before scoring")
-        print("    Examples:")
-        print("      recommend filter")
-        print("      recommend filter --verbose")
-        print()
-        
         print("  recommend score [--verbose]")
-        print("    Score all filtered candidates and rank by score")
-        print("    Examples:")
-        print("      recommend score")
-        print("      recommend score --verbose")
-        print()
-
         print("  recommend accept <G-ID> [--as <id>] [--desc <text>]")
-        print("    Accept scored candidate and move to planning workspace")
-        print("    Examples:")
-        print("      recommend accept G3")
-        print("      recommend accept G3 --as lunch-friday")
-        print("      recommend accept G5 --desc \"high protein\"")
-        print()
-
         print("  recommend discard [array]")
-        print("    Discard generated candidates (requires confirmation)")
-        print("    Arrays: raw, filtered, scored (omit to discard all)")
-        print("    Examples:")
-        print("      recommend discard       # Discard all")
-        print("      recommend discard raw   # Discard only raw")
-        print()
-        
+        print("    <array> := [raw|filtered|scored]")
         print("Pipeline flow:")
         print("  1. recommend generate lunch      # Generate raw candidates")
         print("  2. recommend show                # Preview candidates")
@@ -1027,7 +989,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         """
         # Parse arguments
         if not args:
-            print("\nUsage: recommend generate <meal_type> [--method history|exhaustive] [--count N] [--template NAME] [--reset]")
+            print("\nUsage: recommend generate <meal_type> [--method history|exhaustive] [--count N] [--template NAME]")
             print("\nMethods:")
             print("  history (default): Generate from meal history")
             print("  exhaustive: Generate all combinations from component pools")
@@ -1071,9 +1033,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
             elif args[i] == "--template" and i + 1 < len(args):
                 template_name = args[i + 1]
                 i += 2
-            elif args[i] == "--reset":
-                reset = True
-                i += 1
             else:
                 print(f"\nError: Unknown flag '{args[i]}'")
                 print()
@@ -1100,34 +1059,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
         gen_state = workspace.get("generation_state", {})
         existing_method = gen_state.get("method")
         existing_meal = gen_state.get("meal_type")
-        
-        # Handle --reset
-        if reset:
-            if not gen_state:
-                print("\nNo active generation session to reset")
-                print()
-                return
-            
-            print(f"\nAbout to reset generation session:")
-            print(f"  Method: {existing_method}")
-            print(f"  Meal: {existing_meal}")
-            print(f"  Cursor: {gen_state.get('cursor', 'N/A')}")
-            print()
-            
-            response = input("Are you sure? (yes/no): ").strip().lower()
-            if response != "yes":
-                print("\nReset cancelled")
-                print()
-                return
-            
-            # Clear generation state
-            workspace["generation_state"] = {}
-            workspace["generated_candidates"] = {"raw": [], "filtered": [], "rejected": []}
-            self.ctx.workspace_mgr.save(workspace)
-            
-            print("\nGeneration session reset")
-            print()
-            return
         
         # Check for method/meal mismatch
         if gen_state and (existing_method != method or existing_meal != meal_key):
@@ -1287,30 +1218,84 @@ class RecommendCommand(Command, CommandHistoryMixin):
 
     def _show(self, args: List[str]) -> None:
         """
-        Show generated candidates.
+        Show generated candidates with pagination support.
         
-        MODIFIED: Now displays scored candidates if available,
-        with ranking and scores visible.
+        MODIFIED: Now supports --limit and --skip for pagination
         
         Usage:
-            recommend show          # Show all candidates (one-line summaries)
-            recommend show G3       # Show detailed view of G3
-            recommend show rejected     # Show all rejected candidates
-            recommend show rejected G3  # Show detailed view of rejected G3
+            recommend show                      # Show all candidates
+            recommend show G3                   # Show detailed view of G3
+            recommend show --limit 10           # Show first 10
+            recommend show --limit 5 --skip 10  # Show 5 starting at position 10
+            recommend show rejected             # Show all rejected
+            recommend show rejected G3          # Show specific rejected detail
+            recommend show rejected --limit 5   # Show first 5 rejected
         
         Args:
-            args: Optional [candidate_id]
+            args: Optional arguments [rejected] [id|--limit N [--skip N]]
         """
-            # Check for 'rejected' keyword
-            # Check for 'rejected' keyword
-        if args and args[0].lower() == "rejected":
-            if len(args) > 1:
+        # Parse arguments
+        rejected_mode = False
+        candidate_id = None
+        limit = None
+        skip = 0
+        
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            
+            if arg.lower() == "rejected":
+                rejected_mode = True
+                i += 1
+            elif arg == "--limit":
+                if i + 1 >= len(args):
+                    print("\nError: --limit requires a number")
+                    print()
+                    return
+                try:
+                    limit = int(args[i + 1])
+                    if limit <= 0:
+                        print("\nError: --limit must be positive")
+                        print()
+                        return
+                    i += 2
+                except ValueError:
+                    print(f"\nError: Invalid limit value '{args[i + 1]}'")
+                    print()
+                    return
+            elif arg == "--skip":
+                if i + 1 >= len(args):
+                    print("\nError: --skip requires a number")
+                    print()
+                    return
+                try:
+                    skip = int(args[i + 1])
+                    if skip < 0:
+                        print("\nError: --skip must be non-negative")
+                        print()
+                        return
+                    i += 2
+                except ValueError:
+                    print(f"\nError: Invalid skip value '{args[i + 1]}'")
+                    print()
+                    return
+            else:
+                # Must be a candidate ID
+                if candidate_id is not None:
+                    print(f"\nError: Unexpected argument '{arg}'")
+                    print()
+                    return
+                candidate_id = arg.upper()
+                i += 1
+        
+        # Handle rejected mode
+        if rejected_mode:
+            if candidate_id:
                 # Show specific rejected candidate
-                candidate_id = args[1].upper()
                 self._show_rejected_detail(candidate_id)
             else:
-                # Show all rejected candidates (summary)
-                self._show_rejected()
+                # Show rejected candidates (with pagination if specified)
+                self._show_rejected(limit=limit, skip=skip)
             return
         
         # Check for generated candidates
@@ -1345,42 +1330,73 @@ class RecommendCommand(Command, CommandHistoryMixin):
             return
         
         # Show specific candidate
-        if args:
-            candidate_id = args[0].upper()
+        if candidate_id:
+            if limit is not None or skip > 0:
+                print("\nError: Cannot combine candidate ID with pagination flags")
+                print()
+                return
             self._show_candidate_detail(candidates, candidate_id, meal_type)
             return
         
-        # Show all candidates (one-line summaries)
-        self._show_all_candidates(candidates, meal_type, list_type)
+        # Show candidates with pagination
+        self._show_all_candidates(candidates, meal_type, list_type, limit=limit, skip=skip)
 
     def _show_all_candidates(
         self,
         candidates: List[Dict[str, Any]],
         meal_type: str,
-        list_type: str
+        list_type: str,
+        limit: Optional[int] = None,
+        skip: int = 0
     ) -> None:
         """
         Show all candidates with one-line summaries.
         
-        MODIFIED: Include scores in display if candidates are scored.
+        MODIFIED: Added pagination support with limit and skip parameters
         
         Args:
             candidates: List of candidate dicts
             meal_type: Meal type
             list_type: "raw", "filtered", or "scored"
+            limit: Maximum number of candidates to show (None = all)
+            skip: Number of candidates to skip from start
         """
+        total_count = len(candidates)
+        
+        # Apply skip
+        if skip >= total_count:
+            print(f"\nNo candidates to show (skip={skip} >= total={total_count})")
+            print()
+            return
+        
+        # Determine what to display
+        start_idx = skip
+        end_idx = min(total_count, skip + limit) if limit else total_count
+        display_candidates = candidates[start_idx:end_idx]
+        
+        # Header
         print(f"\n=== {meal_type.upper()} CANDIDATES ({list_type.upper()}) ===")
+        
+        # Show pagination info if applicable
+        if limit or skip:
+            print(f"Showing {len(display_candidates)} of {total_count} "
+                f"(positions {start_idx+1}-{end_idx})")
+        else:
+            print(f"Total: {total_count} candidates")
+        
         print()
         
-        # Different header based on whether scored
+        # Column headers
         if list_type == "scored":
-            print(f"{'Rank':<6}{'ID':<8}{'Score':<8}Description")
-            print(f"{'-'*6}{'-'*8}{'-'*8}{'-'*50}")
+            print(f"{'Pos':<6}{'Rank':<6}{'ID':<8}{'Score':<8}Description")
+            print(f"{'-'*6}{'-'*6}{'-'*8}{'-'*8}{'-'*50}")
         else:
-            print(f"{'ID':<8}Description")
-            print(f"{'-'*8}{'-'*60}")
+            print(f"{'Pos':<6}{'ID':<8}Description")
+            print(f"{'-'*6}{'-'*8}{'-'*60}")
         
-        for i, candidate in enumerate(candidates, 1):
+        # Display candidates
+        for i, candidate in enumerate(display_candidates):
+            actual_position = start_idx + i + 1  # 1-based position in full list
             candidate_id = candidate.get("id", "???")
             description = candidate.get("description", "No description")
             
@@ -1389,14 +1405,23 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 description = description[:44] + "..."
             
             if list_type == "scored":
+                rank = start_idx + i + 1  # Rank is same as position for scored
                 score = candidate.get("aggregate_score", 0.0)
-                print(f"{i:<6}{candidate_id:<8}{score:<8.3f}{description}")
+                print(f"{actual_position:<6}{rank:<6}{candidate_id:<8}{score:<8.3f}{description}")
             else:
-                print(f"{candidate_id:<8}{description}")
+                print(f"{actual_position:<6}{candidate_id:<8}{description}")
         
         print()
-        print(f"Total: {len(candidates)} candidates")
-        print()
+        
+        # Navigation hints
+        if end_idx < total_count:
+            remaining = total_count - end_idx
+            next_skip = end_idx
+            next_limit = limit if limit else 20
+            print(f"{remaining} more candidates available")
+            print(f"Next: recommend show --limit {next_limit} --skip {next_skip}")
+            print()
+        
         print("Use 'recommend show <id>' for detailed view")
         print()
 
@@ -1488,29 +1513,95 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         print()
 
-    def _show_rejected(self):
-        """Show filtered-out candidates with rejection reasons."""
+    def _show_rejected(self, limit: Optional[int] = None, skip: int = 0) -> None:
+        """
+        Show all rejected candidates.
+        
+        MODIFIED: Added pagination support
+        
+        Args:
+            limit: Maximum number to show (None = all)
+            skip: Number to skip from start
+        """
         gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
-        if gen_cands is None or not gen_cands:
+        
+        if not gen_cands:
             print("\nNo generated candidates")
-            print("Run 'recommend generate <meal_type>' first")
+            print()
             return
-        filtered_out = gen_cands.get("filtered_out", [])
         
-        if not filtered_out:
+        rejected = gen_cands.get("filtered_out", [])
+        
+        if not rejected:
             print("\nNo rejected candidates")
+            print()
             return
         
-        print(f"\n=== REJECTED CANDIDATES ({len(filtered_out)}) ===\n")
-        print(f"{'ID':<8}{'Reasons':<30}Description")
-        print(f"{'-'*8}{'-'*30}{'-'*40}")
+        meal_type = gen_cands.get("meal_type", "unknown")
+        total_count = len(rejected)
         
-        for candidate in filtered_out:
-            cid = candidate.get("id", "???")
-            reasons = ", ".join(candidate.get("rejection_reasons", []))
-            desc = candidate.get("description", "")[:37] + "..."
-            print(f"{cid:<8}{reasons:<30}{desc}")
+        # Apply skip
+        if skip >= total_count:
+            print(f"\nNo rejected candidates to show (skip={skip} >= total={total_count})")
+            print()
+            return
         
+        # Determine what to display
+        start_idx = skip
+        end_idx = min(total_count, skip + limit) if limit else total_count
+        display_rejected = rejected[start_idx:end_idx]
+        
+        # Header
+        print(f"\n=== REJECTED {meal_type.upper()} CANDIDATES ===")
+        
+        # Show pagination info
+        if limit or skip:
+            print(f"Showing {len(display_rejected)} of {total_count} "
+                f"(positions {start_idx+1}-{end_idx})")
+        else:
+            print(f"Total: {total_count} rejected")
+        
+        print()
+        
+        # Column headers
+        print(f"{'Pos':<6}{'ID':<8}{'Reasons':<30}Description")
+        print(f"{'-'*6}{'-'*8}{'-'*30}{'-'*40}")
+        
+        # Display rejected candidates
+        for i, candidate in enumerate(display_rejected):
+            actual_position = start_idx + i + 1
+            candidate_id = candidate.get("id", "???")
+            reasons = candidate.get("rejection_reasons", [])
+            description = candidate.get("description", "No description")
+            
+            # Format reasons (show first 2)
+            if reasons:
+                reason_str = ", ".join(r.split(":")[0] for r in reasons[:2])
+                if len(reasons) > 2:
+                    reason_str += f" +{len(reasons)-2}"
+            else:
+                reason_str = "unknown"
+            
+            # Truncate
+            if len(reason_str) > 28:
+                reason_str = reason_str[:25] + "..."
+            if len(description) > 38:
+                description = description[:35] + "..."
+            
+            print(f"{actual_position:<6}{candidate_id:<8}{reason_str:<30}{description}")
+        
+        print()
+        
+        # Navigation hints
+        if end_idx < total_count:
+            remaining = total_count - end_idx
+            next_skip = end_idx
+            next_limit = limit if limit else 20
+            print(f"{remaining} more rejected candidates available")
+            print(f"Next: recommend show rejected --limit {next_limit} --skip {next_skip}")
+            print()
+        
+        print("Use 'recommend show rejected <id>' for detailed view")
         print()
 
     def _show_rejected_detail(self, candidate_id: str) -> None:
@@ -2141,4 +2232,92 @@ class RecommendCommand(Command, CommandHistoryMixin):
         # Display results
         print(f"Generated {len(candidates)} candidates (positions {cursor}-{new_cursor-1})")
         print(f"Total raw candidates in workspace: {new_cursor}")
+        print()
+
+    def _reset(self, args: List[str]) -> None:
+        """
+        Reset the recommendation generation session.
+        
+        Clears both generation_state and generated_candidates, allowing
+        fresh generation with any method/meal combination.
+        
+        Usage:
+            recommend reset           # Reset with confirmation
+            recommend reset --force   # Skip confirmation
+        
+        Args:
+            args: Optional [--force] flag
+        """
+        # Check for force flag
+        force = "--force" in args or "-f" in args
+        
+        # Load workspace
+        workspace = self.ctx.workspace_mgr.load()
+        
+        # Check for existing generation session
+        gen_state = workspace.get("generation_state", {})
+        gen_cands = workspace.get("generated_candidates", {})
+        
+        # Check if there's anything to reset
+        has_state = bool(gen_state)
+        has_raw = len(gen_cands.get("raw", [])) > 0
+        has_filtered = len(gen_cands.get("filtered", [])) > 0
+        has_scored = len(gen_cands.get("scored", [])) > 0
+        has_rejected = len(gen_cands.get("filtered_out", [])) > 0
+        
+        if not (has_state or has_raw or has_filtered or has_scored or has_rejected):
+            print("\nNo active generation session to reset")
+            print()
+            return
+        
+        # Show what will be reset
+        print("\n=== RESET GENERATION SESSION ===")
+        
+        if has_state:
+            existing_method = gen_state.get("method", "unknown")
+            existing_meal = gen_state.get("meal_type", "unknown")
+            existing_cursor = gen_state.get("cursor")
+            
+            print(f"\nGeneration State:")
+            print(f"  Method: {existing_method}")
+            print(f"  Meal: {existing_meal}")
+            if existing_cursor is not None:
+                print(f"  Cursor: {existing_cursor}")
+        
+        if has_raw or has_filtered or has_scored or has_rejected:
+            print(f"\nGenerated Candidates:")
+            if has_raw:
+                print(f"  Raw: {len(gen_cands.get('raw', []))} candidates")
+            if has_filtered:
+                print(f"  Filtered: {len(gen_cands.get('filtered', []))} candidates")
+            if has_scored:
+                print(f"  Scored: {len(gen_cands.get('scored', []))} candidates")
+            if has_rejected:
+                print(f"  Rejected: {len(gen_cands.get('filtered_out', []))} candidates")
+        
+        print()
+        
+        # Confirmation unless --force
+        if not force:
+            print("This will PERMANENTLY clear the generation session")
+            response = input("Type 'yes' to confirm: ").strip().lower()
+            
+            if response != "yes":
+                print("\nReset cancelled")
+                print()
+                return
+        
+        # Perform reset
+        workspace["generation_state"] = {}
+        workspace["generated_candidates"] = {
+            "raw": [],
+            "filtered": [],
+            "filtered_out": [],
+            "scored": []
+        }
+        
+        self.ctx.workspace_mgr.save(workspace)
+        
+        print("\n✓ Generation session reset")
+        print("Ready for new generation with any method/meal combination")
         print()
