@@ -141,14 +141,14 @@ class LockCommand(Command):
         # Apply to target meals
         for meal in target_meals:
             # Check if in exclude list for this meal
-            if code in workspace["locks"][meal]["exclude"]:
+            if code in workspace["locks"][meal.lower()]["exclude"]:
                 print(f"\nError: {code} is in exclude list for {meal.lower()}")
                 print(f"Use 'lock remove {meal.lower()} {code}' first")
                 print()
                 return
             
             # Add to include list
-            workspace["locks"][meal]["include"][code] = multiplier
+            workspace["locks"][meal.lower()]["include"][code] = multiplier
         
         # Save workspace
         self._save_workspace(workspace)
@@ -218,15 +218,15 @@ class LockCommand(Command):
         # Apply to target meals
         for meal in target_meals:
             # Check if in include list for this meal
-            if code_or_pattern in workspace["locks"][meal]["include"]:
+            if code_or_pattern in workspace["locks"][meal.lower()]["include"]:
                 print(f"\nError: {code_or_pattern} is in include list for {meal.lower()}")
                 print(f"Use 'lock remove {meal.lower()} {code_or_pattern}' first")
                 print()
                 return
             
             # Add to exclude list (avoid duplicates)
-            if code_or_pattern not in workspace["locks"][meal]["exclude"]:
-                workspace["locks"][meal]["exclude"].append(code_or_pattern)
+            if code_or_pattern not in workspace["locks"][meal.lower()]["exclude"]:
+                workspace["locks"][meal.lower()]["exclude"].append(code_or_pattern)
         
         # Save workspace
         self._save_workspace(workspace)
