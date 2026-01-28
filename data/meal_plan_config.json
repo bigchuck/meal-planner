@@ -456,30 +456,24 @@
         "constraints": {
           "max_total_components": 4,
           "base_code_uniqueness": true,
-          "nutrient_limits": {
+          "nutrient_constraints": {
             "protein": {
-              "hard_min": 25,
-              "soft_max": 35,
-              "soft_max_tolerance": 1.10,
-              "reject_below_min": true,
-              "penalty_above_max": true
+              "min_enforcement": "hard",
+              "max_enforcement": "soft",
+              "tolerance": 1.1
             },
             "gl": {
-              "hard_max": 12,
-              "reject_above_max": true,
-              "no_minimum": true
+              "max_enforcement": "hard"
             },
             "carbs": {
-              "soft_min": 10,
-              "soft_max": 25,
-              "tolerance": 2.0,
-              "penalty_out_of_range": true
+              "min_enforcement": "soft",
+              "max_enforcement": "soft",
+              "tolerance": 2
             },
             "fat": {
-              "soft_min": 15,
-              "soft_max": 20,
-              "tolerance": 1.5,
-              "penalty_out_of_range": true
+              "min_enforcement": "soft",
+              "max_enforcement": "soft",
+              "tolerance": 1.5
             }
           }
         }

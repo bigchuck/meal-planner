@@ -1080,12 +1080,13 @@ class RecommendCommand(Command, CommandHistoryMixin):
         """
         Apply pre-score filters to raw generated candidates.
         
-        Filters applied:
-        - Lock constraints (include/exclude)
-        - Availability constraints (exclude_from_recommendations)
-        - Reserved items (inventory)
-        - Depleted rotating items
-        - Leftover portion matching (exact multiplier required)
+        Filters applied in order:
+        1. Nutrient constraints (hard/soft limits from generation template)
+        2. Lock constraints (include/exclude)
+        3. Availability constraints (exclude_from_recommendations)
+        4. Reserved items (inventory)
+        5. Depleted rotating items
+        6. Leftover portion matching (exact multiplier required)
         
         Usage:
             recommend filter
@@ -1119,101 +1120,108 @@ class RecommendCommand(Command, CommandHistoryMixin):
         # Load workspace data
         workspace = self.ctx.workspace_mgr.load()
         locks = workspace.get("locks", {"include": {}, "exclude": []})
-        inventory = workspace.get("inventory", {
-            "leftovers": {},
-            "batch": {},
-            "rotating": {}
-        })
+        inventory = workspace.get("inventory", {})
+
+        gen_state = workspace.get("generation_state", {})
+        meal_type = gen_state.get("meal_type")
+        template_name = gen_state.get("template_name")
+
+        current_candidates = raw_candidates
+        all_rejected = []
+
+        # PHASE 1: Nutrient constraint filtering (NEW)
+        if not template_name:
+            print("Warning: No template specified in generation state")
+            print("Skipping nutrient constraint filtering")
+            # Fall through to other filters
+        else:
+            # Use template for ALL candidates
+            from meal_planner.filters.nutrient_constraint_filter import NutrientConstraintFilter
+            nutrient_filter = NutrientConstraintFilter(
+                self.ctx.master,
+                self.ctx.nutrients,
+                self.ctx.thresholds,
+                meal_type=meal_type,
+                template_name=template_name  # From generation_state!
+            )
+           
+            passed, rejected = nutrient_filter.filter_candidates(current_candidates)
+            
+            if verbose:
+                print(f"Nutrient Constraints: {nutrient_filter.get_filter_stats(len(current_candidates), len(passed))}")
+                if rejected:
+                    print(f"  Rejected {len(rejected)} candidates:")
+                    for r in rejected[:5]:  # Show first 5
+                        reasons = r.get("rejection_reasons", [])
+                        print(f"    - {r.get('id', '???')}: {', '.join(reasons)}")
+                    if len(rejected) > 5:
+                        print(f"    ... and {len(rejected) - 5} more")
+                print()
+            
+            current_candidates = passed
+            all_rejected.extend(rejected)
         
-        # Apply pre-score filter (locks, availability, reservations, depletion)
+        # PHASE 2: Lock, availability, and inventory filtering (EXISTING)
         from meal_planner.filters import PreScoreFilter
+        
         pre_filter = PreScoreFilter(
             locks=locks,
             meal_type=meal_type,
-            user_prefs=self.ctx.user_prefs,
-            inventory=inventory
-        )
-        
-        phase1_passed, phase1_rejected = pre_filter.filter_candidates(raw_candidates)
-        
-        if verbose:
-            stats1 = pre_filter.get_filter_stats(len(raw_candidates), len(phase1_passed))
-            print(f"Phase 1 (locks/availability/reservations): {stats1}")
-        
-        # Apply leftover match filter
-        from meal_planner.filters import LeftoverMatchFilter
-        leftover_filter = LeftoverMatchFilter(
             inventory=inventory,
-            allow_under_use=False  # Strict matching for now
+            user_prefs=self.ctx.user_prefs
         )
         
-        phase2_passed, phase2_rejected = leftover_filter.filter_candidates(phase1_passed)
+        filtered_candidates, rejected = pre_filter.filter_candidates(current_candidates)
         
         if verbose:
-            stats2 = leftover_filter.get_filter_stats(len(phase1_passed), len(phase2_passed))
-            print(f"Phase 2 (leftover matching): {stats2}")
-        
-        # Combine all rejected candidates
-        all_rejected = phase1_rejected + phase2_rejected
-        final_passed = phase2_passed
-        
-        # Save filtered candidates
-        self.ctx.workspace_mgr.update_filtered_candidates(final_passed, all_rejected)
-        
-        # Display summary
-        total_rejected = len(all_rejected)
-        print(f"\nFiltered: {len(final_passed)}/{len(raw_candidates)} candidates passed")
-        
-        if total_rejected > 0:
-            print(f"Rejected: {total_rejected} candidates")
-            
-            if verbose:
-                # Breakdown by rejection reason
-                reason_counts = {}
-                for candidate in all_rejected:
-                    reasons = candidate.get("rejection_reasons", [])
-                    for reason in reasons:
-                        # Normalize reason (strip details after colon)
-                        base_reason = reason.split(":")[0]
-                        reason_counts[base_reason] = reason_counts.get(base_reason, 0) + 1
-                
-                if reason_counts:
-                    print("\nRejection breakdown:")
-                    for reason, count in sorted(reason_counts.items()):
-                        print(f"  {reason}: {count}")
-        
-        print()
-        
-        if verbose and all_rejected:
-            print("Rejected candidates (showing first 10):")
-            for i, candidate in enumerate(all_rejected[:10], 1):
-                cid = candidate.get("id", "?")
-                reasons = candidate.get("rejection_reasons", [])
-                codes = [item.get("code", "?") for item in candidate.get("items", [])[:5]]
-                
-                # Format reasons
-                reason_str = ", ".join(reasons[:3])
-                if len(reasons) > 3:
-                    reason_str += f" +{len(reasons)-3} more"
-                
-                # Format codes
-                codes_str = ", ".join(codes)
-                if len(candidate.get("items", [])) > 5:
-                    codes_str += "..."
-                
-                print(f"  {i}. {cid}: {reason_str}")
-                print(f"     Items: {codes_str}")
-            
-            if len(all_rejected) > 10:
-                print(f"  ... and {len(all_rejected) - 10} more")
+            print(f"Locks & Availability: {pre_filter.get_filter_stats(len(current_candidates), len(filtered_candidates))}")
+            if rejected:
+                print(f"  Rejected {len(rejected)} candidates:")
+                for r in rejected[:5]:
+                    reasons = r.get("rejection_reasons", [])
+                    print(f"    - {r.get('id', '???')}: {', '.join(reasons)}")
+                if len(rejected) > 5:
+                    print(f"    ... and {len(rejected) - 5} more")
             print()
         
-        if final_passed:
-            print(f"Next: recommend score (score {len(final_passed)} candidates)")
-        else:
-            print("No candidates passed filtering")
-            print("Try adjusting locks, availability settings, or inventory")
+        all_rejected.extend(rejected)
+        current_candidates = filtered_candidates
         
+        # PHASE 3: Leftover match filtering (EXISTING)
+        if inventory.get("leftovers"):
+            from meal_planner.filters import LeftoverMatchFilter
+            
+            leftover_filter = LeftoverMatchFilter(
+                inventory=inventory,
+                allow_under_use=False
+            )
+            
+            filtered_candidates, rejected = leftover_filter.filter_candidates(current_candidates)
+            
+            if verbose:
+                print(f"Leftover Matching: {leftover_filter.get_filter_stats(len(current_candidates), len(filtered_candidates))}")
+                if rejected:
+                    print(f"  Rejected {len(rejected)} candidates for portion mismatch")
+                print()
+            
+            all_rejected.extend(rejected)
+            current_candidates = filtered_candidates
+        
+        # Summary
+        print(f"Filtering complete:")
+        print(f"  Started with:  {len(raw_candidates)} raw candidates")
+        print(f"  Passed filters: {len(current_candidates)} candidates")
+        print(f"  Rejected:      {len(all_rejected)} candidates")
+        print()
+        
+        # Save results back to workspace
+        self.ctx.workspace_mgr.set_filtered_candidates(
+            filtered_candidates=current_candidates,
+            rejected_candidates=all_rejected
+        )
+        
+        print(f"Filtered candidates saved to workspace")
+        print(f"Next: Run 'recommend score' to rank candidates")
         print()
 
     def _show(self, args: List[str]) -> None:
@@ -1524,14 +1532,12 @@ class RecommendCommand(Command, CommandHistoryMixin):
             skip: Number to skip from start
         """
         gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
-        
         if not gen_cands:
             print("\nNo generated candidates")
             print()
             return
-        
-        rejected = gen_cands.get("filtered_out", [])
-        
+
+        rejected = gen_cands.get("rejected", [])
         if not rejected:
             print("\nNo rejected candidates")
             print()
@@ -1617,7 +1623,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print("Run 'recommend generate <meal_type>' first")
             return
         
-        filtered_out = gen_cands.get("filtered_out", [])
+        filtered_out = gen_cands.get("rejected", [])
         
         if not filtered_out:
             print("\nNo rejected candidates")
@@ -2112,7 +2118,13 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print(f"Use 'plan show {target_id}' to view details")
         print()
 
-    def _generate_from_history(self, meal_key: str, count: int, workspace: dict) -> None:
+    def _generate_from_history(
+        self, 
+        meal_key: str, 
+        count: int, 
+        workspace: Dict[str, Any],
+        template_name: Optional[str] = None 
+    ) -> None:
         """
         Generate candidates from meal history (original method).
         
@@ -2121,6 +2133,14 @@ class RecommendCommand(Command, CommandHistoryMixin):
             count: Number of candidates to generate
             workspace: Workspace dict
         """
+        # Determine which template to use for filtering
+        if not template_name:
+            template_name = self._select_default_template(meal_key)
+            if not template_name:
+                print(f"Multiple templates found for {meal_key}, please specify:")
+                print("  recommend generate {meal_key} --method history --template <name>")
+                return
+    
         print(f"\nGenerating {count} candidates from history for {meal_key.upper()}...")
         
         from meal_planner.generators import HistoryMealGenerator
@@ -2153,7 +2173,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
         workspace["generation_state"] = {
             "method": "history",
             "meal_type": meal_key,
-            "cursor": 0  # History doesn't use cursor
+            "template_name": template_name,  # NEW
+            "cursor": len(candidates)
         }
         
         # Save workspace with generation state
@@ -2321,3 +2342,26 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("\n✓ Generation session reset")
         print("Ready for new generation with any method/meal combination")
         print()
+    
+    def _select_default_template(self, meal_key: str) -> Optional[str]:
+        """
+        Select default template for meal type.
+        
+        Returns:
+            Template name if exactly one exists, None if multiple or none
+        """
+        meal_gen = self.ctx.thresholds.get_meal_generation()
+        if not meal_gen:
+            return None
+        
+        templates = meal_gen.get(meal_key, {})
+        
+        if len(templates) == 0:
+            print(f"No generation templates defined for {meal_key}")
+            return None
+        elif len(templates) == 1:
+            # Use the only template
+            return list(templates.keys())[0]
+        else:
+            # Multiple templates - require explicit selection
+            return None

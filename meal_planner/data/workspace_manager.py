@@ -507,4 +507,22 @@ class WorkspaceManager:
             workspace["generated_candidates"]["scored"] = []
             self.save(workspace)
 
-
+    def set_filtered_candidates(self, filtered_candidates: List[Dict[str, Any]], 
+                                rejected_candidates: List[Dict[str, Any]] = None) -> None:
+        """
+        Save filtered candidates to workspace.
+        
+        Args:
+            filtered_candidates: Candidates that passed filters
+            rejected_candidates: Candidates that were rejected
+        """
+        workspace = self.load()
+        
+        gen_cands = workspace.get("generated_candidates", {})
+        gen_cands["filtered"] = filtered_candidates
+        
+        if rejected_candidates:
+            gen_cands["rejected"] = gen_cands.get("rejected", []) + rejected_candidates
+        
+        workspace["generated_candidates"] = gen_cands
+        self.save(workspace)

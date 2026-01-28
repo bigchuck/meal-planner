@@ -28,13 +28,6 @@ class InventoryCommand(Command):
         Args:
             args: Subcommand and parameters
         """
-        # Check if in planning mode
-        if not self.ctx.mode_mgr.is_active or self.ctx.mode_mgr.active_mode.mode_type != "plan":
-            print("\nError: Inventory commands only available in planning mode")
-            print("Use: mode plan")
-            print()
-            return
-        
         if not args.strip():
             self._show_help()
             return

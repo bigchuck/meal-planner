@@ -836,7 +836,6 @@ class ThresholdsManager:
         elif not isinstance(comp_spec['required'], bool):
             self._validation_errors.append(f"{path}.required must be a boolean")
 
-
     def _validate_constraints(self, constraints: Dict[str, Any], path: str) -> None:
         """
         Validate constraints section.
@@ -861,18 +860,84 @@ class ThresholdsManager:
                     f"{path}.base_code_uniqueness must be a boolean"
                 )
         
-        # Validate nutrient_limits (optional)
-        if 'nutrient_limits' in constraints:
-            limits = constraints['nutrient_limits']
-            if not isinstance(limits, dict):
-                self._validation_errors.append(f"{path}.nutrient_limits must be an object")
+        # Validate nutrient_constraints (new structure, optional)
+        if 'nutrient_constraints' in constraints:
+            nutrient_constraints = constraints['nutrient_constraints']
+            if not isinstance(nutrient_constraints, dict):
+                self._validation_errors.append(
+                    f"{path}.nutrient_constraints must be an object"
+                )
             else:
-                for nutrient, limit_spec in limits.items():
-                    self._validate_nutrient_limit(
-                        limit_spec,
-                        f"{path}.nutrient_limits.{nutrient}"
+                for nutrient, constraint_spec in nutrient_constraints.items():
+                    self._validate_nutrient_constraint(
+                        constraint_spec,
+                        f"{path}.nutrient_constraints.{nutrient}"
                     )
+        
+        # OLD nutrient_limits structure - warn if present
+        if 'nutrient_limits' in constraints:
+            self._validation_errors.append(
+                f"{path}: 'nutrient_limits' is deprecated, use 'nutrient_constraints' instead"
+            )
 
+
+    def _validate_nutrient_constraint(self, constraint_spec: Any, path: str) -> None:
+        """
+        Validate a nutrient constraint specification (new structure).
+        
+        Expected format:
+        {
+            "min_enforcement": "hard" | "soft",  # Optional
+            "max_enforcement": "hard" | "soft",  # Optional
+            "tolerance": <number>                 # Required if any enforcement is "soft"
+        }
+        
+        Args:
+            constraint_spec: Nutrient constraint dict
+            path: Dot-notation path for error messages
+        """
+        if not isinstance(constraint_spec, dict):
+            self._validation_errors.append(f"{path} must be an object")
+            return
+        
+        # Validate min_enforcement (optional)
+        if 'min_enforcement' in constraint_spec:
+            min_enf = constraint_spec['min_enforcement']
+            if min_enf not in ("hard", "soft"):
+                self._validation_errors.append(
+                    f"{path}.min_enforcement must be 'hard' or 'soft'"
+                )
+        
+        # Validate max_enforcement (optional)
+        if 'max_enforcement' in constraint_spec:
+            max_enf = constraint_spec['max_enforcement']
+            if max_enf not in ("hard", "soft"):
+                self._validation_errors.append(
+                    f"{path}.max_enforcement must be 'hard' or 'soft'"
+                )
+        
+        # Validate tolerance (required if any soft enforcement)
+        has_soft = (
+            constraint_spec.get('min_enforcement') == 'soft' or
+            constraint_spec.get('max_enforcement') == 'soft'
+        )
+        
+        if 'tolerance' in constraint_spec:
+            tolerance = constraint_spec['tolerance']
+            if not isinstance(tolerance, (int, float)) or tolerance <= 0:
+                self._validation_errors.append(
+                    f"{path}.tolerance must be a positive number"
+                )
+        elif has_soft:
+            self._validation_errors.append(
+                f"{path}: 'tolerance' is required when using soft enforcement"
+            )
+        
+        # Check for at least one enforcement type
+        if 'min_enforcement' not in constraint_spec and 'max_enforcement' not in constraint_spec:
+            self._validation_errors.append(
+                f"{path}: must specify at least one of 'min_enforcement' or 'max_enforcement'"
+            )
 
     def _validate_nutrient_limit(self, limit_spec: Any, path: str) -> None:
         """

@@ -1,0 +1,311 @@
+# meal_planner/filters/nutrient_constraint_filter.py
+"""
+Nutrient constraint filter for meal candidates.
+
+Enforces hard and soft nutrient limits from meal_generation templates.
+"""
+from typing import List, Dict, Any, Tuple, Optional
+
+class NutrientConstraintFilter:
+    """
+    Filters meal candidates based on nutrient constraints from generation templates.
+    
+    Enforcement semantics:
+    - hard: Reject candidates outside the bound
+    - soft: Allow candidates outside but apply scoring penalty within tolerance,
+            reject beyond tolerance
+    
+    Tolerance behavior:
+    - For soft max: allows up to (max * tolerance), e.g., 35 * 1.10 = 38.5
+    - For soft min: allows down to (min / tolerance), e.g., 10 / 2.0 = 5.0
+    """
+    
+    def __init__(
+        self,
+        master,
+        nutrients,
+        thresholds_mgr,
+        meal_type: str,
+        template_name: str
+    ):
+        """
+        Initialize nutrient constraint filter.
+        
+        Args:
+            master: MasterLoader instance
+            nutrients: NutrientsManager instance  
+            thresholds_mgr: ThresholdsManager instance
+            meal_type: Meal category (breakfast, lunch, dinner, etc.)
+            template_name: Generation template name (e.g., "protein_low_carb")
+        """
+        self.master = master
+        self.nutrients = nutrients
+        self.thresholds_mgr = thresholds_mgr
+        self.meal_type = meal_type
+        self.template_name = template_name
+        
+        # Resolve actual nutrient limits from template references
+        self.nutrient_constraints = self._resolve_constraints()
+    
+    def _resolve_constraints(self) -> Optional[Dict[str, Any]]:
+        """
+        Resolve nutrient constraints by combining targets_ref values with enforcement policies.
+        
+        Returns:
+            Dict mapping nutrient -> resolved constraint spec, or None if not available
+        """
+        # Get the generation template
+        meal_gen = self.thresholds_mgr.get_meal_generation()
+        if not meal_gen:
+            return None
+        
+        gen_template = meal_gen.get(self.meal_type, {}).get(self.template_name)
+        if not gen_template:
+            return None
+        
+        # Get enforcement policies from constraints.nutrient_constraints
+        constraints = gen_template.get("constraints", {})
+        nutrient_constraints = constraints.get("nutrient_constraints", {})
+        
+        if not nutrient_constraints:
+            return None  # No constraints to enforce
+        
+        # Get targets_ref to find the meal_template
+        targets_ref = gen_template.get("targets_ref")
+        if not targets_ref:
+            return None
+        
+        # Parse targets_ref: "meal_templates.breakfast.protein_low_carb"
+        ref_parts = targets_ref.split(".")
+        if len(ref_parts) < 3 or ref_parts[0] != "meal_templates":
+            return None
+        
+        target_meal_type = ref_parts[1]
+        target_template = ref_parts[2]
+        
+        # Get actual min/max values from meal_template
+        meal_templates = self.thresholds_mgr.thresholds.get("meal_templates", {})
+        meal_template = meal_templates.get(target_meal_type, {}).get(target_template)
+        if not meal_template:
+            return None
+        
+        template_thresholds = meal_template.get("targets", {})
+        
+        # Combine enforcement policies with actual values
+        resolved = {}
+        
+        for nutrient, enforcement in nutrient_constraints.items():
+            # Get actual min/max from meal_template
+            nutrient_threshold = template_thresholds.get(nutrient, {})
+            
+            if not nutrient_threshold:
+                continue  # Skip if no threshold defined
+            
+            actual_min = nutrient_threshold.get("min")
+            actual_max = nutrient_threshold.get("max")
+            
+            # Build resolved constraint
+            constraint = {
+                "min_value": actual_min,
+                "max_value": actual_max,
+                "min_enforcement": enforcement.get("min_enforcement"),
+                "max_enforcement": enforcement.get("max_enforcement"),
+                "tolerance": enforcement.get("tolerance")
+            }
+            
+            resolved[nutrient] = constraint
+
+        return resolved
+    
+    def filter_candidates(
+        self,
+        candidates: List[Dict[str, Any]]
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Apply nutrient constraint filtering to candidates.
+        
+        Args:
+            candidates: List of raw generated candidates
+        
+        Returns:
+            Tuple of (passed_candidates, rejected_candidates)
+        """
+        if not self.nutrient_constraints:
+            # No constraints to enforce - all pass
+            return candidates, []
+        
+        passed = []
+        rejected = []
+        
+        for candidate in candidates:
+            # Calculate nutrient totals for this candidate
+            totals = self._calculate_totals(candidate)
+            
+            # Check against all constraints
+            violations = self._check_violations(totals)
+            
+            if violations:
+                # Add rejection reasons
+                candidate["rejection_reasons"] = candidate.get("rejection_reasons", [])
+                candidate["rejection_reasons"].extend(
+                    [f"nutrient:{v}" for v in violations]
+                )
+                rejected.append(candidate)
+            else:
+                # Check for soft violations (will be penalized by scorer)
+                soft_violations = self._check_soft_violations(totals)
+                if soft_violations:
+                    candidate["soft_nutrient_violations"] = soft_violations
+                
+                passed.append(candidate)
+        
+        return passed, rejected
+    
+    def _calculate_totals(self, candidate: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Calculate nutrient totals for a candidate.
+        
+        Args:
+            candidate: Candidate dict with items list
+        
+        Returns:
+            Dict mapping nutrient names to total values
+        """
+        # Import here to avoid circular dependency
+        from meal_planner.reports import ReportBuilder
+        
+        builder = ReportBuilder(self.master, self.nutrients)
+        items = candidate.get("items", [])
+        
+        if not items:
+            return {}
+        
+        report = builder.build_from_items(items, title="Filter")
+        totals_obj = report.totals
+        
+        # Map to nutrient names used in constraints
+        return {
+            "protein": getattr(totals_obj, "protein_g", 0),
+            "carbs": getattr(totals_obj, "carbs_g", 0),
+            "fat": getattr(totals_obj, "fat_g", 0),
+            "fiber": getattr(totals_obj, "fiber_g", 0),
+            "sugar": getattr(totals_obj, "sugar_g", 0),
+            "gl": getattr(totals_obj, "glycemic_load", 0),
+            "cal": getattr(totals_obj, "calories", 0)
+        }
+    
+    def _check_violations(self, totals: Dict[str, float]) -> List[str]:
+        """
+        Check for hard constraint violations that should reject the candidate.
+        
+        Args:
+            totals: Nutrient totals dict
+        
+        Returns:
+            List of violation descriptions (empty if all pass)
+        """
+        violations = []
+        
+        for nutrient, constraint in self.nutrient_constraints.items():
+            value = totals.get(nutrient, 0)
+            min_val = constraint.get("min_value")
+            max_val = constraint.get("max_value")
+            min_enforcement = constraint.get("min_enforcement")
+            max_enforcement = constraint.get("max_enforcement")
+            tolerance = constraint.get("tolerance", 1.0)
+            
+            # Check hard minimum
+            if min_val is not None and min_enforcement == "hard":
+                if value < min_val:
+                    violations.append(f"{nutrient}<{min_val:.1f}(hard)")
+            
+            # Check hard maximum
+            if max_val is not None and max_enforcement == "hard":
+                if value > max_val:
+                    violations.append(f"{nutrient}>{max_val:.1f}(hard)")
+            
+            # Check soft minimum beyond tolerance
+            if min_val is not None and min_enforcement == "soft":
+                tolerable_min = min_val / tolerance
+                if value < tolerable_min:
+                    violations.append(f"{nutrient}<{tolerable_min:.1f}(soft_limit)")
+            
+            # Check soft maximum beyond tolerance
+            if max_val is not None and max_enforcement == "soft":
+                tolerable_max = max_val * tolerance
+                if value > tolerable_max:
+                    violations.append(f"{nutrient}>{tolerable_max:.1f}(soft_limit)")
+        
+        return violations
+    
+    def _check_soft_violations(self, totals: Dict[str, float]) -> List[Dict[str, Any]]:
+        """
+        Check for soft violations within tolerance (will be penalized, not rejected).
+        
+        Args:
+            totals: Nutrient totals dict
+        
+        Returns:
+            List of soft violation details for scoring
+        """
+        soft_violations = []
+        
+        for nutrient, constraint in self.nutrient_constraints.items():
+            value = totals.get(nutrient, 0)
+            min_val = constraint.get("min_value")
+            max_val = constraint.get("max_value")
+            min_enforcement = constraint.get("min_enforcement")
+            max_enforcement = constraint.get("max_enforcement")
+            tolerance = constraint.get("tolerance", 1.0)
+            
+            # Check soft minimum (below target but within tolerance)
+            if min_val is not None and min_enforcement == "soft":
+                if value < min_val:
+                    tolerable_min = min_val / tolerance
+                    if value >= tolerable_min:  # Within tolerance
+                        soft_violations.append({
+                            "nutrient": nutrient,
+                            "target": min_val,
+                            "value": value,
+                            "type": "below_min",
+                            "deficit": min_val - value
+                        })
+            
+            # Check soft maximum (above target but within tolerance)
+            if max_val is not None and max_enforcement == "soft":
+                if value > max_val:
+                    tolerable_max = max_val * tolerance
+                    if value <= tolerable_max:  # Within tolerance
+                        soft_violations.append({
+                            "nutrient": nutrient,
+                            "target": max_val,
+                            "value": value,
+                            "type": "above_max",
+                            "excess": value - max_val
+                        })
+        
+        return soft_violations
+    
+    def get_filter_stats(
+        self,
+        original_count: int,
+        filtered_count: int
+    ) -> str:
+        """
+        Get human-readable filter statistics.
+        
+        Args:
+            original_count: Number of candidates before filtering
+            filtered_count: Number after filtering
+        
+        Returns:
+            Formatted stats string
+        """
+        rejected = original_count - filtered_count
+        
+        if rejected == 0:
+            return f"All {original_count} candidates met nutrient constraints"
+        
+        percent = (rejected / original_count * 100) if original_count > 0 else 0
+        
+        return f"Rejected {rejected}/{original_count} for nutrient violations ({percent:.1f}%)"

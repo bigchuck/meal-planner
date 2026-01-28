@@ -50,7 +50,7 @@ class PreScoreFilter:
             candidates: List of raw generated candidates
         
         Returns:
-            List of candidates that pass all filters
+            Tuple of (passed_candidates, rejected_candidates)
         """
         filtered = []
         filtered_out = []
@@ -58,11 +58,16 @@ class PreScoreFilter:
         for candidate in candidates:
             # Extract food codes from candidate
             codes = self._extract_codes(candidate)
-                    # Track rejection reasons
+            
+            # Track rejection reasons
             rejection_reasons = []
             
-            if not self._passes_lock_filters(codes):
-                rejection_reasons.append("lock_constraint")
+            # Check lock filters (returns detailed reasons if failed)
+            lock_violations = self._check_lock_filters(codes)
+            if lock_violations:
+                rejection_reasons.extend(lock_violations)
+            
+            # Check availability filter
             if not self._passes_availability_filter(codes):
                 rejection_reasons.append("availability")
 
@@ -83,7 +88,7 @@ class PreScoreFilter:
                 candidate["filter_passed"] = True
                 filtered.append(candidate)
 
-        return filtered, filtered_out
+        return filtered, filtered_out    
     
     def _extract_codes(self, candidate: Dict[str, Any]) -> Set[str]:
         """
@@ -104,109 +109,108 @@ class PreScoreFilter:
         
         return codes
     
-    def _passes_lock_filters(self, codes: Set[str]) -> bool:
+    def _check_lock_filters(self, codes: Set[str]) -> List[str]:
         """
-        Check if candidate passes lock constraints.
-        
-        Lock rules:
-        - If include locks exist, candidate MUST contain at least one locked item
-        - If exclude locks exist, candidate MUST NOT contain any excluded items
+        Check lock constraints and return detailed violation reasons.
         
         Args:
             codes: Set of food codes in candidate
         
         Returns:
-            True if candidate passes lock filters
+            List of violation reasons (empty if all locks satisfied)
         """
+        violations = []
+        
         include_locks = self.locks.get("include", {})
         exclude_locks = self.locks.get("exclude", [])
         
-        # Check exclude locks first (hard reject)
+        # Check exclude locks (hard reject with specific code/pattern)
         if exclude_locks:
-            if self._matches_exclude_locks(codes, exclude_locks):
-                return False
+            exclude_violations = self._find_exclude_violations(codes, exclude_locks)
+            violations.extend(exclude_violations)
         
-        # Check include locks (must have at least one)
+        # Check include locks (must have ALL required items)
         if include_locks:
-            if not self._matches_include_locks(codes, include_locks):
-                return False
+            include_violations = self._find_include_violations(codes, include_locks)
+            violations.extend(include_violations)
         
-        return True
-    
-    def _matches_exclude_locks(
+        return violations
+
+
+    def _find_exclude_violations(
         self,
         codes: Set[str],
         exclude_locks: List[str]
-    ) -> bool:
+    ) -> List[str]:
         """
-        Check if any codes match exclude locks.
+        Find which exclude locks are violated.
         
         Args:
             codes: Food codes in candidate
             exclude_locks: List of patterns/codes to exclude
         
         Returns:
-            True if candidate contains excluded items (REJECT)
+            List of violation reasons (e.g., "lock_exclude:DN.*", "lock_exclude:FI.8")
         """
+        violations = []
+        
         for lock in exclude_locks:
             if lock.endswith(".*"):
                 # Pattern lock (e.g., "DN.*")
-                pattern = lock[:-2]  # Remove .*
-                for code in codes:
-                    if code.startswith(pattern):
-                        return True
+                pattern = lock[:-2]
+                matching_codes = [code for code in codes if code.startswith(pattern)]
+                if matching_codes:
+                    # Show pattern and first matching code
+                    violations.append(f"lock_exclude:{lock}({matching_codes[0]})")
             else:
                 # Specific code lock
                 if lock.upper() in codes:
-                    return True
+                    violations.append(f"lock_exclude:{lock}")
         
-        return False
-    
-    def _matches_include_locks(
+        return violations
+
+
+    def _find_include_violations(
         self,
         codes: Set[str],
-        include_locks: Dict[str, List[str]]
-    ) -> bool:
+        include_locks: Dict[str, float]
+    ) -> List[str]:
         """
-        Check if candidate contains ALL included items (AND logic).
+        Find which include locks are not satisfied.
         
         Args:
             codes: Food codes in candidate
-            include_locks: Dict of pattern -> [codes] or code -> []
+            include_locks: Dict of {code: multiplier} that MUST be included
         
         Returns:
-            True if candidate contains ALL locked items (PASS)
-            False if candidate missing ANY locked item (REJECT)
+            List of violation reasons (e.g., "lock_missing:FI.8")
         """
-        # Must satisfy ALL lock entries
-        for lock_key, lock_codes in include_locks.items():
+        violations = []
+        
+        # Must satisfy ALL include lock entries
+        for lock_code, lock_mult in include_locks.items():
             found = False
             
-            if lock_key.endswith(".*"):
+            if lock_code.endswith(".*"):
                 # Pattern lock - check if any code matches pattern
-                pattern = lock_key[:-2]
+                pattern = lock_code[:-2]
                 for code in codes:
                     if code.startswith(pattern):
                         found = True
                         break
-                
-                # Also check specific codes in the pattern lock
-                if not found:
-                    for lock_code in lock_codes:
-                        if lock_code.upper() in codes:
-                            found = True
-                            break
             else:
                 # Specific code lock
-                if lock_key.upper() in codes:
+                if lock_code.upper() in codes:
                     found = True
             
-            # If this lock entry not satisfied, reject
+            # If this required item not found, add violation
             if not found:
-                return False
+                if lock_code.endswith(".*"):
+                    violations.append(f"lock_missing:{lock_code}")
+                else:
+                    violations.append(f"lock_missing:{lock_code}({lock_mult:g}x)")
         
-        # All lock entries satisfied
-        return True
+        return violations
     
     def _passes_availability_filter(self, codes: Set[str]) -> bool:
         """
