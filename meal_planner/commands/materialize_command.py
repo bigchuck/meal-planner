@@ -591,79 +591,66 @@ class MaterializeCommand(Command):
         return scaled
     
     def _add_master_entry(self, code: str, section: str, description: str, 
-                         nutrition: Dict) -> None:
-        """Add entry to master.csv."""
+                        nutrition: Dict) -> None:
+        """Add entry to master.json."""
         # Create backup
         backup_path = create_backup(self.ctx.master.filepath, self.ctx)
         if backup_path:
             print(f"Created backup: {backup_path.name}")
         
-        # Load current master
-        master_df = self.ctx.master.df.copy()
-        cols = self.ctx.master.cols
-        
-        # Build new row
-        new_row = {
-            cols.code: code,
-            cols.section: section,
-            cols.option: description,
-            cols.cal: round(nutrition['cal'], 2),
-            cols.prot_g: round(nutrition['prot_g'], 2),
-            cols.carbs_g: round(nutrition['carbs_g'], 2),
-            cols.fat_g: round(nutrition['fat_g'], 2),
-            cols.gi: round(nutrition['GI'], 2),
-            cols.gl: round(nutrition['GL'], 2),
-            cols.sugar_g: round(nutrition['sugar_g'], 2)
+        # Build macros dict
+        macros = {
+            'cal': round(nutrition['cal'], 2),
+            'prot_g': round(nutrition['prot_g'], 2),
+            'carbs_g': round(nutrition['carbs_g'], 2),
+            'fat_g': round(nutrition['fat_g'], 2),
+            'GI': round(nutrition['GI'], 2),
+            'GL': round(nutrition['GL'], 2),
+            'sugar_g': round(nutrition['sugar_g'], 2)
         }
         
-        # Add row
-        new_row_df = pd.DataFrame([new_row])
-        master_df = pd.concat([master_df, new_row_df], ignore_index=True)
-        
-        # Sort naturally
-        master_df['_sort_key'] = master_df[cols.code].apply(natural_sort_key)
-        master_df = master_df.sort_values('_sort_key').drop('_sort_key', axis=1)
-        master_df = master_df.reset_index(drop=True)
+        # Add entry using MasterLoader's method
+        self.ctx.master.add_or_update_entry(
+            code=code,
+            section=section,
+            option=description,
+            macros=macros
+        )
         
         # Save
-        master_df.to_csv(self.ctx.master.filepath, index=False)
-        self.ctx.master.reload()
-    
+        self.ctx.master.save()
+
     def _add_nutrients_entry(self, code: str, nutrients: Dict) -> None:
-        """Add entry to nutrients.csv."""
+        """Add nutrients entry to master.json."""
+        if not self.ctx.master:
+            return
+        
         # Create backup
         backup_path = create_backup(self.ctx.master.filepath, self.ctx)
+        if backup_path:
+            print(f"  (nutrients backup: {backup_path.name})")
         
-        # Load current nutrients
-        nutrients_df = self.ctx.master.df.copy()
+        # Round nutrient values
+        rounded_nutrients = {
+            key: round(value, 2) for key, value in nutrients.items()
+        }
         
-        # Build new row
-        new_row = {'code': code}
-        for key, value in nutrients.items():
-            new_row[key] = round(value, 2)
-        new_row.update(nutrients)
-        
-        # Add row
-        new_row_df = pd.DataFrame([new_row])
-        nutrients_df = pd.concat([nutrients_df, new_row_df], ignore_index=True)
-        
-        # Sort naturally
-        nutrients_df['_sort_key'] = nutrients_df['code'].apply(natural_sort_key)
-        nutrients_df = nutrients_df.sort_values('_sort_key').drop('_sort_key', axis=1)
-        nutrients_df = nutrients_df.reset_index(drop=True)
+        # Update using MasterLoader's method
+        self.ctx.master.update_nutrients(code, rounded_nutrients)
         
         # Save
-        nutrients_df.to_csv(self.ctx.master.filepath, index=False)
-        self.ctx.master.load()
-    
+        self.ctx.master.save()
+
     def _add_recipe_entry(self, code: str, source_code: str, multiplier: float,
-                         components_info: list, is_alias: bool) -> None:
+                        components_info: list, is_alias: bool) -> None:
         """Add recipe documentation entry."""
         if not self.ctx.master:
             return
         
         # Create backup
         backup_path = create_backup(self.ctx.master.filepath, self.ctx)
+        if backup_path:
+            print(f"  (recipe backup: {backup_path.name})")
         
         # Build recipe text
         today = datetime.now().strftime("%Y-%m-%d")
@@ -695,24 +682,8 @@ class MaterializeCommand(Command):
         
         recipe_text = "\n".join(recipe_lines)
         
-        # Load recipes
-        recipes_df = self.ctx.master.df.copy()
-        
-        # Build new row
-        new_row = {
-            'code': code,
-            'ingredients': recipe_text
-        }
-        
-        # Add row
-        new_row_df = pd.DataFrame([new_row])
-        recipes_df = pd.concat([recipes_df, new_row_df], ignore_index=True)
-        
-        # Sort naturally
-        recipes_df['_sort_key'] = recipes_df['code'].apply(natural_sort_key)
-        recipes_df = recipes_df.sort_values('_sort_key').drop('_sort_key', axis=1)
-        recipes_df = recipes_df.reset_index(drop=True)
+        # Update using MasterLoader's method
+        self.ctx.master.update_recipe(code, recipe_text)
         
         # Save
-        recipes_df.to_csv(self.ctx.master.filepath, index=False)
-        self.ctx.master.load()
+        self.ctx.master.save()
