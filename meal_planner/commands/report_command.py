@@ -73,7 +73,7 @@ class ReportCommand(Command):
                 continue
             date_parts.append(p)
         
-        builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
+        builder = ReportBuilder(self.ctx.master)
         
         # Get items first
         if not date_parts:
@@ -280,7 +280,7 @@ class ReportCommand(Command):
 
     def _show_nutrients(self, report):
         """Show micronutrients for codes in report."""
-        if not self.ctx.nutrients:
+        if not self.ctx.master:
             print("n(Micronutrients not available)n")
             return
         
@@ -292,7 +292,7 @@ class ReportCommand(Command):
         for row in report.rows:
             code = row.code
             if code not in seen_codes:
-                if self.ctx.nutrients.has_nutrients(code):
+                if self.ctx.master.has_nutrients(code):
                     codes_in_order.append(code)
                     seen_codes.add(code)
         
@@ -301,7 +301,7 @@ class ReportCommand(Command):
             return
         
         # Get available nutrient columns
-        available = self.ctx.nutrients.get_available_nutrients()
+        available = self.ctx.master.get_available_nutrients()
         if not available:
             print("\n(No micronutrient data available)\n")
             return
@@ -361,7 +361,7 @@ class ReportCommand(Command):
     
     def _show_recipes(self, report):
         """Show recipes for codes in report (once per code, in order)."""
-        if not self.ctx.recipes:
+        if not self.ctx.master:
             print("(Recipes not available)")
             return
         
@@ -373,7 +373,7 @@ class ReportCommand(Command):
         for row in report.rows:
             code = row.code
             if code not in seen_codes:
-                if self.ctx.recipes.has_recipe(code):
+                if self.ctx.master.has_recipe(code):
                     codes_in_order.append(code)
                     seen_codes.add(code)
         
@@ -386,7 +386,7 @@ class ReportCommand(Command):
         print()
         
         for code in codes_in_order:
-            formatted = self.ctx.recipes.format_recipe(code)
+            formatted = self.ctx.master.format_recipe(code)
             if formatted:
                 print(formatted)
 

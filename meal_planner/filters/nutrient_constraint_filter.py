@@ -23,7 +23,6 @@ class NutrientConstraintFilter:
     def __init__(
         self,
         master,
-        nutrients,
         thresholds_mgr,
         meal_type: str,
         template_name: str
@@ -33,13 +32,11 @@ class NutrientConstraintFilter:
         
         Args:
             master: MasterLoader instance
-            nutrients: NutrientsManager instance  
             thresholds_mgr: ThresholdsManager instance
             meal_type: Meal category (breakfast, lunch, dinner, etc.)
             template_name: Generation template name (e.g., "protein_low_carb")
         """
         self.master = master
-        self.nutrients = nutrients
         self.thresholds_mgr = thresholds_mgr
         self.meal_type = meal_type
         self.template_name = template_name
@@ -174,7 +171,7 @@ class NutrientConstraintFilter:
         # Import here to avoid circular dependency
         from meal_planner.reports import ReportBuilder
         
-        builder = ReportBuilder(self.master, self.nutrients)
+        builder = ReportBuilder(self.master)
         items = candidate.get("items", [])
         
         if not items:

@@ -34,20 +34,18 @@ class Scorer(ABC):
     - Scorer-specific configuration parameters
     """
     
-    def __init__(self, config: Dict[str, Any], master, nutrients, thresholds, user_prefs):
+    def __init__(self, config: Dict[str, Any], master, thresholds, user_prefs):
         """
         Initialize scorer.
         
         Args:
             config: Scorer-specific configuration from meal_plan_config.json
             master: MasterLoader instance
-            nutrients: NutrientsManager instance
             thresholds: ThresholdsManager instance
             user_prefs: UserPreferencesManager instance
         """
         self.config = config
         self.master = master
-        self.nutrients = nutrients
         self.thresholds = thresholds
         self.user_prefs = user_prefs
     

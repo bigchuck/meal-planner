@@ -34,10 +34,9 @@ def repl():
     print_welcome()
     
     # Create command context (shared state for all commands)
-    from config import NUTRIENTS_FILE, RECIPES_FILE, ALIASES_FILE, THRESHOLDS_FILE, \
+    from config import ALIASES_FILE, THRESHOLDS_FILE, \
                         WORKSPACE_FILE, STAGING_BUFFER_FILE, EMAIL_CONFIG_FILE, EMAIL_SEND_LOG
-    ctx = CommandContext(MASTER_FILE, LOG_FILE, PENDING_FILE, 
-                        NUTRIENTS_FILE, RECIPES_FILE, ALIASES_FILE, 
+    ctx = CommandContext(MASTER_FILE, LOG_FILE, PENDING_FILE, ALIASES_FILE, 
                         THRESHOLDS_FILE, USER_PREFS_FILE, WORKSPACE_FILE,
                         STAGING_BUFFER_FILE, EMAIL_CONFIG_FILE, EMAIL_SEND_LOG)
 

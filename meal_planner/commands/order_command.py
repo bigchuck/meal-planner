@@ -208,9 +208,9 @@ class OrderCommand(Command):
             return row.get(col)
         
         # Check micronutrients
-        if field in self.MICROS and self.ctx.nutrients:
+        if field in self.MICROS and self.ctx.master:
             code = row[cols.code]
-            nutrients = self.ctx.nutrients.get_nutrients_for_code(code)
+            nutrients = self.ctx.master.get_nutrients_for_code(code)
             if nutrients:
                 return nutrients.get(field)
         

@@ -19,7 +19,6 @@ class CommandContext:
     """
     
     def __init__(self, master_file: Path, log_file: Path, pending_file: Path,
-                 nutrients_file: Path = None, recipes_file: Path = None,
                  aliases_file: Path = None, thresholds_file: Path = None,
                  user_prefs_file: Path = None, workspace_file: Path = None,
                  staging_buffer_file: Path = None,
@@ -31,13 +30,9 @@ class CommandContext:
             master_file: Path to master CSV
             log_file: Path to log CSV
             pending_file: Path to pending JSON
-            nutrients_file: Path to nutrients CSV (optional)
-            recipes_file: Path to recipes CSV (optional)
             aliases_file: Path to aliases JSON (optional)
             thresholds_file: Path to thresholds JSON (optional)
         """
-        from meal_planner.data.nutrients_manager import NutrientsManager
-        from meal_planner.data.recipes_manager import RecipesManager
         from meal_planner.data.alias_manager import AliasManager
         from meal_planner.data.workspace_manager import WorkspaceManager
         from meal_planner.data.user_preferences_manager import UserPreferencesManager
@@ -46,11 +41,9 @@ class CommandContext:
 
         from meal_planner.commands.mode_manager import ModeManager
         
-        self.master = MasterLoader(master_file, nutrients_file, recipes_file)
+        self.master = MasterLoader(master_file)
         self.log = LogManager(log_file)
         self.pending_mgr = PendingManager(pending_file)
-        self.nutrients = NutrientsManager(nutrients_file) if nutrients_file else None
-        self.recipes = RecipesManager(recipes_file) if recipes_file else None
         self.aliases = AliasManager(aliases_file) if aliases_file else None
 
         thresholds = ThresholdsManager(thresholds_file)
@@ -176,7 +169,6 @@ class CommandContext:
                         scorer_name,
                         config,
                         self.master,
-                        self.nutrients,
                         self.thresholds,
                         self.user_prefs
                     )

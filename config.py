@@ -36,11 +36,9 @@ else:
     raise ValueError(f"Invalid MODE: {MODE}. Must be 'PRODUCTION' or 'DEVELOPMENT'")
 
 # File paths
-MASTER_FILE = DATA_PATH / "meal_plan_master.csv"
+MASTER_FILE = DATA_PATH / "meal_plan_master.json"
 LOG_FILE = DATA_PATH / "meal_plan_daily_log.csv"
 PENDING_FILE = DATA_PATH / "meal_plan_pending.json"
-NUTRIENTS_FILE = DATA_PATH / "meal_plan_nutrients.csv"
-RECIPES_FILE = DATA_PATH / "meal_plan_recipes.csv"
 ALIASES_FILE = DATA_PATH / "meal_plan_aliases.json"
 THRESHOLDS_FILE = DATA_PATH / "meal_plan_config.json"
 WORKSPACE_FILE = DATA_PATH / "meal_plan_workspace.json"
@@ -63,8 +61,6 @@ print(f"Using these files: ")
 print(f"  master: {MASTER_FILE}")
 print(f"  log: {LOG_FILE}")
 print(f"  pending: {PENDING_FILE}")
-print(f"  nutrients: {NUTRIENTS_FILE}")
-print(f"  recipes: {RECIPES_FILE}")
 print(f"  aliases: {ALIASES_FILE}")
 print(f"  thresholds: {THRESHOLDS_FILE}")
 print(f"  usage: {USAGE_STATS_FILE}")

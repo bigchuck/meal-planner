@@ -221,7 +221,7 @@ Subcommands:
             return
         
         # Search through log entries
-        builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
+        builder = ReportBuilder(self.ctx.master)
         found_meals = []
 
         for _, row in log_df.iterrows():
@@ -1557,7 +1557,7 @@ Subcommands:
             return
         
         # Build report
-        builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
+        builder = ReportBuilder(self.ctx.master)
         
         # Create title
         meal_label = candidate.get('meal_name', 'meal')
@@ -1581,11 +1581,11 @@ Subcommands:
 
         if not stage:
             # Show micronutrients if requested
-            if show_nutrients and self.ctx.nutrients:
+            if show_nutrients and self.ctx.master:
                 self._show_report_nutrients(report)
         
             # Show recipes if requested
-            if show_recipes and self.ctx.recipes:
+            if show_recipes and self.ctx.master:
                 self._show_report_recipes(report)
     
     def _show_report_nutrients(self, report) -> None:
@@ -1598,7 +1598,7 @@ Subcommands:
         for row in report.rows:
             code = row.code
             if code not in seen_codes:
-                if self.ctx.nutrients.has_nutrients(code):
+                if self.ctx.master.has_nutrients(code):
                     codes_in_order.append(code)
                     seen_codes.add(code)
         
@@ -1607,7 +1607,7 @@ Subcommands:
             return
         
         # Get available nutrient columns
-        available = self.ctx.nutrients.get_available_nutrients()
+        available = self.ctx.master.get_available_nutrients()
         if not available:
             print("\n(No micronutrient data available)\n")
             return
@@ -1675,7 +1675,7 @@ Subcommands:
         for row in report.rows:
             code = row.code
             if code not in seen_codes:
-                if self.ctx.recipes.has_recipe(code):
+                if self.ctx.master.has_recipe(code):
                     codes_in_order.append(code)
                     seen_codes.add(code)
         
@@ -1688,7 +1688,7 @@ Subcommands:
         print()
         
         for code in codes_in_order:
-            formatted = self.ctx.recipes.format_recipe(code)
+            formatted = self.ctx.master.format_recipe(code)
             if formatted:
                 print(formatted)
 

@@ -250,7 +250,6 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
         
         # Create analyzer
         analyzer = MealAnalyzer(self.ctx.master, 
-                                self.ctx.nutrients, 
                                 self.ctx.thresholds, 
                                 self.ctx.user_prefs)
         
@@ -301,7 +300,7 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
         daily_context = self._calculate_daily_context(meal_name)
         
         # Create analyzer
-        analyzer = MealAnalyzer(self.ctx.master, self.ctx.nutrients, self.ctx.thresholds)
+        analyzer = MealAnalyzer(self.ctx.master, self.ctx.thresholds)
         
         # Run analysis
         try:
@@ -338,7 +337,7 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
             return False, None, None
         
         # Create analyzer
-        analyzer = MealAnalyzer(self.ctx.master, self.ctx.nutrients, self.ctx.thresholds)
+        analyzer = MealAnalyzer(self.ctx.master, self.ctx.thresholds)
         
         # Run analysis (no daily context for historical dates)
         try:

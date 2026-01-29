@@ -415,7 +415,7 @@ class MaterializeCommand(Command):
         self._add_master_entry(target_code, section, description, nutrition_data)
         
         # Create nutrients entry if manager exists
-        if self.ctx.nutrients:
+        if self.ctx.master:
             nutrients_data = self._calculate_alias_nutrients(components, multiplier)
             if nutrients_data:
                 self._add_nutrients_entry(target_code, nutrients_data)
@@ -464,8 +464,8 @@ class MaterializeCommand(Command):
         self._add_master_entry(target_code, section, description, nutrition_data)
         
         # Scale nutrients if available
-        if self.ctx.nutrients:
-            nutrients_row = self.ctx.nutrients.get_nutrients_for_code(source_code)
+        if self.ctx.master:
+            nutrients_row = self.ctx.master.get_nutrients_for_code(source_code)
             if nutrients_row is not None:
                 nutrients_data = self._scale_nutrients(nutrients_row, multiplier)
                 self._add_nutrients_entry(target_code, nutrients_data)
@@ -542,11 +542,11 @@ class MaterializeCommand(Command):
     
     def _calculate_alias_nutrients(self, components: list, multiplier: float) -> Optional[Dict]:
         """Calculate micronutrients for alias components."""
-        if not self.ctx.nutrients:
+        if not self.ctx.master:
             return None
         
         # Get available nutrient columns
-        nutrients_df = self.ctx.nutrients.df
+        nutrients_df = self.ctx.master.df
         if nutrients_df.empty:
             return None
         
@@ -563,7 +563,7 @@ class MaterializeCommand(Command):
             comp_mult = comp.get('mult', 1.0)
             effective_mult = comp_mult * multiplier
             
-            nutrients_row = self.ctx.nutrients.get_nutrients_for_code(code)
+            nutrients_row = self.ctx.master.get_nutrients_for_code(code)
             if nutrients_row is None:
                 continue
             
@@ -632,10 +632,10 @@ class MaterializeCommand(Command):
     def _add_nutrients_entry(self, code: str, nutrients: Dict) -> None:
         """Add entry to nutrients.csv."""
         # Create backup
-        backup_path = create_backup(self.ctx.nutrients.filepath, self.ctx)
+        backup_path = create_backup(self.ctx.master.filepath, self.ctx)
         
         # Load current nutrients
-        nutrients_df = self.ctx.nutrients.df.copy()
+        nutrients_df = self.ctx.master.df.copy()
         
         # Build new row
         new_row = {'code': code}
@@ -653,17 +653,17 @@ class MaterializeCommand(Command):
         nutrients_df = nutrients_df.reset_index(drop=True)
         
         # Save
-        nutrients_df.to_csv(self.ctx.nutrients.filepath, index=False)
-        self.ctx.nutrients.load()
+        nutrients_df.to_csv(self.ctx.master.filepath, index=False)
+        self.ctx.master.load()
     
     def _add_recipe_entry(self, code: str, source_code: str, multiplier: float,
                          components_info: list, is_alias: bool) -> None:
         """Add recipe documentation entry."""
-        if not self.ctx.recipes:
+        if not self.ctx.master:
             return
         
         # Create backup
-        backup_path = create_backup(self.ctx.recipes.filepath, self.ctx)
+        backup_path = create_backup(self.ctx.master.filepath, self.ctx)
         
         # Build recipe text
         today = datetime.now().strftime("%Y-%m-%d")
@@ -696,7 +696,7 @@ class MaterializeCommand(Command):
         recipe_text = "\n".join(recipe_lines)
         
         # Load recipes
-        recipes_df = self.ctx.recipes.df.copy()
+        recipes_df = self.ctx.master.df.copy()
         
         # Build new row
         new_row = {
@@ -714,5 +714,5 @@ class MaterializeCommand(Command):
         recipes_df = recipes_df.reset_index(drop=True)
         
         # Save
-        recipes_df.to_csv(self.ctx.recipes.filepath, index=False)
-        self.ctx.recipes.load()
+        recipes_df.to_csv(self.ctx.master.filepath, index=False)
+        self.ctx.master.load()

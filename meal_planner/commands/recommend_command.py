@@ -244,7 +244,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
         # Run analysis to get gaps/excesses
         analyzer = MealAnalyzer(
             self.ctx.master,
-            self.ctx.nutrients,
             self.ctx.thresholds
         )
         
@@ -517,14 +516,13 @@ class RecommendCommand(Command, CommandHistoryMixin):
         items = candidate.get("items", [])
         
         # Calculate nutritional totals
-        report_builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
+        report_builder = ReportBuilder(self.ctx.master)
         report = report_builder.build_from_items(items, title="Scoring")
         totals = report.totals  # Get the DailyTotals object from the report
         
         # Run analysis
         analyzer = MealAnalyzer(
             self.ctx.master,
-            self.ctx.nutrients,
             self.ctx.thresholds
         )
         
@@ -735,7 +733,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
         # Run analysis
         analyzer = MealAnalyzer(
             self.ctx.master,
-            self.ctx.nutrients,
             self.ctx.thresholds
         )
         
@@ -1139,7 +1136,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
             from meal_planner.filters.nutrient_constraint_filter import NutrientConstraintFilter
             nutrient_filter = NutrientConstraintFilter(
                 self.ctx.master,
-                self.ctx.nutrients,
                 self.ctx.thresholds,
                 meal_type=meal_type,
                 template_name=template_name  # From generation_state!

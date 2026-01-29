@@ -63,7 +63,7 @@ class GlucoseCommand(Command):
                      if not p.startswith("--") 
                      and (parts.index(p) == 0 or parts[parts.index(p) - 1] != "--meal")]
         
-        builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
+        builder = ReportBuilder(self.ctx.master)
         
         if not date_parts:
             # Use pending

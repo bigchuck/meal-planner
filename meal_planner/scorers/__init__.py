@@ -15,7 +15,7 @@ SCORER_REGISTRY = {
 }
 
 
-def create_scorer(scorer_name: str, config, master, nutrients, thresholds, user_prefs):
+def create_scorer(scorer_name: str, config, master, thresholds, user_prefs):
     """
     Factory function to create scorer instances.
     
@@ -23,7 +23,6 @@ def create_scorer(scorer_name: str, config, master, nutrients, thresholds, user_
         scorer_name: Name of scorer (e.g., "nutrient_gap")
         config: Scorer-specific config from meal_plan_config.json
         master: MasterLoader instance
-        nutrients: NutrientsManager instance
         thresholds: ThresholdsManager instance
         user_prefs: UserPreferencesManager instance
     
@@ -40,7 +39,7 @@ def create_scorer(scorer_name: str, config, master, nutrients, thresholds, user_
         )
     
     scorer_class = SCORER_REGISTRY[scorer_name]
-    return scorer_class(config, master, nutrients, thresholds, user_prefs)
+    return scorer_class(config, master, thresholds, user_prefs)
 
 
 def get_available_scorers():

@@ -148,16 +148,43 @@ class AddCodeCommand(Command):
         # If no commas, treat as lookup
         if ',' not in args:
             code = args.strip().upper()
-            master_df = self.ctx.master.df
-            code_col = self.ctx.master.cols.code
-            existing = master_df[master_df[code_col].str.upper() == code]
+            existing = self.ctx.master.lookup_code(code)
             
-            if existing.empty:
-                print(f"\nCode '{code}' not found in master.csv.")
+            if not existing:
+                print(f"\nCode '{code}' not found in master.json.")
                 print("To add it, use:")
                 print(f"  addcode {code},section,option,cal,prot_g,carbs_g,fat_g,GI,GL,sugar_g")
             else:
-                show_current_values(code, master_df, columns, "master.csv")
+                # Show current values in CSV format for easy editing
+                print(f"\nCode '{code}' already exists in master.json.")
+                print("Current values (CSV format):")
+                print("  code,section,option,cal,prot_g,carbs_g,fat_g,GI,GL,sugar_g")
+                
+                # Build CSV line from entry
+                macros = existing.get('macros', {})
+                section = existing.get('section', '')
+                option = existing.get('description', existing.get('option', ''))
+                
+                # Format values
+                values = [
+                    code,
+                    section,
+                    f'"{option}"' if ',' in option else option,
+                    str(macros.get('cal', 0.0)),
+                    str(macros.get('prot_g', 0.0)),
+                    str(macros.get('carbs_g', 0.0)),
+                    str(macros.get('fat_g', 0.0)),
+                    str(macros.get('GI', 0.0)),
+                    str(macros.get('GL', 0.0)),
+                    str(macros.get('sugar_g', 0.0)),
+                ]
+                
+                csv_line = ','.join(values)
+                print(f"  {csv_line}")
+                print(f"\nTo update, copy and modify the line above, then add --force:")
+                print(f"  addcode {csv_line} --force")
+            
+            print()
             return
         
         # Parse CSV line
@@ -168,63 +195,43 @@ class AddCodeCommand(Command):
             return
         
         code = data['code'].upper()
-        master_df = self.ctx.master.df.copy()
-        code_col = self.ctx.master.cols.code
-        existing = master_df[master_df[code_col].str.upper() == code]
+        existing = self.ctx.master.lookup_code(code)
         
-        if not existing.empty and not force:
-            show_current_values(code, master_df, columns, "master.csv")
+        if existing and not force:
+            print(f"\nCode '{code}' already exists.")
+            print("Use --force to update.")
+            print()
             return
         
+        # Create backup
         backup_path = create_backup(self.ctx.master.filepath, self.ctx)
         if backup_path:
             print(f"Created backup: {backup_path.name}")
         
-        if not existing.empty:
-            idx = existing.index[0]
-            for col, value in data.items():
-                actual_col = col if col in master_df.columns else self.ctx.master.cols.__dict__.get(col, col)
-                if actual_col in master_df.columns:
-                    # Convert to proper dtype to avoid warnings
-                    if master_df[actual_col].dtype in ['float64', 'int64']:
-                        try:
-                            master_df.at[idx, actual_col] = float(value) if value else 0.0
-                        except (ValueError, TypeError):
-                            master_df.at[idx, actual_col] = value
-                    else:
-                        master_df.at[idx, actual_col] = value
-            action = "Updated"
-        else:
-            # Convert numeric columns to proper types
-            typed_data = {}
-            for col, value in data.items():
-                actual_col = col if col in master_df.columns else self.ctx.master.cols.__dict__.get(col, col)
-                if actual_col in master_df.columns:
-                    if master_df[actual_col].dtype in ['float64', 'int64']:
-                        try:
-                            typed_data[col] = float(value) if value else 0.0
-                        except (ValueError, TypeError):
-                            typed_data[col] = value
-                    else:
-                        typed_data[col] = value
-                else:
-                    typed_data[col] = value
-            
-            new_row = pd.DataFrame([typed_data])
-            master_df = pd.concat([master_df, new_row], ignore_index=True)
-            action = "Added"
+        # Build macros dict
+        macros = {
+            'cal': float(data['cal']) if data['cal'] else 0.0,
+            'prot_g': float(data['prot_g']) if data['prot_g'] else 0.0,
+            'carbs_g': float(data['carbs_g']) if data['carbs_g'] else 0.0,
+            'fat_g': float(data['fat_g']) if data['fat_g'] else 0.0,
+            'GI': float(data['GI']) if data['GI'] else 0.0,
+            'GL': float(data['GL']) if data['GL'] else 0.0,
+            'sugar_g': float(data['sugar_g']) if data['sugar_g'] else 0.0,
+        }
         
-        # Sort naturally
-        code_col = self.ctx.master.cols.code
-        master_df['_sort_key'] = master_df[code_col].apply(natural_sort_key)
-        master_df = master_df.sort_values('_sort_key').drop('_sort_key', axis=1)
-        master_df = master_df.reset_index(drop=True)
+        # Add/update entry
+        is_new = self.ctx.master.add_or_update_entry(
+            code=code,
+            section=data['section'],
+            option=data['option'],
+            macros=macros
+        )
         
-        master_df.to_csv(self.ctx.master.filepath, index=False)
-        self.ctx.master.reload()
+        # Save
+        self.ctx.master.save()
         
-        print(f"✓ {action} {code} in master.csv")
-
+        action = "Added" if is_new else "Updated"
+        print(f"✓ {action} {code} in master.json")
 
 @register_command
 class AddNutrientCommand(Command):
@@ -235,41 +242,54 @@ class AddNutrientCommand(Command):
     
     def execute(self, args: str) -> None:
         """Add or update nutrient data."""
-        if not self.ctx.nutrients:
-            print("Nutrients file not configured.")
-            return
-        
         if not args.strip():
-            available = self.ctx.nutrients.get_available_nutrients()
-            cols_str = ','.join(['code'] + available) if available else 'code,...'
             print(f"Usage: addnutrient CODE  (to check existing)")
-            print(f"   or: addnutrient {cols_str} [--force]")
+            print(f"   or: addnutrient CODE,fiber_g,sodium_mg,potassium_mg,vitA_mcg,vitC_mg,iron_mg [--force]")
             return
         
         force = args.strip().endswith('--force')
         if force:
             args = args.strip()[:-7].strip()
         
-        nutrients_df = self.ctx.nutrients.df
-        if nutrients_df.empty:
-            print("Nutrients file is empty.")
-            return
-        
-        columns = list(nutrients_df.columns)
+        columns = ['code', 'fiber_g', 'sodium_mg', 'potassium_mg', 'vitA_mcg', 'vitC_mg', 'iron_mg']
         
         # If no commas, treat as lookup
         if ',' not in args:
             code = args.strip().upper()
-            existing = nutrients_df[nutrients_df['code'].str.upper() == code]
+            existing = self.ctx.master.lookup_code(code)
             
-            if existing.empty:
-                print(f"\nCode '{code}' not found in nutrients.csv.")
-                print("To add it, use:")
-                print(f"  addnutrient {code},{','.join(['...']*len(columns[1:]))}")
+            if not existing:
+                print(f"\nCode '{code}' not found in master.json.")
             else:
-                show_current_values(code, nutrients_df, columns, "nutrients.csv")
+                nutrients = existing.get('nutrients', {})
+                if nutrients:
+                    # Show current values in CSV format for easy editing
+                    print(f"\nCode '{code}' already has nutrients in master.json.")
+                    print("Current values (CSV format):")
+                    print("  code,fiber_g,sodium_mg,potassium_mg,vitA_mcg,vitC_mg,iron_mg")
+                    
+                    values = [
+                        code,
+                        str(nutrients.get('fiber_g', 0.0)),
+                        str(nutrients.get('sodium_mg', 0.0)),
+                        str(nutrients.get('potassium_mg', 0.0)),
+                        str(nutrients.get('vitA_mcg', 0.0)),
+                        str(nutrients.get('vitC_mg', 0.0)),
+                        str(nutrients.get('iron_mg', 0.0)),
+                    ]
+                    
+                    csv_line = ','.join(values)
+                    print(f"  {csv_line}")
+                    print(f"\nTo update, copy and modify the line above, then add --force:")
+                    print(f"  addnutrient {csv_line} --force")
+                else:
+                    print(f"\nCode '{code}' has no nutrients defined.")
+                    print("To add nutrients, use:")
+                    print(f"  addnutrient {code},fiber_g,sodium_mg,potassium_mg,vitA_mcg,vitC_mg,iron_mg")
+            print()
             return
         
+        # Parse
         try:
             data = parse_csv_line(args, columns)
         except ValueError as e:
@@ -277,57 +297,42 @@ class AddNutrientCommand(Command):
             return
         
         code = data['code'].upper()
-        existing = nutrients_df[nutrients_df['code'].str.upper() == code]
+        existing = self.ctx.master.lookup_code(code)
         
-        if not existing.empty and not force:
-            show_current_values(code, nutrients_df, columns, "nutrients.csv")
+        if not existing:
+            print(f"\nError: Code '{code}' not found in master.json.")
+            print("Add the code first with: addcode")
+            print()
             return
         
-        backup_path = create_backup(self.ctx.nutrients.filepath, self.ctx)
+        has_nutrients = 'nutrients' in existing and existing['nutrients']
+        if has_nutrients and not force:
+            print(f"\nCode '{code}' already has nutrients.")
+            print("Use --force to update.")
+            print()
+            return
+        
+        # Create backup
+        backup_path = create_backup(self.ctx.master.filepath, self.ctx)
         if backup_path:
             print(f"Created backup: {backup_path.name}")
         
-        if not existing.empty:
-            idx = existing.index[0]
-            for col, value in data.items():
-                if col in nutrients_df.columns:
-                    # Convert to proper dtype
-                    if nutrients_df[col].dtype in ['float64', 'int64']:
-                        try:
-                            nutrients_df.at[idx, col] = float(value) if value else 0.0
-                        except (ValueError, TypeError):
-                            nutrients_df.at[idx, col] = value
-                    else:
-                        nutrients_df.at[idx, col] = value
-            action = "Updated"
-        else:
-            # Convert numeric columns to proper types
-            typed_data = {}
-            for col, value in data.items():
-                if col in nutrients_df.columns:
-                    if nutrients_df[col].dtype in ['float64', 'int64']:
-                        try:
-                            typed_data[col] = float(value) if value else 0.0
-                        except (ValueError, TypeError):
-                            typed_data[col] = value
-                    else:
-                        typed_data[col] = value
-                else:
-                    typed_data[col] = value
-            
-            new_row = pd.DataFrame([typed_data])
-            nutrients_df = pd.concat([nutrients_df, new_row], ignore_index=True)
-            action = "Added"
+        # Build nutrients dict
+        nutrients = {
+            'fiber_g': float(data['fiber_g']) if data['fiber_g'] else 0.0,
+            'sodium_mg': float(data['sodium_mg']) if data['sodium_mg'] else 0.0,
+            'potassium_mg': float(data['potassium_mg']) if data['potassium_mg'] else 0.0,
+            'vitA_mcg': float(data['vitA_mcg']) if data['vitA_mcg'] else 0.0,
+            'vitC_mg': float(data['vitC_mg']) if data['vitC_mg'] else 0.0,
+            'iron_mg': float(data['iron_mg']) if data['iron_mg'] else 0.0,
+        }
         
-        nutrients_df['_sort_key'] = nutrients_df['code'].apply(natural_sort_key)
-        nutrients_df = nutrients_df.sort_values('_sort_key').drop('_sort_key', axis=1)
-        nutrients_df = nutrients_df.reset_index(drop=True)
+        # Update
+        self.ctx.master.update_nutrients(code, nutrients)
+        self.ctx.master.save()
         
-        nutrients_df.to_csv(self.ctx.nutrients.filepath, index=False)
-        self.ctx.nutrients.load()
-        
-        print(f"✓ {action} {code} in nutrients.csv")
-
+        action = "Updated" if has_nutrients else "Added"
+        print(f"✓ {action} nutrients for {code}")
 
 @register_command
 class AddRecipeCommand(Command):
@@ -338,17 +343,12 @@ class AddRecipeCommand(Command):
     
     def execute(self, args: str) -> None:
         """Add or update recipe."""
-        if not self.ctx.recipes:
-            print("Recipes file not configured.")
-            return
-        
         if not args.strip():
             print("Usage: addrecipe CODE  (to check existing)")
             print('   or: addrecipe CODE,"ingredients list" [--force]')
             print("\nNote: Use quotes around ingredients if they contain commas")
             print("\nExample:")
             print('  addrecipe SO.11,"16oz lean steak, 1 lb dry beans, 11oz okra"')
-            print('  addrecipe ZZ.1,"dirt, mud, rocks, oak leaves, slugs" --force')
             return
         
         force = args.strip().endswith('--force')
@@ -360,17 +360,33 @@ class AddRecipeCommand(Command):
         # If no commas, treat as lookup
         if ',' not in args:
             code = args.strip().upper()
-            recipes_df = self.ctx.recipes.df
-            existing = recipes_df[recipes_df['code'].str.upper() == code]
+            existing = self.ctx.master.lookup_code(code)
             
-            if existing.empty:
-                print(f"\nCode '{code}' not found in recipes.csv.")
-                print("To add it, use:")
-                print(f"  addrecipe {code},ingredient list here")
+            if not existing:
+                print(f"\nCode '{code}' not found in master.json.")
             else:
-                show_current_values(code, recipes_df, columns, "recipes.csv")
+                recipe = existing.get('recipe', '')
+                if recipe:
+                    # Show current values in CSV format for easy editing
+                    print(f"\nCode '{code}' already has a recipe in master.json.")
+                    print("Current values (CSV format):")
+                    print("  code,ingredients")
+                    
+                    # Quote recipe if it contains commas
+                    quoted_recipe = f'"{recipe}"' if ',' in recipe else recipe
+                    csv_line = f"{code},{quoted_recipe}"
+                    
+                    print(f"  {csv_line}")
+                    print(f"\nTo update, copy and modify the line above, then add --force:")
+                    print(f"  addrecipe {csv_line} --force")
+                else:
+                    print(f"\nCode '{code}' has no recipe defined.")
+                    print("To add recipe, use:")
+                    print(f'  addrecipe {code},"ingredient list"')
+            print()
             return
         
+        # Parse
         try:
             data = parse_csv_line(args, columns)
         except ValueError as e:
@@ -378,54 +394,128 @@ class AddRecipeCommand(Command):
             return
         
         code = data['code'].upper()
-        recipes_df = self.ctx.recipes.df.copy()
-        existing = recipes_df[recipes_df['code'].str.upper() == code]
+        existing = self.ctx.master.lookup_code(code)
         
-        if not existing.empty and not force:
-            show_current_values(code, recipes_df, columns, "recipes.csv")
+        if not existing:
+            print(f"\nError: Code '{code}' not found in master.json.")
+            print("Add the code first with: addcode")
+            print()
             return
         
-        backup_path = create_backup(self.ctx.recipes.filepath, self.ctx)
+        has_recipe = 'recipe' in existing and existing['recipe']
+        if has_recipe and not force:
+            print(f"\nCode '{code}' already has a recipe.")
+            print("Use --force to update.")
+            print()
+            return
+        
+        # Create backup
+        backup_path = create_backup(self.ctx.master.filepath, self.ctx)
         if backup_path:
             print(f"Created backup: {backup_path.name}")
         
-        if not existing.empty:
-            idx = existing.index[0]
-            for col, value in data.items():
-                if col in recipes_df.columns:
-                    # Recipes are all strings, but check dtype for consistency
-                    if recipes_df[col].dtype in ['float64', 'int64']:
-                        try:
-                            recipes_df.at[idx, col] = float(value) if value else 0.0
-                        except (ValueError, TypeError):
-                            recipes_df.at[idx, col] = value
-                    else:
-                        recipes_df.at[idx, col] = value
-            action = "Updated"
-        else:
-            # Convert to proper types if needed
-            typed_data = {}
-            for col, value in data.items():
-                if col in recipes_df.columns:
-                    if recipes_df[col].dtype in ['float64', 'int64']:
-                        try:
-                            typed_data[col] = float(value) if value else 0.0
-                        except (ValueError, TypeError):
-                            typed_data[col] = value
-                    else:
-                        typed_data[col] = value
-                else:
-                    typed_data[col] = value
+        # Update
+        self.ctx.master.update_recipe(code, data['ingredients'])
+        self.ctx.master.save()
+        
+        action = "Updated" if has_recipe else "Added"
+        print(f"✓ {action} recipe for {code}")
+
+@register_command
+class ValidateCommand(Command):
+    """Validate master data integrity."""
+    
+    name = "validate"
+    help_text = "Check data integrity (validate or validate CODE)"
+    
+    def execute(self, args: str) -> None:
+        """Validate master data or specific code."""
+        args = args.strip()
+        
+        if not args:
+            # Check overall integrity
+            print("Checking master data integrity...\n")
+            stats = self.ctx.master.check_integrity()
             
-            new_row = pd.DataFrame([typed_data])
-            recipes_df = pd.concat([recipes_df, new_row], ignore_index=True)
-            action = "Added"
+            print(f"Total entries: {stats['total_entries']}")
+            print(f"Sections: {stats['sections']}")
+            print(f"With nutrients: {stats['with_nutrients']}")
+            print(f"With recipes: {stats['with_recipes']}")
+            print(f"With portions: {stats['with_portions']}")
+            
+            if stats['issues']:
+                print(f"\nFound {len(stats['issues'])} issues:")
+                for issue in stats['issues'][:20]:  # Limit output
+                    print(f"  • {issue}")
+                
+                if len(stats['issues']) > 20:
+                    print(f"  ... and {len(stats['issues']) - 20} more")
+            else:
+                print("\n✓ No issues found")
+            
+            print()
+        else:
+            # Validate specific code
+            code = args.upper()
+            result = self.ctx.master.validate_entry(code)
+            
+            if result['valid']:
+                print(f"\n✓ {code} is valid")
+            else:
+                print(f"\n✗ {code} has issues:")
+                for issue in result['issues']:
+                    print(f"  • {issue}")
+            
+            print()
+
+@register_command
+class DeleteCodeCommand(Command):
+    """Delete a code from master."""
+    
+    name = "delcode"
+    help_text = "Delete code from master (delcode CODE [--force])"
+    
+    def execute(self, args: str) -> None:
+        """Delete a code from master."""
+        if not args.strip():
+            print("Usage: delcode CODE [--force]")
+            print("Example: delcode SO.99 --force")
+            print("\nWarning: This permanently removes the code from master.json")
+            return
         
-        recipes_df['_sort_key'] = recipes_df['code'].apply(natural_sort_key)
-        recipes_df = recipes_df.sort_values('_sort_key').drop('_sort_key', axis=1)
-        recipes_df = recipes_df.reset_index(drop=True)
+        force = args.strip().endswith('--force')
+        if force:
+            args = args.strip()[:-7].strip()
         
-        recipes_df.to_csv(self.ctx.recipes.filepath, index=False)
-        self.ctx.recipes.load()
+        code = args.strip().upper()
         
-        print(f"✓ {action} {code} in recipes.csv")
+        # Check if exists
+        existing = self.ctx.master.lookup_code(code)
+        if not existing:
+            print(f"\nCode '{code}' not found in master.json")
+            print()
+            return
+        
+        # Show what will be deleted
+        print(f"\nCode '{code}' found:")
+        print(f"  Section: {existing.get('section', '')}")
+        print(f"  Option: {existing.get('option', '')}")
+        
+        if not force:
+            print("\nUse --force to confirm deletion")
+            print("Warning: This action cannot be undone (except via backup)")
+            print()
+            return
+        
+        # Create backup
+        backup_path = create_backup(self.ctx.master.filepath, self.ctx)
+        if backup_path:
+            print(f"Created backup: {backup_path.name}")
+        
+        # Delete
+        self.ctx.master.delete_entry(code)
+        self.ctx.master.save()
+        
+        print(f"✓ Deleted {code} from master.json")
+        print()
+

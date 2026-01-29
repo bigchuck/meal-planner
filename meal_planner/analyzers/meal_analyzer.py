@@ -20,7 +20,7 @@ class MealAnalyzer:
     Provides gap and excess detection with priority scoring.
     """
     
-    def __init__(self, master, nutrients, thresholds, user_prefs=None):
+    def __init__(self, master, thresholds, user_prefs=None):
         """
         Initialize meal analyzer.
         
@@ -30,7 +30,6 @@ class MealAnalyzer:
             thresholds: ThresholdsManager instance
         """
         self.master = master
-        self.nutrients = nutrients
         self.thresholds = thresholds
         self.user_prefs = user_prefs
     
@@ -58,7 +57,7 @@ class MealAnalyzer:
             AnalysisResult with gaps, excesses, and totals
         """
         # Calculate nutritional totals
-        builder = ReportBuilder(self.master, self.nutrients)
+        builder = ReportBuilder(self.master)
         report = builder.build_from_items(items, title="Analysis")
         totals = report.totals
         

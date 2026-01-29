@@ -36,7 +36,7 @@ class NutrientsCommand(Command):
             print("  nutrients 2025-01-15 --meal LUNCH")
             return
         
-        if not self.ctx.nutrients:
+        if not self.ctx.master:
             print("Micronutrients not available.")
             return
         
@@ -100,7 +100,7 @@ class NutrientsCommand(Command):
             return
         
         # Get nutrients
-        nutrients = self.ctx.nutrients.get_nutrients_for_code(code)
+        nutrients = self.ctx.master.get_nutrients_for_code(code)
         
         if not nutrients:
             print(f"\nNo micronutrient data for code '{code}'.")
@@ -149,7 +149,7 @@ class NutrientsCommand(Command):
         Args:
             date_arg: Optional date (YYYY-MM-DD) for log lookup
         """
-        builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
+        builder = ReportBuilder(self.ctx.master)
         
         if date_arg:
             # Get from log
@@ -206,7 +206,7 @@ class NutrientsCommand(Command):
             meal_name: Meal name (BREAKFAST, LUNCH, etc.)
             date_arg: Optional date (YYYY-MM-DD) for log lookup
         """
-        builder = ReportBuilder(self.ctx.master, self.ctx.nutrients)
+        builder = ReportBuilder(self.ctx.master)
         
         if date_arg:
             # Get from log
