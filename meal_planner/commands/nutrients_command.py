@@ -100,7 +100,7 @@ class NutrientsCommand(Command):
             return
         
         # Get nutrients
-        nutrients = self.ctx.master.get_nutrients_for_code(code)
+        nutrients = self.ctx.master.get_nutrients(code)
         
         if not nutrients:
             print(f"\nNo micronutrient data for code '{code}'.")

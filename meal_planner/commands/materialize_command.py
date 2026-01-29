@@ -465,7 +465,7 @@ class MaterializeCommand(Command):
         
         # Scale nutrients if available
         if self.ctx.master:
-            nutrients_row = self.ctx.master.get_nutrients_for_code(source_code)
+            nutrients_row = self.ctx.master.get_nutrients(source_code)
             if nutrients_row is not None:
                 nutrients_data = self._scale_nutrients(nutrients_row, multiplier)
                 self._add_nutrients_entry(target_code, nutrients_data)
@@ -563,7 +563,7 @@ class MaterializeCommand(Command):
             comp_mult = comp.get('mult', 1.0)
             effective_mult = comp_mult * multiplier
             
-            nutrients_row = self.ctx.master.get_nutrients_for_code(code)
+            nutrients_row = self.ctx.master.get_nutrients(code)
             if nutrients_row is None:
                 continue
             

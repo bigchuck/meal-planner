@@ -18,16 +18,14 @@ class ReportBuilder:
     Shows breakdown of each code with its multiplier and nutrient contributions.
     """
     
-    def __init__(self, master: MasterLoader, nutrients_manager=None):
+    def __init__(self, master: MasterLoader):
         """
         Initialize report builder.
         
         Args:
             master: MasterLoader instance for lookups
-            nutrients_manager: Optional NutrientsManager for micronutrient data
         """
         self.master = master
-        self.nutrients = nutrients_manager
     
     def build_from_items(self, items: List[Dict[str, Any]], 
                         title: str = "Report") -> 'Report':
@@ -79,15 +77,14 @@ class ReportBuilder:
             )
 
             # Add micronutrients from nutrients manager if available
-            if self.nutrients:
-                micro_data = self.nutrients.get_nutrients_for_code(code)
-                if micro_data:
-                    item_totals.fiber_g = self._safe_float(micro_data.get('fiber_g', 0)) * mult
-                    item_totals.sodium_mg = self._safe_float(micro_data.get('sodium_mg', 0)) * mult
-                    item_totals.potassium_mg = self._safe_float(micro_data.get('potassium_mg', 0)) * mult
-                    item_totals.vitA_mcg = self._safe_float(micro_data.get('vitA_mcg', 0)) * mult
-                    item_totals.vitC_mg = self._safe_float(micro_data.get('vitC_mg', 0)) * mult
-                    item_totals.iron_mg = self._safe_float(micro_data.get('iron_mg', 0)) * mult
+            micro_data = self.master.get_nutrients(code)
+            if micro_data:
+                item_totals.fiber_g = self._safe_float(micro_data.get('fiber_g', 0)) * mult
+                item_totals.sodium_mg = self._safe_float(micro_data.get('sodium_mg', 0)) * mult
+                item_totals.potassium_mg = self._safe_float(micro_data.get('potassium_mg', 0)) * mult
+                item_totals.vitA_mcg = self._safe_float(micro_data.get('vitA_mcg', 0)) * mult
+                item_totals.vitC_mg = self._safe_float(micro_data.get('vitC_mg', 0)) * mult
+                item_totals.iron_mg = self._safe_float(micro_data.get('iron_mg', 0)) * mult
         
             
             # Create row
