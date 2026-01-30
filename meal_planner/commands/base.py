@@ -148,6 +148,25 @@ class CommandContext:
         """Reload log file from disk."""
         self.log.reload()
 
+    def reload_aliases(self):
+        """Reload aliases from disk."""
+        if self.aliases:
+            self.aliases.load()
+
+    def reload_config(self):
+        """Reload config/thresholds from disk."""
+        if self.thresholds:
+            if not self.thresholds.load():
+                print("Warning: Config validation failed")
+                for error in self.thresholds.validation_errors:
+                    print(f"  - {error}")
+
+    def reload_user_prefs(self):
+        """Reload user preferences from disk."""
+        if self.user_prefs:
+            if not self.user_prefs.load():
+                print(f"Warning: {self.user_prefs.get_error_message()}")
+
     def save_workspace(self):
         """Save planning workspace to disk (auto-save)."""
         if self.workspace_mgr:

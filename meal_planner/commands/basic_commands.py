@@ -55,17 +55,60 @@ class QuitCommand(Command):
         print("SO LONG, CRABBY!")
         raise SystemExit(0)
 
-# @register_command
-# class ReloadCommand(Command):
-#     """Reload master file from disk."""
+@register_command
+class ReloadCommand(Command):
+    """Reload data files from disk."""
     
-#     name = "reload"
-#     help_text = "Reload master file from disk"
+    name = "reload"
+    help_text = "Reload data files (reload [--config|--master|--alias|--user|--all])"
     
-#     def execute(self, args: str) -> None:
-#         """Reload master file."""
-#         self.ctx.reload_master()
-#         print(f"Master reloaded from disk ({len(self.ctx.master.df)} entries).")
+    def execute(self, args: str) -> None:
+        """Reload data files based on flags."""
+        args_lower = args.strip().lower()
+        
+        # Determine what to reload
+        reload_all = not args_lower or args_lower == "--all"
+        reload_master = reload_all or "--master" in args_lower
+        reload_config = reload_all or "--config" in args_lower
+        reload_alias = reload_all or "--alias" in args_lower
+        reload_user = reload_all or "--user" in args_lower
+        
+        reloaded = []
+        
+        # Reload master
+        if reload_master:
+            self.ctx.reload_master()
+            count = len(self.ctx.master.df)
+            reloaded.append(f"master ({count} entries)")
+        
+        # Reload config/thresholds
+        if reload_config:
+            self.ctx.reload_config()
+            reloaded.append("config")
+        
+        # Reload aliases
+        if reload_alias:
+            if self.ctx.aliases:
+                self.ctx.reload_aliases()
+                count = len(self.ctx.aliases.aliases)
+                reloaded.append(f"aliases ({count} entries)")
+            elif reload_all:
+                # Only mention if explicitly requested or --all
+                reloaded.append("aliases (not configured)")
+        
+        # Reload user preferences
+        if reload_user:
+            if self.ctx.user_prefs:
+                self.ctx.reload_user_prefs()
+                reloaded.append("user preferences")
+            elif reload_all:
+                reloaded.append("user preferences (not configured)")
+        
+        # Show what was reloaded
+        if reloaded:
+            print(f"Reloaded: {', '.join(reloaded)}")
+        else:
+            print("No files reloaded")
 
 @register_command
 class StatusCommand(Command):

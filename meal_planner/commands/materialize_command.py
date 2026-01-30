@@ -25,7 +25,7 @@ class MaterializeCommand(Command):
         Materialize alias or scale master entry.
         
         Syntax:
-            materialize <source_code> [multiplier] [as NEW.CODE]
+            materialize <source_code> [multiplier] [as NEW.CODE] [--edit]
             
         Preview mode (no "as"): Shows what will be created
         Execution mode (with "as"): Creates the entry
@@ -34,17 +34,23 @@ class MaterializeCommand(Command):
             args: Command arguments
         """
         if not args.strip():
-            print("Usage: materialize <source_code> [multiplier] [as NEW.CODE]")
+            print("Usage: materialize <source_code> [multiplier] [as NEW.CODE] [--edit]")
             print("\nPreview mode (shows what will be created):")
             print("  materialize AL.4")
             print("  materialize SO.19d 0.5")
             print("\nExecution mode (creates entry):")
             print("  materialize AL.4 as CM.5")
-            print("  materialize SO.19d 0.5 as SO.19e")
+            print("  materialize SO.19d 0.5 as SO.19e --edit")
             return
         
         # Parse arguments
         parts = args.strip().split()
+        
+        # Check for --edit flag
+        edit_mode = False
+        if '--edit' in parts:
+            edit_mode = True
+            parts = [p for p in parts if p != '--edit']
         
         # Extract source code
         source_code = parts[0].upper()
@@ -64,7 +70,7 @@ class MaterializeCommand(Command):
             # Execution mode
             if as_index + 1 >= len(parts):
                 print("\nError: Missing target code after 'as'")
-                print("Usage: materialize <source> [mult] as <target>")
+                print("Usage: materialize <source> [mult] as <target> [--edit]")
                 print()
                 return
             
@@ -103,11 +109,11 @@ class MaterializeCommand(Command):
         
         if target_code:
             # Execution mode
-            self._execute_materialize(source_code, multiplier, target_code, is_alias)
+            self._execute_materialize(source_code, multiplier, target_code, is_alias, edit_mode)
         else:
             # Preview mode
-            self._preview_materialize(source_code, multiplier, is_alias)
-    
+            self._preview_materialize(source_code, multiplier, is_alias)    
+
     def _parse_multiplier(self, mult_str: str) -> Optional[float]:
         """Parse multiplier string into float."""
         # Handle leading dot
@@ -353,7 +359,7 @@ class MaterializeCommand(Command):
         return f"{source_code}_new"
     
     def _execute_materialize(self, source_code: str, multiplier: float, 
-                            target_code: str, is_alias: bool) -> None:
+                            target_code: str, is_alias: bool, edit_mode: bool = False) -> None:
         """Execute materialization."""
         # Check if target code already exists
         if self.ctx.master.lookup_code(target_code):
@@ -372,8 +378,8 @@ class MaterializeCommand(Command):
         if is_alias:
             self._materialize_alias(source_code, multiplier, target_code)
         else:
-            self._materialize_scaled(source_code, multiplier, target_code)
-    
+            self._materialize_scaled(source_code, multiplier, target_code, edit_mode)
+
     def _validate_code_format(self, code: str) -> bool:
         """Validate code format."""
         import re
@@ -432,7 +438,8 @@ class MaterializeCommand(Command):
               f"{nutrition_data['fat_g']:.1f}g fat")
         print()
     
-    def _materialize_scaled(self, source_code: str, multiplier: float, target_code: str) -> None:
+    def _materialize_scaled(self, source_code: str, multiplier: float, target_code: str, 
+                        edit_mode: bool = False) -> None:
         """Create scaled version of master entry."""
         row = self.ctx.master.lookup_code(source_code)
         if not row:
@@ -460,6 +467,14 @@ class MaterializeCommand(Command):
         food_name = row[cols.option]
         description = f"{food_name} [from {source_code} x{multiplier:g}]"
         
+        # Allow editing if requested
+        if edit_mode:
+            description = self._prompt_for_description_edit(description)
+            if description is None:
+                print("\nMaterialization cancelled")
+                print()
+                return
+        
         # Create master entry
         self._add_master_entry(target_code, section, description, nutrition_data)
         
@@ -472,16 +487,12 @@ class MaterializeCommand(Command):
         
         # Create recipe entry
         self._add_recipe_entry(target_code, source_code, multiplier, 
-                              [{'code': source_code, 'mult': multiplier, 
-                                'name': food_name}], False)
+                            [{'code': source_code, 'mult': multiplier, 
+                                'name': food_name, 'original_cal': float(row.get(cols.cal, 0))}], False)
         
-        print(f"\n✓ Materialized {source_code} x{multiplier:g} as {target_code}")
-        print(f"  Section: {section}")
-        print(f"  Description: {description}")
-        print(f"  Nutrition: {nutrition_data['cal']:.0f} cal, "
-              f"{nutrition_data['prot_g']:.1f}g prot")
-        print()
-    
+        print(f"\n{target_code} created")
+        print()    
+
     def _calculate_alias_nutrition(self, components: list, multiplier: float) -> Tuple[Optional[Dict], list]:
         """Calculate nutrition for alias components."""
         total_nutrition = {
@@ -687,3 +698,37 @@ class MaterializeCommand(Command):
         
         # Save
         self.ctx.master.save()
+
+    def _prompt_for_description_edit(self, default_description: str) -> Optional[str]:
+        """
+        Prompt user to edit description.
+        
+        Shows default, prompts for new value. Empty input uses default.
+        
+        Args:
+            default_description: Default description
+            
+        Returns:
+            Edited description or None if cancelled
+        """
+        try:
+            # Show default
+            print(f'[mode:edit] > "description": "{default_description}"')
+            print()
+            
+            # Prompt for edit
+            edited = input('[mode:edit] > "description": ')
+            
+            # Empty input = use default
+            if not edited or not edited.strip():
+                return default_description
+            
+            # Validate non-empty after stripping quotes if present
+            cleaned = edited.strip().strip('"')
+            if not cleaned:
+                return None
+            
+            return cleaned
+        
+        except (KeyboardInterrupt, EOFError):
+            return None
