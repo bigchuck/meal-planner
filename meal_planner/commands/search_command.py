@@ -73,7 +73,7 @@ class FindCommand(Command):
             print("Usage: find <search term> [--limit N] [--skip N] [--available]")
             return
         
-        query = ' '.join(query_parts)
+        query = self._transform_code_list(query_parts)
         results = self.ctx.master.search(query)
 
         # Also search aliases if available
@@ -237,3 +237,37 @@ class FindCommand(Command):
         except Exception as e:
             print(f"\nWarning: Could not access inventory: {e}")
             return df
+        
+    def _transform_code_list(self, query_parts: List[str]) -> str:
+        """
+        Transform comma-separated code list into OR expression.
+        
+        Detects patterns like: "MT.7k1","MT.7k2","FI.9a","MT.4b"
+        Transforms to: MT.7k1 OR MT.7k2 OR FI.9a OR MT.4b
+        
+        Args:
+            query_parts: List of query parts from shlex parsing
+        
+        Returns:
+            Query string (transformed if code list detected, otherwise joined as-is)
+        """
+        # Join all parts to check for comma-separated pattern
+        joined = ' '.join(query_parts)
+        
+        # Check if this looks like a comma-separated list
+        # Pattern: contains commas, each part looks like a food code
+        if ',' in joined:
+            # Split on commas and strip whitespace
+            codes = [part.strip() for part in joined.split(',')]
+            
+            # Validate each part looks like a food code
+            # Food codes typically match pattern: 2-3 letters, dot, alphanumeric
+            import re
+            code_pattern = re.compile(r'^[A-Z]{2,3}\.[A-Za-z0-9]+$', re.IGNORECASE)
+            
+            if all(code_pattern.match(code) for code in codes if code):
+                # All parts are valid codes, transform to OR expression
+                return ' OR '.join(codes)
+        
+        # Not a code list, return normal joined query
+        return ' '.join(query_parts)
