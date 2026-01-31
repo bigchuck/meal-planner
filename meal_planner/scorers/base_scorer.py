@@ -109,22 +109,6 @@ class Scorer(ABC):
         
         return current if isinstance(current, dict) else None
     
-    def _get_template_guidelines(self, template_path: str) -> List[str]:
-        """
-        Get template guidelines.
-        
-        Args:
-            template_path: Template path
-        
-        Returns:
-            List of guideline strings
-        """
-        template = self._get_template_targets(template_path)
-        if not template:
-            return []
-        
-        return template.get("guidelines", [])
-    
     def _extract_food_codes(self, items: List[Dict[str, Any]]) -> List[str]:
         """
         Extract food codes from items list.

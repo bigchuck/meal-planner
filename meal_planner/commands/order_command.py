@@ -56,6 +56,14 @@ class OrderCommand(Command):
         
         # Apply search filter if provided
         if search_query:
+            import shlex
+            try:
+                query_parts = shlex.split(search_query)
+            except ValueError:
+                query_parts = search_query.split()
+            
+            query = self._transform_code_list(query_parts)
+
             from meal_planner.utils.search import hybrid_search
             master_df = hybrid_search(master_df, search_query)
             
@@ -163,6 +171,21 @@ class OrderCommand(Command):
         search_query = ' '.join(tokens[3:]) if len(tokens) > 3 else ''
         
         return per100cal, nutrient_expr, direction, limit, search_query
+
+    def _transform_code_list(self, query_parts: List[str]) -> str:
+        """Transform comma-separated code list into OR expression."""
+        joined = ' '.join(query_parts)
+        
+        if ',' in joined:
+            codes = [part.strip() for part in joined.split(',')]
+            
+            import re
+            code_pattern = re.compile(r'^[A-Z]{2,3}\.[A-Za-z0-9]+$', re.IGNORECASE)
+            
+            if all(code_pattern.match(code) for code in codes if code):
+                return ' OR '.join(codes)
+        
+        return ' '.join(query_parts)
     
     def _parse_nutrient_expr(self, expr: str) -> Tuple[bool, List[str]]:
         """

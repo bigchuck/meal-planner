@@ -285,6 +285,8 @@ class ExhaustiveMealGenerator:
         
         # Validate each component
         for comp_name, component in components.items():
+            if comp_name.startswith('_'):
+                continue
             if not isinstance(component, dict):
                 print(f"Template '{template_name}': component '{comp_name}' must be a dict")
                 return None
@@ -390,6 +392,8 @@ class ExhaustiveMealGenerator:
         component_names = []
         
         for comp_name, comp_spec in components.items():
+            if comp_name.startswith('_'):
+                continue
             pool_ref = comp_spec.get('pool_ref')
             count_spec = comp_spec.get('count', {})
             count_min = count_spec.get('min', 0)

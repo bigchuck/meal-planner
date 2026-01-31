@@ -148,7 +148,7 @@ class AddCodeCommand(Command):
         # If no commas, treat as lookup
         if ',' not in args:
             code = args.strip().upper()
-            existing = self.ctx.master.lookup_code(code)
+            existing = self.ctx.master.get_entry_structured(code)
             
             if not existing:
                 print(f"\nCode '{code}' not found in master.json.")
@@ -161,10 +161,9 @@ class AddCodeCommand(Command):
                 print("  code,section,option,cal,prot_g,carbs_g,fat_g,GI,GL,sugar_g")
                 
                 # Build CSV line from entry
-                macros = existing.get('macros', {})
                 section = existing.get('section', '')
                 option = existing.get('description', existing.get('option', ''))
-                
+                macros = existing.get('macros', {})
                 # Format values
                 values = [
                     code,
@@ -256,12 +255,14 @@ class AddNutrientCommand(Command):
         # If no commas, treat as lookup
         if ',' not in args:
             code = args.strip().upper()
-            existing = self.ctx.master.lookup_code(code)
+            existing = self.ctx.master.get_entry_structured(code)
             
             if not existing:
                 print(f"\nCode '{code}' not found in master.json.")
+                print("To add nutrients, first add the code with:")
+                print(f"  addcode {code},section,option,cal,prot_g,carbs_g,fat_g,GI,GL,sugar_g")
             else:
-                nutrients = existing.get('nutrients', {})
+                nutrients = existing.get('nutrients', {}) # check one to see if they are there
                 if nutrients:
                     # Show current values in CSV format for easy editing
                     print(f"\nCode '{code}' already has nutrients in master.json.")

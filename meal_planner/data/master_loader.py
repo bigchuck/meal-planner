@@ -475,15 +475,25 @@ class MasterLoader:
         code = code.upper()
         
         # Check if adding or updating
-        is_new = code not in self._master_dict
+        existing = self._master_dict.get(code)
+        is_new = existing is None
         
-        # Build entry
-        entry = {
-            'code': code,
-            'section': section,
-            'description': option,  # Store as 'description' in JSON
-            'macros': macros,
-        }
+        if existing:
+            # Preserve nutrients, recipe, and other optional fields
+            entry = existing.copy()
+            # Update only the fields we're setting
+            entry['section'] = section
+            entry['description'] = option
+            entry['macros'] = macros
+
+        else:
+            # Build entry
+            entry = {
+                'code': code,
+                'section': section,
+                'description': option,  # Store as 'description' in JSON
+                'macros': macros,
+            }
         
         # Add optional fields if provided
         if nutrients:
@@ -791,4 +801,17 @@ class MasterLoader:
         self._rebuild_dataframe()
         
         return True
-
+    
+    def get_entry_structured(self, code: str) -> Optional[Dict[str, Any]]:
+        """
+        Get entry with hierarchical structure preserved (macros, nutrients nested).
+        Use this for update operations to avoid clobbering other sections.
+        
+        Args:
+            code: Food code
+            
+        Returns:
+            Dict with nested structure, or None if not found
+        """
+        code_upper = code.upper()
+        return self._master_dict.get(code_upper)

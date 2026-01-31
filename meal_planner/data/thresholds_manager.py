@@ -649,6 +649,8 @@ class ThresholdsManager:
             
             # Validate each generation template
             for template_name, template in templates.items():
+                if template_name.startswith('_'):
+                    continue
                 path = f"meal_generation.{meal_name}.{template_name}"
                 self._validate_generation_template(template, path, pool_names, meal_templates)
 
@@ -695,6 +697,8 @@ class ThresholdsManager:
                 self._validation_errors.append(f"{path}.components cannot be empty")
             else:
                 for comp_name, comp_spec in components.items():
+                    if comp_name.startswith('_'):
+                        continue
                     self._validate_component_spec(
                         comp_spec, 
                         f"{path}.components.{comp_name}",
