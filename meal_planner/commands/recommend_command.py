@@ -1222,27 +1222,29 @@ class RecommendCommand(Command, CommandHistoryMixin):
 
     def _show(self, args: List[str]) -> None:
         """
-        Show generated candidates with pagination support.
+        Show generated candidates with pagination and detail support.
         
-        MODIFIED: Now supports --limit and --skip for pagination
+        MODIFIED: Added --items flag and smart candidate lookup across all lists
         
         Usage:
-            recommend show                      # Show all candidates
-            recommend show G3                   # Show detailed view of G3
-            recommend show --limit 10           # Show first 10
-            recommend show --limit 5 --skip 10  # Show 5 starting at position 10
-            recommend show rejected             # Show all rejected
-            recommend show rejected G3          # Show specific rejected detail
-            recommend show rejected --limit 5   # Show first 5 rejected
+            recommend show                      # Show all candidates (compact)
+            recommend show --items              # Show all with macro tables
+            recommend show G3                   # Show detailed view (searches all lists)
+            recommend show --limit 10           # Show first 10 (compact)
+            recommend show --limit 10 --items   # Show first 10 with macro tables
+            recommend show --limit 5 --skip 10  # Paginated compact
+            recommend show rejected             # Show rejected (compact)
+            recommend show rejected --items     # Show rejected with macro tables
         
         Args:
-            args: Optional arguments [rejected] [id|--limit N [--skip N]]
+            args: Optional arguments [rejected] [id|--limit N [--skip N] [--items]]
         """
         # Parse arguments
         rejected_mode = False
         candidate_id = None
         limit = None
         skip = 0
+        items_flag = False
         
         i = 0
         while i < len(args):
@@ -1283,6 +1285,9 @@ class RecommendCommand(Command, CommandHistoryMixin):
                     print(f"\nError: Invalid skip value '{args[i + 1]}'")
                     print()
                     return
+            elif arg == "--items":
+                items_flag = True
+                i += 1
             else:
                 # Must be a candidate ID
                 if candidate_id is not None:
@@ -1298,8 +1303,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 # Show specific rejected candidate
                 self._show_rejected_detail(candidate_id)
             else:
-                # Show rejected candidates (with pagination if specified)
-                self._show_rejected(limit=limit, skip=skip)
+                # Show rejected candidates (with pagination and items flag)
+                self._show_rejected(limit=limit, skip=skip, items=items_flag)
             return
         
         # Check for generated candidates
@@ -1313,6 +1318,36 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         meal_type = gen_cands.get("meal_type", "unknown")
         
+        # Show specific candidate - SMART SEARCH across all lists
+        if candidate_id:
+            if limit is not None or skip > 0 or items_flag:
+                print("\nError: Cannot combine candidate ID with pagination/items flags")
+                print()
+                return
+            
+            # Search order: scored -> filtered -> rejected -> raw
+            scored = gen_cands.get("scored", [])
+            filtered = gen_cands.get("filtered", [])
+            rejected = gen_cands.get("rejected", [])
+            raw = gen_cands.get("raw", [])
+            
+            search_order = [
+                (scored, "scored"),
+                (filtered, "filtered"),
+                (rejected, "rejected"),
+                (raw, "raw")
+            ]
+            
+            for candidates, list_name in search_order:
+                if self._find_and_show_candidate(candidates, candidate_id, meal_type, list_name):
+                    return
+            
+            # Not found in any list
+            print(f"\nCandidate {candidate_id} not found in any list")
+            print()
+            return
+        
+        # Show list of candidates
         # Determine which list to show (scored > filtered > raw)
         scored = gen_cands.get("scored", [])
         filtered = gen_cands.get("filtered", [])
@@ -1333,17 +1368,35 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
             return
         
-        # Show specific candidate
-        if candidate_id:
-            if limit is not None or skip > 0:
-                print("\nError: Cannot combine candidate ID with pagination flags")
-                print()
-                return
-            self._show_candidate_detail(candidates, candidate_id, meal_type)
-            return
-        
         # Show candidates with pagination
-        self._show_all_candidates(candidates, meal_type, list_type, limit=limit, skip=skip)
+        self._show_all_candidates(candidates, meal_type, list_type, 
+                                limit=limit, skip=skip, items=items_flag)
+
+    def _find_and_show_candidate(
+        self,
+        candidates: List[Dict[str, Any]],
+        candidate_id: str,
+        meal_type: str,
+        list_name: str
+    ) -> bool:
+        """
+        Helper to find and show a candidate in a specific list.
+        
+        Args:
+            candidates: List to search
+            candidate_id: ID to find
+            meal_type: Meal type
+            list_name: Name of the list being searched
+        
+        Returns:
+            True if found and displayed, False otherwise
+        """
+        for cand in candidates:
+            if cand.get("id", "").upper() == candidate_id:
+                # Found it - show with list context
+                self._show_candidate_detail(cand, meal_type, list_name)
+                return True
+        return False
 
     def _show_all_candidates(
         self,
@@ -1351,12 +1404,13 @@ class RecommendCommand(Command, CommandHistoryMixin):
         meal_type: str,
         list_type: str,
         limit: Optional[int] = None,
-        skip: int = 0
+        skip: int = 0,
+        items: bool = False
     ) -> None:
         """
-        Show all candidates with one-line summaries.
+        Show all candidates with compact totals or detailed macro tables.
         
-        MODIFIED: Added pagination support with limit and skip parameters
+        FULL REPLACEMENT: Now shows totals in compact view and uses ReportBuilder for --items
         
         Args:
             candidates: List of candidate dicts
@@ -1364,6 +1418,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
             list_type: "raw", "filtered", or "scored"
             limit: Maximum number of candidates to show (None = all)
             skip: Number of candidates to skip from start
+            items: If True, show full macro tables using ReportBuilder
         """
         total_count = len(candidates)
         
@@ -1381,7 +1436,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         # Header
         print(f"\n=== {meal_type.upper()} CANDIDATES ({list_type.upper()}) ===")
         
-        # Show pagination info if applicable
+        # Show pagination info
         if limit or skip:
             print(f"Showing {len(display_candidates)} of {total_count} "
                 f"(positions {start_idx+1}-{end_idx})")
@@ -1390,32 +1445,78 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         print()
         
-        # Column headers
-        if list_type == "scored":
-            print(f"{'Pos':<6}{'Rank':<6}{'ID':<8}{'Score':<8}Description")
-            print(f"{'-'*6}{'-'*6}{'-'*8}{'-'*8}{'-'*50}")
+        if items:
+            # DETAILED VIEW - Use ReportBuilder for macro tables
+            from meal_planner.reports import ReportBuilder
+            
+            for i, candidate in enumerate(display_candidates):
+                actual_position = start_idx + i + 1
+                candidate_id = candidate.get("id", "???")
+                
+                # Header
+                print(f"=== CANDIDATE {candidate_id} ===")
+                
+                # Source info
+                source_date = candidate.get("source_date", "unknown")
+                source_time = candidate.get("source_time", "")
+                source_str = f"Source: {source_date} {meal_type}"
+                if source_time:
+                    source_str += f" ({source_time})"
+                print(source_str)
+                
+                # Rank/score info
+                if list_type == "scored":
+                    rank = actual_position
+                    score = candidate.get("aggregate_score", 0.0)
+                    print(f"Rank: {rank}  Score: {score:.3f}")
+                else:
+                    print(f"Position: {actual_position}  List: {list_type}")
+                
+                print()
+                
+                # Build and print report using ReportBuilder
+                builder = ReportBuilder(self.ctx.master)
+                items_list = candidate.get("items", [])
+                report = builder.build_from_items(items_list, title="")
+                
+                # Print using ReportBuilder's format (verbose=True for full table)
+                report.print(verbose=True)
+                
+                print()
         else:
-            print(f"{'Pos':<6}{'ID':<8}Description")
-            print(f"{'-'*6}{'-'*8}{'-'*60}")
-        
-        # Display candidates
-        for i, candidate in enumerate(display_candidates):
-            actual_position = start_idx + i + 1  # 1-based position in full list
-            candidate_id = candidate.get("id", "???")
-            description = candidate.get("description", "No description")
-            
-            # Truncate long descriptions
-            if len(description) > 47:
-                description = description[:44] + "..."
-            
+            # COMPACT VIEW - One line per candidate with totals
+            # Column headers
             if list_type == "scored":
-                rank = start_idx + i + 1  # Rank is same as position for scored
-                score = candidate.get("aggregate_score", 0.0)
-                print(f"{actual_position:<6}{rank:<6}{candidate_id:<8}{score:<8.3f}{description}")
+                print(f"{'Pos':<6}{'Rank':<6}{'ID':<8}{'Score':<8}Totals")
+                print(f"{'-'*6}{'-'*6}{'-'*8}{'-'*8}{'-'*60}")
             else:
-                print(f"{actual_position:<6}{candidate_id:<8}{description}")
-        
-        print()
+                print(f"{'Pos':<6}{'Rank':<6}{'ID':<8}{'List':<8}Totals")
+                print(f"{'-'*6}{'-'*6}{'-'*8}{'-'*8}{'-'*60}")
+            
+            # Display candidates
+            for i, candidate in enumerate(display_candidates):
+                actual_position = start_idx + i + 1
+                candidate_id = candidate.get("id", "???")
+                rank = actual_position
+                
+                # Get or calculate totals
+                totals = self._get_candidate_totals(candidate)
+                
+                # Format totals string
+                totals_str = (f"{int(totals['cal'])} cal | {int(totals['prot_g'])}g P | "
+                            f"{int(totals['carbs_g'])}g C | {int(totals['fat_g'])}g F | "
+                            f"GL {int(totals['gl'])}")
+                
+                # Format score/list column
+                if list_type == "scored":
+                    score = candidate.get("aggregate_score", 0.0)
+                    score_str = f"{score:.3f}"
+                else:
+                    score_str = list_type
+                
+                print(f"{actual_position:<6}{rank:<6}{candidate_id:<8}{score_str:<8}{totals_str}")
+            
+            print()
         
         # Navigation hints
         if end_idx < total_count:
@@ -1426,7 +1527,11 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print(f"Next: recommend show --limit {next_limit} --skip {next_skip}")
             print()
         
-        print("Use 'recommend show <id>' for detailed view")
+        if items:
+            print("Use 'recommend show <id>' for full scoring details")
+        else:
+            print("Use 'recommend show <id>' for full details")
+            print("Use 'recommend show --items' to see macro tables")
         print()
 
     def _show_candidate_detail(
@@ -1517,15 +1622,21 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         print()
 
-    def _show_rejected(self, limit: Optional[int] = None, skip: int = 0) -> None:
+    def _show_rejected(
+        self,
+        limit: Optional[int] = None,
+        skip: int = 0,
+        items: bool = False
+    ) -> None:
         """
-        Show all rejected candidates.
+        Show all rejected candidates with compact totals or detailed macro tables.
         
-        MODIFIED: Added pagination support
+        FULL REPLACEMENT: Added items flag and totals display
         
         Args:
             limit: Maximum number to show (None = all)
             skip: Number to skip from start
+            items: If True, show full macro tables using ReportBuilder
         """
         gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
         if not gen_cands:
@@ -1565,105 +1676,185 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         print()
         
-        # Column headers
-        print(f"{'Pos':<6}{'ID':<8}{'Reasons':<30}Description")
-        print(f"{'-'*6}{'-'*8}{'-'*30}{'-'*40}")
-        
-        # Display rejected candidates
-        for i, candidate in enumerate(display_rejected):
-            actual_position = start_idx + i + 1
-            candidate_id = candidate.get("id", "???")
-            reasons = candidate.get("rejection_reasons", [])
-            description = candidate.get("description", "No description")
+        if items:
+            # DETAILED VIEW - Use ReportBuilder for macro tables
+            from meal_planner.reports import ReportBuilder
             
-            # Format reasons (show first 2)
-            if reasons:
-                reason_str = ", ".join(r.split(":")[0] for r in reasons[:2])
-                if len(reasons) > 2:
-                    reason_str += f" +{len(reasons)-2}"
-            else:
-                reason_str = "unknown"
+            for i, candidate in enumerate(display_rejected):
+                actual_position = start_idx + i + 1
+                candidate_id = candidate.get("id", "???")
+                
+                # Get rejection reasons
+                reasons = candidate.get("rejection_reasons", [])
+                
+                # Header
+                print(f"=== REJECTED CANDIDATE {candidate_id} ===")
+                
+                # Rejection reasons
+                if reasons:
+                    print(f"Rejection reasons: {', '.join(reasons)}")
+                
+                # Source info
+                source_date = candidate.get("source_date", "unknown")
+                source_time = candidate.get("source_time", "")
+                source_str = f"Source: {source_date} {meal_type}"
+                if source_time:
+                    source_str += f" ({source_time})"
+                print(source_str)
+                print(f"Position: {actual_position}")
+                
+                print()
+                
+                # Build and print report using ReportBuilder
+                builder = ReportBuilder(self.ctx.master)
+                items_list = candidate.get("items", [])
+                report = builder.build_from_items(items_list, title="")
+                
+                # Print using ReportBuilder's format
+                report.print(verbose=True)
+                
+                print()
+        else:
+            # COMPACT VIEW - One line per candidate with totals
+            # Column headers
+            print(f"{'Pos':<6}{'Rank':<6}{'ID':<8}{'List':<8}Totals")
+            print(f"{'-'*6}{'-'*6}{'-'*8}{'-'*8}{'-'*60}")
             
-            # Truncate
-            if len(reason_str) > 28:
-                reason_str = reason_str[:25] + "..."
-            if len(description) > 38:
-                description = description[:35] + "..."
+            # Display rejected candidates
+            for i, candidate in enumerate(display_rejected):
+                actual_position = start_idx + i + 1
+                candidate_id = candidate.get("id", "???")
+                rank = actual_position
+                
+                # Get or calculate totals
+                totals = self._get_candidate_totals(candidate)
+                
+                # Format totals string
+                totals_str = (f"{int(totals['cal'])} cal | {int(totals['prot_g'])}g P | "
+                            f"{int(totals['carbs_g'])}g C | {int(totals['fat_g'])}g F | "
+                            f"GL {int(totals['gl'])}")
+                
+                print(f"{actual_position:<6}{rank:<6}{candidate_id:<8}{'rejected':<8}{totals_str}")
             
-            print(f"{actual_position:<6}{candidate_id:<8}{reason_str:<30}{description}")
-        
-        print()
+            print()
         
         # Navigation hints
         if end_idx < total_count:
             remaining = total_count - end_idx
             next_skip = end_idx
             next_limit = limit if limit else 20
-            print(f"{remaining} more rejected candidates available")
+            print(f"{remaining} more rejected available")
             print(f"Next: recommend show rejected --limit {next_limit} --skip {next_skip}")
             print()
         
-        print("Use 'recommend show rejected <id>' for detailed view")
+        if items:
+            print("Use 'recommend show rejected <id>' for full details including rejection reasons")
+        else:
+            print("Use 'recommend show rejected <id>' for details")
+            print("Use 'recommend show rejected --items' to see macro tables")
         print()
 
-    def _show_rejected_detail(self, candidate_id: str) -> None:
+    def _get_candidate_totals(self, candidate: Dict[str, Any]) -> Dict[str, float]:
         """
-        Show detailed view of a specific rejected candidate.
+        Get or calculate nutritional totals for a candidate.
         
         Args:
-            candidate_id: ID to show (e.g., "G3")
+            candidate: Candidate dict
+        
+        Returns:
+            Dict with keys: cal, prot_g, carbs_g, fat_g, gl
         """
-        gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
-        if gen_cands is None or not gen_cands:
-            print("\nNo generated candidates")
-            print("Run 'recommend generate <meal_type>' first")
-            return
+        # Check if totals already exist
+        if "totals" in candidate:
+            totals = candidate["totals"]
+            # Ensure all required keys exist
+            return {
+                'cal': totals.get('cal', 0),
+                'prot_g': totals.get('prot_g', 0),
+                'carbs_g': totals.get('carbs_g', 0),
+                'fat_g': totals.get('fat_g', 0),
+                'gl': totals.get('gl', 0)
+            }
         
-        filtered_out = gen_cands.get("rejected", [])
+        # Calculate from items
+        from meal_planner.reports import ReportBuilder
         
-        if not filtered_out:
-            print("\nNo rejected candidates")
-            print()
-            return
+        builder = ReportBuilder(self.ctx.master)
+        items = candidate.get("items", [])
         
-        # Find candidate
-        candidate = None
-        for cand in filtered_out:
-            if cand.get("id", "").upper() == candidate_id:
-                candidate = cand
-                break
+        if not items:
+            return {'cal': 0, 'prot_g': 0, 'carbs_g': 0, 'fat_g': 0, 'gl': 0}
         
-        if not candidate:
-            print(f"\nRejected candidate {candidate_id} not found")
-            print(f"Use 'recommend show rejected' to see all rejected candidates")
-            print()
-            return
+        report = builder.build_from_items(items, title="Totals")
+        totals_obj = report.totals
         
-        meal_type = gen_cands.get("meal_type", "unknown")
+        return {
+            'cal': getattr(totals_obj, 'calories', 0),
+            'prot_g': getattr(totals_obj, 'protein_g', 0),
+            'carbs_g': getattr(totals_obj, 'carbs_g', 0),
+            'fat_g': getattr(totals_obj, 'fat_g', 0),
+            'gl': getattr(totals_obj, 'glycemic_load', 0)
+        }
+
+    def _show_candidate_detail(
+        self,
+        candidate: Dict[str, Any],
+        meal_type: str,
+        list_name: str
+    ) -> None:
+        """
+        Show detailed view of a specific candidate.
+        
+        MODIFIED: Now accepts single candidate dict and list_name instead of searching
+        
+        Args:
+            candidate: Candidate dict
+            meal_type: Meal type
+            list_name: Which list the candidate is from (scored/filtered/rejected/raw)
+        """
+        candidate_id = candidate.get("id", "???")
         
         # Header
-        print(f"\n=== REJECTED CANDIDATE {candidate_id} ===")
+        is_scored = "aggregate_score" in candidate
+        is_rejected = list_name == "rejected"
         
-        # Rejection reasons (prominent)
-        reasons = candidate.get("rejection_reasons", [])
-        if reasons:
-            print(f"\nREJECTION REASONS ({len(reasons)}):")
-            for reason in reasons:
-                # Parse reason for better display
-                if ":" in reason:
-                    reason_type, details = reason.split(":", 1)
-                    print(f"  - {reason_type}: {details}")
-                else:
-                    print(f"  - {reason}")
+        if is_rejected:
+            status_label = " (REJECTED)"
+        elif is_scored:
+            status_label = " (SCORED)"
+        else:
+            status_label = f" ({list_name.upper()})"
+        
+        print(f"\n=== CANDIDATE {candidate_id}{status_label} ===")
+        
+        # Rejection reasons if applicable
+        if is_rejected:
+            reasons = candidate.get("rejection_reasons", [])
+            if reasons:
+                print(f"\nREJECTION REASONS ({len(reasons)}):")
+                for reason in reasons:
+                    if ":" in reason:
+                        reason_type, details = reason.split(":", 1)
+                        print(f"  - {reason_type}: {details}")
+                    else:
+                        print(f"  - {reason}")
         
         # Source info
-        print(f"\nSource: {candidate.get('source_date', 'unknown')} {meal_type}")
+        source_date = candidate.get("source_date", "unknown")
         source_time = candidate.get("source_time", "")
+        print(f"\nSource: {source_date} {meal_type}")
         if source_time:
             print(f"Time: {source_time}")
         
+        # Score if available
+        if is_scored:
+            score = candidate.get("aggregate_score", 0.0)
+            print(f"Aggregate Score: {score:.3f}")
+        
+        print()
+        
         # Items
-        print("\nItems:")
+        print("Items:")
         items = candidate.get("items", [])
         for item in items:
             if "code" in item:
@@ -1679,33 +1870,24 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 except:
                     pass
                 
-                mult_str = f" x{multiplier:g}"
+                mult_str = f" x{multiplier:.1f}"
                 desc_str = f"  ({desc})" if desc else ""
                 print(f"  - {code}{mult_str}{desc_str}")
         
-        # Totals if available
-        totals = candidate.get("totals", {})
-        if totals:
-            print("\nTotals:")
-            print(f"  Calories: {totals.get('cal', 0):.0f}")
-            print(f"  Protein:  {totals.get('prot_g', 0):.1f}g")
-            print(f"  Carbs:    {totals.get('carbs_g', 0):.1f}g")
-            print(f"  Fat:      {totals.get('fat_g', 0):.1f}g")
-            print(f"  Fiber:    {totals.get('fiber_g', 0):.1f}g")
-            if 'gl' in totals:
-                print(f"  GL:       {totals.get('gl', 0):.1f}")
+        # Totals
+        totals = self._get_candidate_totals(candidate)
+        print()
+        print("Totals:")
+        print(f"  Calories: {totals['cal']:.0f}")
+        print(f"  Protein:  {totals['prot_g']:.1f}g")
+        print(f"  Carbs:    {totals['carbs_g']:.1f}g")
+        print(f"  Fat:      {totals['fat_g']:.1f}g")
+        print(f"  GL:       {totals['gl']:.1f}")
         
-        # Description if available
-        desc = candidate.get("description", "")
-        if desc:
-            print(f"\nDescription: {desc}")
-        
-        # Under-use warnings if present (from leftover filter)
-        under_use = candidate.get("leftover_under_use", [])
-        if under_use:
-            print(f"\nLeftover Under-use Warnings:")
-            for warning in under_use:
-                print(f"  - {warning}")
+        # Scoring details if scored
+        if is_scored:
+            print()
+            self._display_candidate_scoring_details(candidate)
         
         print()
 
