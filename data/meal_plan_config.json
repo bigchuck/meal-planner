@@ -203,10 +203,10 @@
       "protein_low_carb": {
         "display_name": "Breakfast (Protein-First, Low-Carb)",
         "targets": {
-          "protein": {"min": 25, "max": 35, "unit": "g"},
+          "protein": {"min": 1, "max": 35, "unit": "g"},
           "carbs": {"max": 25, "unit": "g"},
           "fat": {"min": 15, "max": 20, "unit": "g"},
-          "gl": {"max": 12, "unit": ""}
+          "gl": {"max": 912, "unit": ""}
         },
         "guidelines": [
           "Eggs (2) or egg + lean meat",
@@ -427,9 +427,11 @@
     "breakfast_veg_small": ["VE.T1"],
     "breakfast_veg_large": ["VE.T2"],
     
-    "breakfast_proteins": ["@eggs", "@breakfast_meats"],
+    "breakfast_proteins": ["@eggs", "@breakfast_meats", "cm.1"],
     "breakfast_vegetables": ["@breakfast_veg_small", "@breakfast_veg_large", "@low_carb_veg"],
-    "breakfast_dairy": ["OT.9"]
+    "breakfast_dairy": ["OT.9"],
+
+    "soups": ["so."]
   },
     
   "meal_generation": {
@@ -449,6 +451,11 @@
           },
           "dairy": {
             "pool_ref": "breakfast_dairy",
+            "count": {"min": 0, "max": 1},
+            "required": false
+          },
+          "soups_etal": {
+            "pool_ref": "soups",
             "count": {"min": 0, "max": 1},
             "required": false
           }

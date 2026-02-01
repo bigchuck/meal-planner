@@ -1969,6 +1969,52 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
             return
         
+        # Expand any CM. codes to constituent food items
+        from meal_planner.parsers import CodeParser
+        
+        candidate_items = candidate.get("items", [])
+        print(f"DEBUG: candidate_items\n{candidate_items}")
+        expanded_items = []
+        
+        for item in candidate_items:
+            print(f"DEBUG: item\n{item}")
+            if 'code' not in item:
+                expanded_items.append(item)
+                continue
+            code = item['code'].upper()
+            print(f"DEBUG: code\n{code}")
+            if code.startswith('CM.'):
+                # Access nested master dict directly to get combo_expansion
+                code_upper = code.upper()
+                print(f"DEBUG: code_upper\n{code_upper}")
+                if code_upper in self.ctx.master._master_dict:
+                    cm_entry = self.ctx.master._master_dict[code_upper]
+                    print(f"DEBUG: cm_entry\n{cm_entry}")
+                    
+                    if 'combo_expansion' in cm_entry:
+                        # Parse the stored expansion string
+                        expansion_str = cm_entry['combo_expansion']
+                        print(f"DEBUG: expansion_str\n{expansion_str}")
+                        component_items = CodeParser.parse(expansion_str)
+                        
+                        print(f"DEBUG: component_items\n{component_items}")
+                        # Apply CM item's multiplier to all components
+                        item_mult = item.get('mult', 1.0)
+                        for comp in component_items:
+                            if 'code' in comp:
+                                comp['mult'] = comp.get('mult', 1.0) * item_mult
+                                expanded_items.append(comp)
+                    else:
+                        print(f"\nWarning: CM. code '{code}' has no expansion data, keeping as-is")
+                        expanded_items.append(item)
+                else:
+                    print(f"\nWarning: CM. code '{code}' not found in master, keeping as-is")
+                    expanded_items.append(item)
+            else:
+                expanded_items.append(item)
+
+        candidate_items = expanded_items
+
         # Prepare meal data for workspace
         meal_data = {
             "description": description if description else candidate.get("description", ""),
@@ -1976,7 +2022,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
             "created": datetime.now().isoformat(),
             "meal_name": candidate.get("meal_name"),
             "type": "recommendation",
-            "items": candidate.get("items", []),
+            "items": candidate_items,
             "totals": candidate.get("totals", {}),
             "source_date": candidate.get("source_date"),
             "source_time": candidate.get("source_time"),

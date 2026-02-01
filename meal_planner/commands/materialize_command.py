@@ -375,6 +375,14 @@ class MaterializeCommand(Command):
             print()
             return
         
+        if target_code.upper().startswith('CM.'):
+            if not is_alias:
+                print(f"\nError: CM. codes can only be created from aliases")
+                print(f"Source '{source_code}' is a master entry, not an alias")
+                print(f"Use a different target code (e.g., SO.19e) or materialize an alias")
+                print()
+                return
+        
         if is_alias:
             self._materialize_alias(source_code, multiplier, target_code)
         else:
@@ -403,6 +411,8 @@ class MaterializeCommand(Command):
         nutrition_data, components_info = self._calculate_alias_nutrition(
             components, multiplier
         )
+
+        print(f"DEBUG: nutrition_data\n{nutrition_data}")
         
         if not nutrition_data:
             print("\nError: Could not calculate nutrition (invalid components)")
@@ -418,11 +428,21 @@ class MaterializeCommand(Command):
         else:
             description = f"{alias_name} [from {alias_code}]"
         
-        self._add_master_entry(target_code, section, description, nutrition_data)
-        
+        # Get original codes string
+        codes_str = alias_data.get('codes', '')
+
+        # Build combo expansion string (apply multiplier if not 1.0)
+        if multiplier != 1.0:
+            combo_expansion = f"({codes_str}) x{multiplier:g}"
+        else:
+            combo_expansion = codes_str
+
+        self._add_master_entry(target_code, section, description, nutrition_data, combo_expansion)
+
         # Create nutrients entry if manager exists
         if self.ctx.master:
             nutrients_data = self._calculate_alias_nutrients(components, multiplier)
+            print(f"DEBUG: nutrients_data\n{nutrients_data}")
             if nutrients_data:
                 self._add_nutrients_entry(target_code, nutrients_data)
         
@@ -556,12 +576,18 @@ class MaterializeCommand(Command):
         if not self.ctx.master:
             return None
         
-        # Get available nutrient columns
-        nutrients_df = self.ctx.master.df
-        if nutrients_df.empty:
-            return None
+        # Get nutrient column names from the nested structure
+        # Find first component with nutrients to get available fields
+        nutrient_cols = None
+        for comp in components:
+            if 'code' in comp:
+                sample_nutrients = self.ctx.master.get_nutrients(comp['code'])
+                if sample_nutrients:
+                    nutrient_cols = list(sample_nutrients.keys())
+                    break
         
-        nutrient_cols = [col for col in nutrients_df.columns if col != 'code']
+        if not nutrient_cols:
+            return None
         
         # Initialize totals
         totals = {col: 0.0 for col in nutrient_cols}
@@ -583,8 +609,8 @@ class MaterializeCommand(Command):
                 value = nutrients_row.get(col, 0)
                 if pd.notna(value):
                     totals[col] += float(value) * effective_mult
-        
-        return totals
+    
+        return totals    
     
     def _scale_nutrients(self, nutrients_row, multiplier: float) -> Dict:
         """Scale nutrients by multiplier."""
@@ -602,7 +628,7 @@ class MaterializeCommand(Command):
         return scaled
     
     def _add_master_entry(self, code: str, section: str, description: str, 
-                        nutrition: Dict) -> None:
+                        nutrition: Dict, combo_expansion: Optional[str] = None) -> None:
         """Add entry to master.json."""
         # Create backup
         backup_path = create_backup(self.ctx.master.filepath, self.ctx)
@@ -627,7 +653,12 @@ class MaterializeCommand(Command):
             option=description,
             macros=macros
         )
-        
+
+        if combo_expansion:
+            code_upper = code.upper()
+            if code_upper in self.ctx.master._master_dict:
+                self.ctx.master._master_dict[code_upper]['combo_expansion'] = combo_expansion
+           
         # Save
         self.ctx.master.save()
 

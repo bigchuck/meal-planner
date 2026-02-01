@@ -154,11 +154,37 @@ class ExhaustiveMealGenerator:
         
         if iteration >= max_iterations:
             print("Warning: Max iterations reached resolving pool references, possible circular reference")
+
+        if iteration >= max_iterations:
+            print("Warning: Max iterations reached resolving pool references, possible circular reference")
         
-        # Third pass: validate food codes and remove duplicates
-        validated_pools = {}
+        # Third pass: expand patterns (items ending with ".")
+        pattern_expanded_pools = {}
         
         for pool_name, pool_items in resolved_pools.items():
+            expanded_items = []
+            
+            for item in pool_items:
+                if isinstance(item, str) and item.endswith('.') and len(item) > 1:
+                    # This is a pattern - expand to matching codes
+                    prefix = item.upper()
+                    all_codes = self.master.get_all_codes()
+                    matches = [code for code in all_codes if code.startswith(prefix)]
+                    
+                    if not matches:
+                        print(f"Warning: Pattern '{item}' in pool '{pool_name}' matches no food codes, skipping")
+                        continue
+                    
+                    expanded_items.extend(matches)
+                else:
+                    expanded_items.append(item)
+            
+            pattern_expanded_pools[pool_name] = expanded_items
+        
+        # Fourth pass: validate food codes and remove duplicates
+        validated_pools = {}
+        
+        for pool_name, pool_items in pattern_expanded_pools.items():
             validated_items = []
             seen_codes = set()
             

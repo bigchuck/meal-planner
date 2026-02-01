@@ -1130,6 +1130,10 @@ class ThresholdsManager:
                 # Skip references
                 if item.startswith('@'):
                     continue
+
+                # Skip patterns (ending with ".")
+                if item.endswith('.') and len(item) > 1:
+                    continue
                 
                 # Check food code exists (triggers master load if needed)
                 code = item.upper()

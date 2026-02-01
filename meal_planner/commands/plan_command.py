@@ -777,6 +777,17 @@ Subcommands:
         if not new_items:
             print("No valid codes found.")
             return
+        
+        # Reject CM. codes (combo codes must be added via alias)
+        combo_codes = [
+            item['code'] for item in new_items 
+            if 'code' in item and item['code'].upper().startswith('CM.')
+        ]
+        if combo_codes:
+            print("\nError: Cannot add combo codes (CM.) directly.")
+            print("Combo codes must be added via their alias name.")
+            print(f"Rejected: {', '.join(combo_codes)}")
+            return
 
         # Build command and note
         command_str = f"add {candidate_id} {codes_str}"
