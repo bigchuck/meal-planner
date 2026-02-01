@@ -1853,36 +1853,15 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         print()
         
-        # Items
-        print("Items:")
-        items = candidate.get("items", [])
-        for item in items:
-            if "code" in item:
-                code = item["code"]
-                multiplier = item.get("mult", 1.0)
-                
-                # Get description from master
-                desc = ""
-                try:
-                    food_data = self.ctx.master.lookup_code(code)
-                    if food_data:
-                        desc = food_data.get('option', '')
-                except:
-                    pass
-                
-                mult_str = f" x{multiplier:.1f}"
-                desc_str = f"  ({desc})" if desc else ""
-                print(f"  - {code}{mult_str}{desc_str}")
-        
-        # Totals
-        totals = self._get_candidate_totals(candidate)
-        print()
-        print("Totals:")
-        print(f"  Calories: {totals['cal']:.0f}")
-        print(f"  Protein:  {totals['prot_g']:.1f}g")
-        print(f"  Carbs:    {totals['carbs_g']:.1f}g")
-        print(f"  Fat:      {totals['fat_g']:.1f}g")
-        print(f"  GL:       {totals['gl']:.1f}")
+        # Build and print report using ReportBuilder (same as --items view)
+        from meal_planner.reports import ReportBuilder
+
+        builder = ReportBuilder(self.ctx.master)
+        items_list = candidate.get("items", [])
+        report = builder.build_from_items(items_list, title="")
+
+        # Print using ReportBuilder's format (verbose=True for full table)
+        report.print(verbose=True)
         
         # Scoring details if scored
         if is_scored:
@@ -1990,6 +1969,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         meal_type = gen_cands.get("meal_type", "unknown")
         raw_count = len(gen_cands.get("raw", []))
         filtered_count = len(gen_cands.get("filtered", []))
+        rejected_count = len(gen_cands.get("rejected", []))
         scored_count = len(gen_cands.get("scored", []))
         
         # Show what will be lost
@@ -2003,9 +1983,12 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print(f"  Raw candidates: {raw_count}")
             total_to_discard += raw_count
         
-        if 'filtered' in target_arrays and filtered_count > 0:
-            print(f"  Filtered candidates: {filtered_count}")
-            total_to_discard += filtered_count
+        if 'filtered' in target_arrays:
+            # When discarding filtered, also discard rejected (they come from same source)
+            if filtered_count > 0 or rejected_count > 0:
+                print(f"  Filtered candidates: {filtered_count}")
+                print(f"  Rejected candidates: {rejected_count}")
+                total_to_discard += filtered_count + rejected_count
         
         if 'scored' in target_arrays and scored_count > 0:
             print(f"  Scored candidates: {scored_count}")
@@ -2048,6 +2031,10 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 for array_name in target_arrays:
                     if array_name in workspace["generated_candidates"]:
                         workspace["generated_candidates"][array_name] = []
+                    
+                    # When discarding filtered, also discard rejected
+                    if array_name == "filtered":
+                        workspace["generated_candidates"]["rejected"] = []
                 
                 self.ctx.workspace_mgr.save(workspace)
             
