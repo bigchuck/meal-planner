@@ -74,6 +74,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
             self._help()
         elif subcommand == "accept":
             self._accept(subargs)
+        elif subcommand == "debugdump":
+            self._debugdump(subargs)
         else:
             print(f"\nUnknown subcommand: {subcommand}")
             self._help()
@@ -131,6 +133,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("  recommend accept <G-ID> [--as <id>] [--desc <text>]")
         print("  recommend discard [array]")
         print("    <array> := [raw|filtered|scored]")
+        print("  recommend debugdump <array> <filename>")
+        print("    <array> := [raw|filtered|rejected|scored]")
         print("Pipeline flow:")
         print("  1. recommend generate lunch      # Generate raw candidates")
         print("  2. recommend show                # Preview candidates")
@@ -1075,7 +1079,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
     
     def _filter(self, args: List[str]) -> None:
         """
-        Apply pre-score filters to raw generated candidates.
+        Apply pre-score filters to raw candidates.
         
         Filters applied in order:
         1. Nutrient constraints (hard/soft limits from generation template)
@@ -1112,7 +1116,19 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
             return
         
+        # Check if we should collect all rejection reasons
+        collect_all = self.ctx.thresholds.thresholds.get(
+            "recommendation", {}
+        ).get("collect_all_rejection_reasons", False)
+        
+        if collect_all and verbose:
+            print("[DEBUG MODE: Collecting all rejection reasons]\n")
+        
         print(f"\n=== FILTERING {len(raw_candidates)} {meal_type.upper()} CANDIDATES ===\n")
+        
+        # Initialize rejection_reasons on all candidates
+        for candidate in raw_candidates:
+            candidate["rejection_reasons"] = []
         
         # Load workspace data
         workspace = self.ctx.workspace_mgr.load()
@@ -1126,38 +1142,37 @@ class RecommendCommand(Command, CommandHistoryMixin):
         current_candidates = raw_candidates
         all_rejected = []
 
-        # PHASE 1: Nutrient constraint filtering (NEW)
+        # PHASE 1: Nutrient constraint filtering
         if not template_name:
             print("Warning: No template specified in generation state")
-            print("Skipping nutrient constraint filtering")
-            # Fall through to other filters
+            print("Skipping nutrient constraint filtering\n")
         else:
-            # Use template for ALL candidates
             from meal_planner.filters.nutrient_constraint_filter import NutrientConstraintFilter
             nutrient_filter = NutrientConstraintFilter(
                 self.ctx.master,
                 self.ctx.thresholds,
                 meal_type=meal_type,
-                template_name=template_name  # From generation_state!
+                template_name=template_name
             )
-           
+        
             passed, rejected = nutrient_filter.filter_candidates(current_candidates)
             
             if verbose:
                 print(f"Nutrient Constraints: {nutrient_filter.get_filter_stats(len(current_candidates), len(passed))}")
-                if rejected:
+                if rejected and not collect_all:
                     print(f"  Rejected {len(rejected)} candidates:")
-                    for r in rejected[:5]:  # Show first 5
+                    for r in rejected[:5]:
                         reasons = r.get("rejection_reasons", [])
                         print(f"    - {r.get('id', '???')}: {', '.join(reasons)}")
                     if len(rejected) > 5:
                         print(f"    ... and {len(rejected) - 5} more")
                 print()
             
+            if not collect_all:
+                all_rejected.extend(rejected)
             current_candidates = passed
-            all_rejected.extend(rejected)
         
-        # PHASE 2: Lock, availability, and inventory filtering (EXISTING)
+        # PHASE 2: Lock, availability, and inventory filtering
         from meal_planner.filters import PreScoreFilter
         
         pre_filter = PreScoreFilter(
@@ -1166,12 +1181,13 @@ class RecommendCommand(Command, CommandHistoryMixin):
             inventory=inventory,
             user_prefs=self.ctx.user_prefs
         )
+        pre_filter.set_collect_all(collect_all)
         
         filtered_candidates, rejected = pre_filter.filter_candidates(current_candidates)
         
         if verbose:
             print(f"Locks & Availability: {pre_filter.get_filter_stats(len(current_candidates), len(filtered_candidates))}")
-            if rejected:
+            if rejected and not collect_all:
                 print(f"  Rejected {len(rejected)} candidates:")
                 for r in rejected[:5]:
                     reasons = r.get("rejection_reasons", [])
@@ -1180,10 +1196,11 @@ class RecommendCommand(Command, CommandHistoryMixin):
                     print(f"    ... and {len(rejected) - 5} more")
             print()
         
-        all_rejected.extend(rejected)
+        if not collect_all:
+            all_rejected.extend(rejected)
         current_candidates = filtered_candidates
         
-        # PHASE 3: Leftover match filtering (EXISTING)
+        # PHASE 3: Leftover match filtering
         if inventory.get("leftovers"):
             from meal_planner.filters import LeftoverMatchFilter
             
@@ -1191,23 +1208,59 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 inventory=inventory,
                 allow_under_use=False
             )
+            leftover_filter.set_collect_all(collect_all)
             
             filtered_candidates, rejected = leftover_filter.filter_candidates(current_candidates)
             
             if verbose:
                 print(f"Leftover Matching: {leftover_filter.get_filter_stats(len(current_candidates), len(filtered_candidates))}")
-                if rejected:
+                if rejected and not collect_all:
                     print(f"  Rejected {len(rejected)} candidates for portion mismatch")
                 print()
             
-            all_rejected.extend(rejected)
+            if not collect_all:
+                all_rejected.extend(rejected)
             current_candidates = filtered_candidates
+        
+        # FINAL SEPARATION (if collect_all mode)
+        if collect_all:
+            final_passed = []
+            final_rejected = []
+            
+            for candidate in current_candidates:
+                if candidate.get("rejection_reasons"):
+                    final_rejected.append(candidate)
+                else:
+                    final_passed.append(candidate)
+            
+            current_candidates = final_passed
+            all_rejected = final_rejected
+            
+            if verbose:
+                print("=== FINAL SEPARATION ===")
+                print(f"Candidates with any rejection reasons: {len(final_rejected)}")
+                print(f"Candidates passed all filters: {len(final_passed)}")
+                
+                # Show breakdown of rejection reason combinations
+                if final_rejected:
+                    from collections import Counter
+                    reason_combos = Counter()
+                    for r in final_rejected:
+                        reasons_tuple = tuple(sorted(r.get("rejection_reasons", [])))
+                        reason_combos[reasons_tuple] += 1
+                    
+                    print("\nRejection reason combinations:")
+                    for reasons, count in reason_combos.most_common(5):
+                        print(f"  {count:3d}x: {', '.join(reasons)}")
+                    if len(reason_combos) > 5:
+                        print(f"  ... and {len(reason_combos) - 5} more combinations")
+                print()
         
         # Summary
         print(f"Filtering complete:")
-        print(f"  Started with:  {len(raw_candidates)} raw candidates")
+        print(f"  Started with:   {len(raw_candidates)} raw candidates")
         print(f"  Passed filters: {len(current_candidates)} candidates")
-        print(f"  Rejected:      {len(all_rejected)} candidates")
+        print(f"  Rejected:       {len(all_rejected)} candidates")
         print()
         
         # Save results back to workspace
@@ -1224,24 +1277,27 @@ class RecommendCommand(Command, CommandHistoryMixin):
         """
         Show generated candidates with pagination and detail support.
         
-        MODIFIED: Added --items flag and smart candidate lookup across all lists
+        MODIFIED: Added position-based lookup (e.g., reco show scored 5)
         
         Usage:
             recommend show                      # Show all candidates (compact)
             recommend show --items              # Show all with macro tables
             recommend show G3                   # Show detailed view (searches all lists)
+            recommend show scored 5             # Show position 5 in scored list
+            recommend show rejected 12          # Show position 12 in rejected list
             recommend show --limit 10           # Show first 10 (compact)
             recommend show --limit 10 --items   # Show first 10 with macro tables
-            recommend show --limit 5 --skip 10  # Paginated compact
             recommend show rejected             # Show rejected (compact)
             recommend show rejected --items     # Show rejected with macro tables
         
         Args:
-            args: Optional arguments [rejected] [id|--limit N [--skip N] [--items]]
+            args: Optional arguments [array] [position|id|--limit N [--skip N] [--items]]
         """
         # Parse arguments
         rejected_mode = False
         candidate_id = None
+        array_name = None
+        position = None
         limit = None
         skip = 0
         items_flag = False
@@ -1250,7 +1306,24 @@ class RecommendCommand(Command, CommandHistoryMixin):
         while i < len(args):
             arg = args[i]
             
-            if arg.lower() == "rejected":
+            # Check if this is an array name
+            if arg.lower() in ["scored", "filtered", "rejected", "raw"]:
+                array_name = arg.lower()
+                # Check if next arg is a position number
+                if i + 1 < len(args):
+                    try:
+                        position = int(args[i + 1])
+                        if position <= 0:
+                            print("\nError: Position must be positive")
+                            print()
+                            return
+                        i += 2  # Consume both array and position
+                        continue
+                    except ValueError:
+                        # Not a position, treat as flag
+                        pass
+                i += 1
+            elif arg.lower() == "rejected":
                 rejected_mode = True
                 i += 1
             elif arg == "--limit":
@@ -1297,16 +1370,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 candidate_id = arg.upper()
                 i += 1
         
-        # Handle rejected mode
-        if rejected_mode:
-            if candidate_id:
-                # Show specific rejected candidate
-                self._show_rejected_detail(candidate_id)
-            else:
-                # Show rejected candidates (with pagination and items flag)
-                self._show_rejected(limit=limit, skip=skip, items=items_flag)
-            return
-        
         # Check for generated candidates
         gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
         
@@ -1318,7 +1381,38 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         meal_type = gen_cands.get("meal_type", "unknown")
         
-        # Show specific candidate - SMART SEARCH across all lists
+        # Handle position-based lookup (e.g., reco show scored 5)
+        if array_name and position:
+            self._show_by_position(gen_cands, array_name, position, meal_type)
+            return
+        
+        # Handle rejected mode (deprecated but still supported)
+        if rejected_mode:
+            if candidate_id:
+                # Show specific rejected candidate
+                self._show_rejected_detail(candidate_id)
+            else:
+                # Show rejected candidates (with pagination and items flag)
+                self._show_rejected(limit=limit, skip=skip, items=items_flag)
+            return
+        
+        # Handle array-only mode (e.g., reco show rejected without position)
+        if array_name and not position:
+            # Map array name to appropriate handler
+            if array_name == "rejected":
+                self._show_rejected(limit=limit, skip=skip, items=items_flag)
+            else:
+                # Show specific array list
+                candidates = gen_cands.get(array_name, [])
+                if not candidates:
+                    print(f"\nNo {array_name} candidates")
+                    print()
+                    return
+                self._show_all_candidates(candidates, meal_type, array_name, 
+                                        limit=limit, skip=skip, items=items_flag)
+            return
+        
+        # Show specific candidate by ID - SMART SEARCH across all lists
         if candidate_id:
             if limit is not None or skip > 0 or items_flag:
                 print("\nError: Cannot combine candidate ID with pagination/items flags")
@@ -1347,7 +1441,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
             return
         
-        # Show list of candidates
+        # Show list of candidates (default behavior)
         # Determine which list to show (scored > filtered > raw)
         scored = gen_cands.get("scored", [])
         filtered = gen_cands.get("filtered", [])
@@ -1397,6 +1491,42 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 self._show_candidate_detail(cand, meal_type, list_name)
                 return True
         return False
+
+    def _show_by_position(
+        self,
+        gen_cands: Dict[str, Any],
+        array_name: str,
+        position: int,
+        meal_type: str
+    ) -> None:
+        """
+        Show candidate at specific position in array.
+        
+        Args:
+            gen_cands: Generated candidates dict
+            array_name: Array to search (scored/filtered/rejected/raw)
+            position: 1-based position in array
+            meal_type: Meal type
+        """
+        # Get the specified array
+        candidates = gen_cands.get(array_name, [])
+        
+        if not candidates:
+            print(f"\nNo {array_name} candidates")
+            print()
+            return
+        
+        # Check position bounds (1-based)
+        if position > len(candidates):
+            print(f"\nPosition {position} out of range ({len(candidates)} {array_name} candidates available)")
+            print()
+            return
+        
+        # Get candidate (convert to 0-based index)
+        candidate = candidates[position - 1]
+        
+        # Show it
+        self._show_candidate_detail(candidate, meal_type, array_name)
 
     def _show_all_candidates(
         self,
@@ -2328,6 +2458,188 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         print(f"Use 'plan show {target_id}' to view details")
         print()
+
+    def _debugdump(self, args: List[str]) -> None:
+        """
+        Dump candidate array to JSON for offline analysis.
+        
+        Usage:
+            recommend debugdump <array> <filename>
+        
+        Args:
+            args: [array_name, filename]
+        
+        Examples:
+            recommend debugdump scored analysis.json
+            recommend debugdump rejected rejected.json
+        """
+        if len(args) < 2:
+            print("\nUsage: recommend debugdump <array> <filename>")
+            print("\nArrays: raw, filtered, rejected, scored")
+            print("\nExamples:")
+            print("  recommend debugdump scored analysis.json")
+            print("  recommend debugdump rejected rejected_analysis.json")
+            print()
+            return
+        
+        array_name = args[0].lower()
+        filename = args[1]
+        
+        # Validate array name
+        valid_arrays = ["raw", "filtered", "rejected", "scored"]
+        if array_name not in valid_arrays:
+            print(f"\nError: Invalid array '{array_name}'")
+            print(f"Valid arrays: {', '.join(valid_arrays)}")
+            print()
+            return
+        
+        # Check for candidates
+        gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
+        
+        if not gen_cands:
+            print("\nNo generated candidates to dump")
+            print("Run 'recommend generate <meal_type>' first")
+            print()
+            return
+        
+        # Get array
+        candidates = gen_cands.get(array_name, [])
+        
+        if not candidates:
+            print(f"\nNo {array_name} candidates to dump")
+            print()
+            return
+        
+        meal_type = gen_cands.get("meal_type", "unknown")
+        
+        # Build enriched data structure
+        print(f"\nBuilding debug dump for {len(candidates)} {array_name} candidates...")
+        
+        from meal_planner.reports import ReportBuilder
+        
+        enriched_data = []
+        
+        for i, candidate in enumerate(candidates, 1):
+            # Basic info
+            enriched_candidate = {
+                "id": candidate.get("id", f"?{i}"),
+                "position": i,
+                "source": {
+                    "date": candidate.get("source_date", "unknown"),
+                    "time": candidate.get("source_time", ""),
+                    "meal_type": meal_type
+                }
+            }
+            
+            # Enrich items with descriptions
+            items = candidate.get("items", [])
+            enriched_items = []
+            
+            for item in items:
+                if "code" in item:
+                    code = item["code"]
+                    mult = item.get("mult", 1.0)
+                    
+                    # Get description from master
+                    desc = ""
+                    try:
+                        food_data = self.ctx.master.lookup_code(code)
+                        if food_data:
+                            desc = food_data.get('option', '')
+                    except:
+                        pass
+                    
+                    enriched_items.append({
+                        "code": code,
+                        "mult": mult,
+                        "description": desc
+                    })
+            
+            enriched_candidate["items"] = enriched_items
+            
+            # Calculate macros and micros using ReportBuilder
+            builder = ReportBuilder(self.ctx.master)
+            report = builder.build_from_items(items, title="")
+            
+            totals = report.totals
+            
+            # Macros
+            enriched_candidate["macros"] = {
+                "calories": round(totals.calories, 1),
+                "protein_g": round(totals.protein_g, 1),
+                "carbs_g": round(totals.carbs_g, 1),
+                "fat_g": round(totals.fat_g, 1),
+                "fiber_g": round(totals.fiber_g, 1),
+                "sugar_g": round(totals.sugar_g, 1),
+                "glycemic_load": round(totals.glycemic_load, 1)
+            }
+            
+            # Micros
+            enriched_candidate["micros"] = {
+                "sodium_mg": round(totals.sodium_mg, 1),
+                "potassium_mg": round(totals.potassium_mg, 1),
+                "vitA_mcg": round(totals.vitA_mcg, 1),
+                "vitC_mg": round(totals.vitC_mg, 1),
+                "iron_mg": round(totals.iron_mg, 1)
+            }
+            
+            # Array-specific metadata
+            metadata = {}
+            
+            if array_name == "scored":
+                metadata["score"] = candidate.get("aggregate_score", 0.0)
+                metadata["rank"] = i
+                
+                # Scoring breakdown
+                scores = candidate.get("scores", {})
+                if scores:
+                    breakdown = {}
+                    for scorer_name, scorer_data in scores.items():
+                        breakdown[scorer_name] = {
+                            "raw": scorer_data.get("raw", 0.0),
+                            "weighted": scorer_data.get("weighted", 0.0)
+                        }
+                    metadata["scoring_breakdown"] = breakdown
+            
+            elif array_name == "rejected":
+                reasons = candidate.get("rejection_reasons", [])
+                metadata["rejection_reasons"] = reasons
+            
+            elif array_name == "filtered":
+                # Any filter warnings
+                warnings = candidate.get("leftover_under_use", [])
+                if warnings:
+                    metadata["warnings"] = warnings
+            
+            elif array_name == "raw":
+                # Generation method
+                gen_method = candidate.get("generation_method", "unknown")
+                metadata["generation_method"] = gen_method
+                
+                template_info = candidate.get("template_info", {})
+                if template_info:
+                    metadata["template"] = template_info.get("template_name", "")
+            
+            if metadata:
+                enriched_candidate["metadata"] = metadata
+            
+            enriched_data.append(enriched_candidate)
+        
+        # Write to file
+        import json
+        
+        try:
+            with open(filename, 'w') as f:
+                json.dump(enriched_data, f, indent=2)
+            
+            print(f"\nDumped {len(enriched_data)} {array_name} candidates to {filename}")
+            import os
+            print(f"File size: {os.path.getsize(filename)} bytes")
+            print()
+            
+        except Exception as e:
+            print(f"\nError writing file: {e}")
+            print()
 
     def _generate_from_history(
         self, 

@@ -37,14 +37,19 @@ class PreScoreFilter:
         meal_locks = locks.get(meal_type, {"include": {}, "exclude": []})
         self.locks = meal_locks
         self.user_prefs = user_prefs
+        self.collect_all = False  # Set by caller for accumulation mode
         self.inventory = inventory or {"leftovers": {}, "batch": {}, "rotating": {}}
     
+    def set_collect_all(self, collect_all: bool) -> None:
+        """Set whether to collect all rejection reasons."""
+        self.collect_all = collect_all
+
     def filter_candidates(
         self,
         candidates: List[Dict[str, Any]]
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
-        Apply all pre-score filters to candidates.
+        Apply pre-score filters to candidates.
         
         Args:
             candidates: List of raw generated candidates
@@ -56,40 +61,51 @@ class PreScoreFilter:
         filtered_out = []
         
         for candidate in candidates:
+            # Initialize rejection reasons if not present
+            if "rejection_reasons" not in candidate:
+                candidate["rejection_reasons"] = []
+            
             # Extract food codes from candidate
             codes = self._extract_codes(candidate)
             
-            # Track rejection reasons
-            rejection_reasons = []
+            # Track new rejection reasons from this filter
+            new_reasons = []
             
             # Check lock filters (returns detailed reasons if failed)
             lock_violations = self._check_lock_filters(codes)
             if lock_violations:
-                rejection_reasons.extend(lock_violations)
+                new_reasons.extend(lock_violations)
             
             # Check availability filter
             if not self._passes_availability_filter(codes):
-                rejection_reasons.append("availability")
+                new_reasons.append("availability")
 
             # Check for reserved items
             reserved_items = self._check_reserved_items(codes)
             if reserved_items:
-                rejection_reasons.extend([f"reserved:{code}" for code in reserved_items])
+                new_reasons.extend([f"reserved:{code}" for code in reserved_items])
             
             # Check for depleted rotating items
             depleted_items = self._check_depleted_rotating(codes)
             if depleted_items:
-                rejection_reasons.extend([f"depleted:{code}" for code in depleted_items])
+                new_reasons.extend([f"depleted:{code}" for code in depleted_items])
 
-            if rejection_reasons:
-                candidate["rejection_reasons"] = rejection_reasons
-                filtered_out.append(candidate)
+            if new_reasons:
+                # Add new reasons to candidate
+                candidate["rejection_reasons"].extend(new_reasons)
+                
+                if self.collect_all:
+                    # Continue processing - don't reject yet
+                    filtered.append(candidate)
+                else:
+                    # Reject immediately (current behavior)
+                    filtered_out.append(candidate)
             else:
                 candidate["filter_passed"] = True
                 filtered.append(candidate)
 
         return filtered, filtered_out    
-    
+
     def _extract_codes(self, candidate: Dict[str, Any]) -> Set[str]:
         """
         Extract food codes from candidate items.

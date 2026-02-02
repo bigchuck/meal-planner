@@ -131,10 +131,19 @@ class NutrientConstraintFilter:
             # No constraints to enforce - all pass
             return candidates, []
         
+        # Check if we should accumulate all rejection reasons
+        collect_all = self.thresholds_mgr.thresholds.get(
+            "recommendation", {}
+        ).get("collect_all_rejection_reasons", False)
+        
         passed = []
         rejected = []
         
         for candidate in candidates:
+            # Initialize rejection reasons if not present
+            if "rejection_reasons" not in candidate:
+                candidate["rejection_reasons"] = []
+            
             # Calculate nutrient totals for this candidate
             totals = self._calculate_totals(candidate)
             
@@ -143,11 +152,16 @@ class NutrientConstraintFilter:
             
             if violations:
                 # Add rejection reasons
-                candidate["rejection_reasons"] = candidate.get("rejection_reasons", [])
                 candidate["rejection_reasons"].extend(
                     [f"nutrient:{v}" for v in violations]
                 )
-                rejected.append(candidate)
+                
+                if collect_all:
+                    # Continue processing - don't reject yet
+                    passed.append(candidate)
+                else:
+                    # Reject immediately (current behavior)
+                    rejected.append(candidate)
             else:
                 # Check for soft violations (will be penalized by scorer)
                 soft_violations = self._check_soft_violations(totals)
@@ -156,8 +170,8 @@ class NutrientConstraintFilter:
                 
                 passed.append(candidate)
         
-        return passed, rejected
-    
+        return passed, rejected    
+
     def _calculate_totals(self, candidate: Dict[str, Any]) -> Dict[str, float]:
         """
         Calculate nutrient totals for a candidate.

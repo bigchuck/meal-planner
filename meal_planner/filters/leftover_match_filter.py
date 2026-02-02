@@ -32,6 +32,12 @@ class LeftoverMatchFilter:
         
         # Tolerance for multiplier matching (0.1%)
         self.MATCH_TOLERANCE = 0.001
+
+        self.collect_all = False  # Set by caller for accumulation mode
+
+    def set_collect_all(self, collect_all: bool) -> None:
+        """Set whether to collect all rejection reasons."""
+        self.collect_all = collect_all
     
     def filter_candidates(
         self,
@@ -50,6 +56,10 @@ class LeftoverMatchFilter:
         rejected = []
         
         for candidate in candidates:
+            # Initialize rejection reasons if not present
+            if "rejection_reasons" not in candidate:
+                candidate["rejection_reasons"] = []
+            
             # Check leftover usage
             leftover_items = self._extract_leftover_items(candidate)
             
@@ -59,21 +69,30 @@ class LeftoverMatchFilter:
                 continue
             
             # Validate each leftover
-            rejection_reasons = []
+            new_rejection_reasons = []
             under_use_warnings = []
             
             for code, candidate_mult in leftover_items.items():
                 result = self._validate_leftover_usage(code, candidate_mult)
                 
                 if result["status"] == "reject":
-                    rejection_reasons.append(result["reason"])
+                    new_rejection_reasons.append(result["reason"])
                 elif result["status"] == "under_use":
                     under_use_warnings.append(result["reason"])
             
-            if rejection_reasons:
-                # Rejected
-                candidate["rejection_reasons"] = rejection_reasons
-                rejected.append(candidate)
+            if new_rejection_reasons:
+                # Add new reasons to candidate
+                candidate["rejection_reasons"].extend(new_rejection_reasons)
+                
+                if self.collect_all:
+                    # Continue processing - don't reject yet
+                    # Still record warnings
+                    if under_use_warnings:
+                        candidate["leftover_under_use"] = under_use_warnings
+                    passed.append(candidate)
+                else:
+                    # Reject immediately (current behavior)
+                    rejected.append(candidate)
             else:
                 # Passed (possibly with warnings)
                 if under_use_warnings:

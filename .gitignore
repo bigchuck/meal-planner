@@ -36,7 +36,7 @@ data/backups/
 /data/*.json
 data/email_config.json
 data/email_send_log.txt
-!/data/meal_plan_config.json
+# !/data/meal_plan_config.json
 *.jpg
 *.png
 
