@@ -3,6 +3,7 @@
 Workspace manager for planning workspace persistence.
 
 Handles auto-save/load of meal planning workspace to JSON.
+Phase 1: Splits reco data into separate reco_workspace.json file.
 """
 import json
 from pathlib import Path
@@ -12,9 +13,10 @@ from datetime import datetime
 
 class WorkspaceManager:
     """
-    Manages the planning workspace JSON file.
+    Manages the planning workspace JSON files.
     
     Provides auto-save/load functionality for session continuity.
+    Reco data is stored separately in reco_workspace.json.
     """
     
     def __init__(self, filepath: Path):
@@ -25,14 +27,15 @@ class WorkspaceManager:
             filepath: Path to workspace JSON file
         """
         self.filepath = filepath
+        # Reco workspace is same directory, base name + _reco suffix
+        self.reco_filepath = filepath.parent / f"{filepath.stem}_reco.json"
     
     def load(self) -> Dict[str, Any]:
         """
-        Load workspace from disk.
+        Load workspace from disk (WITHOUT reco data).
         
         Returns:
             Workspace dictionary, or empty workspace if file doesn't exist
-            
         """
         if not self.filepath.exists():
             return self._create_empty_workspace()
@@ -65,7 +68,7 @@ class WorkspaceManager:
                     if cmd not in data["command_history"]:
                         data["command_history"][cmd] = {}
         
-            # Initialize inventory if missing (NEW for Phase 1)
+            # Initialize inventory if missing
             if "inventory" not in data:
                 data["inventory"] = {
                     "leftovers": {},
@@ -90,6 +93,10 @@ class WorkspaceManager:
                 if "exclude" not in data["locks"]:
                     data["locks"]["exclude"] = []
 
+            # MIGRATION: If old reco data exists in main workspace, migrate it
+            if "generated_candidates" in data or "generation_state" in data:
+                self._migrate_reco_data(data)
+
             return data
             
         except (json.JSONDecodeError, Exception):
@@ -98,20 +105,79 @@ class WorkspaceManager:
     
     def save(self, workspace: Dict[str, Any]) -> None:
         """
-        Save workspace to disk.
+        Save workspace to disk (WITHOUT reco data).
+        
+        Reco data should never be in the workspace dict passed here.
+        If it is, it's silently dropped.
         
         Args:
             workspace: Workspace dictionary
         """
+        # Safety: Remove reco data if present (shouldn't be, but be defensive)
+        workspace_clean = {k: v for k, v in workspace.items() 
+                          if k not in ("generated_candidates", "generation_state")}
+        
         # Update timestamp
-        workspace["last_modified"] = datetime.now().isoformat()
+        workspace_clean["last_modified"] = datetime.now().isoformat()
         
         try:
             with open(self.filepath, 'w', encoding='utf-8') as f:
-                json.dump(workspace, f, indent=2, ensure_ascii=False)
+                json.dump(workspace_clean, f, indent=2, ensure_ascii=False)
         except Exception as e:
             # Log error but don't crash - workspace is session-only
             print(f"Warning: Failed to save workspace: {e}")
+    
+    def load_reco(self) -> Dict[str, Any]:
+        """
+        Load reco workspace from disk.
+        
+        Returns:
+            Reco workspace dictionary, or empty reco workspace if file doesn't exist
+        """
+        if not self.reco_filepath.exists():
+            return self._create_empty_reco_workspace()
+        
+        try:
+            with open(self.reco_filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Validate structure
+            if not isinstance(data, dict):
+                return self._create_empty_reco_workspace()
+            
+            # Ensure required fields
+            if "last_modified" not in data:
+                data["last_modified"] = datetime.now().isoformat()
+            
+            # Ensure generated_candidates structure
+            if "generated_candidates" not in data:
+                data["generated_candidates"] = {}
+            
+            # Ensure generation_state structure  
+            if "generation_state" not in data:
+                data["generation_state"] = {}
+            
+            return data
+            
+        except (json.JSONDecodeError, Exception):
+            # Corrupted file - return empty reco workspace
+            return self._create_empty_reco_workspace()
+    
+    def save_reco(self, reco_workspace: Dict[str, Any]) -> None:
+        """
+        Save reco workspace to disk.
+        
+        Args:
+            reco_workspace: Reco workspace dictionary
+        """
+        # Update timestamp
+        reco_workspace["last_modified"] = datetime.now().isoformat()
+        
+        try:
+            with open(self.reco_filepath, 'w', encoding='utf-8') as f:
+                json.dump(reco_workspace, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Warning: Failed to save reco workspace: {e}")
     
     def clear(self) -> None:
         """Delete the workspace file."""
@@ -121,12 +187,71 @@ class WorkspaceManager:
             except Exception as e:
                 print(f"Warning: Failed to delete workspace: {e}")
     
+    def clear_reco(self) -> None:
+        """Delete the reco workspace file."""
+        if self.reco_filepath.exists():
+            try:
+                self.reco_filepath.unlink()
+            except Exception as e:
+                print(f"Warning: Failed to delete reco workspace: {e}")
+    
     def _create_empty_workspace(self) -> Dict[str, Any]:
-        """Create empty workspace structure."""
+        """Create empty workspace structure (WITHOUT reco data)."""
         return {
             "last_modified": datetime.now().isoformat(),
-            "meals": {}
+            "meals": {},
+            "command_history": {
+                "threshold": {},
+                "analyze": {},
+                "recommend": {}
+            },
+            "inventory": {
+                "leftovers": {},
+                "batch": {},
+                "rotating": {}
+            },
+            "locks": {
+                "include": {},
+                "exclude": []
+            }
         }
+    
+    def _create_empty_reco_workspace(self) -> Dict[str, Any]:
+        """Create empty reco workspace structure."""
+        return {
+            "last_modified": datetime.now().isoformat(),
+            "generated_candidates": {},
+            "generation_state": {}
+        }
+    
+    def _migrate_reco_data(self, workspace: Dict[str, Any]) -> None:
+        """
+        Migrate reco data from main workspace to separate reco workspace.
+        
+        This is a one-time migration for existing workspaces.
+        
+        Args:
+            workspace: Main workspace dict (will be modified to remove reco data)
+        """
+        print("\n[MIGRATION] Moving reco data to separate file...")
+        
+        # Extract reco data
+        reco_workspace = self._create_empty_reco_workspace()
+        
+        if "generated_candidates" in workspace:
+            reco_workspace["generated_candidates"] = workspace.pop("generated_candidates")
+        
+        if "generation_state" in workspace:
+            reco_workspace["generation_state"] = workspace.pop("generation_state")
+        
+        # Save both files
+        self.save(workspace)  # Save cleaned main workspace
+        self.save_reco(reco_workspace)  # Save new reco workspace
+        
+        print(f"[MIGRATION] Reco data moved to: {self.reco_filepath}")
+        print()
+    
+    # ... (rest of the methods remain unchanged)
     
     def convert_from_planning_workspace(self, planning_ws: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -165,10 +290,9 @@ class WorkspaceManager:
                 "ancestor_id": candidate.get("ancestor_id"),
                 "modification_log": candidate.get("modification_log", []),
                 "meets_constraints": candidate.get("meets_constraints", True),
-                "history": candidate.get("history", []),  # NEW
-                "immutable": candidate.get("immutable", False)  # NEW
+                "history": candidate.get("history", []),
+                "immutable": candidate.get("immutable", False)
             }
-
         
         return workspace
     
@@ -238,28 +362,6 @@ class WorkspaceManager:
             planning_ws["next_invented_id"] = max(invented_ids) + 1
         
         return planning_ws
-    
-    def _create_empty_workspace(self) -> Dict[str, Any]:
-        """Create empty workspace structure."""
-        return {
-            "last_modified": datetime.now().isoformat(),
-            "meals": {},
-            "command_history": {
-                "threshold": {},
-                "analyze": {},
-                "recommend": {}
-            },
-            "inventory": {
-                "leftovers": {},
-                "batch": {},
-                "rotating": {}
-            },
-            "locks": {
-                "include": {},
-                "exclude": []
-            }
-
-        }  
     
     # Method to record command in history
     def record_command_history(self, workspace: Dict[str, Any], 
@@ -375,19 +477,20 @@ class WorkspaceManager:
     
         
     # =========================================================================
-    # Generated Candidates Management
+    # Generated Candidates Management - NOW USES RECO WORKSPACE
     # =========================================================================
 
     def get_generated_candidates(self) -> Optional[Dict[str, Any]]:
         """
-        Get generated candidates section from workspace.
+        Get generated candidates section from reco workspace.
         
         Returns:
             Dict with meal_type, generated_at, raw, filtered
             None if no generated candidates exist
         """
-        workspace = self.load()
-        return workspace.get("generated_candidates")
+        reco_workspace = self.load_reco()
+        gen_cands = reco_workspace.get("generated_candidates")
+        return gen_cands if gen_cands else None
 
     def set_generated_candidates(
         self,
@@ -395,14 +498,14 @@ class WorkspaceManager:
         raw_candidates: List[Dict[str, Any]]
     ) -> None:
         """
-        Set generated candidates in workspace (replaces existing).
+        Set generated candidates in reco workspace (replaces existing).
         Assigns G-IDs to each candidate.
         
         Args:
             meal_type: Meal category (breakfast, lunch, etc.)
             raw_candidates: List of raw generated candidate dicts (without IDs)
         """
-        workspace = self.load()
+        reco_workspace = self.load_reco()
         
         # Assign IDs to candidates (G1, G2, G3, ...)
         for i, candidate in enumerate(raw_candidates, 1):
@@ -410,15 +513,15 @@ class WorkspaceManager:
             if not candidate.get("meal_name"):
                 candidate["meal_name"] = meal_type
         
-        workspace["generated_candidates"] = {
+        reco_workspace["generated_candidates"] = {
             "meal_type": meal_type,
             "generated_at": datetime.now().isoformat(),
-            "next_id": len(raw_candidates) + 1,  # Next available ID
+            "next_id": len(raw_candidates) + 1,
             "raw": raw_candidates,
-            "filtered": []  # Empty until filter step
+            "filtered": []
         }
         
-        self.save(workspace)
+        self.save_reco(reco_workspace)
 
     def update_filtered_candidates(
         self,
@@ -430,34 +533,35 @@ class WorkspaceManager:
         
         Args:
             filtered_candidates: List of candidates that passed filters
+            filtered_out_candidates: List of candidates that were rejected
         """
-        workspace = self.load()
+        reco_workspace = self.load_reco()
         
-        if "generated_candidates" not in workspace:
+        if "generated_candidates" not in reco_workspace:
             raise ValueError("No generated candidates to filter")
         
-        workspace["generated_candidates"]["filtered"] = filtered_candidates
-        workspace["generated_candidates"]["filtered_out"] = filtered_out_candidates
+        reco_workspace["generated_candidates"]["filtered"] = filtered_candidates
+        reco_workspace["generated_candidates"]["filtered_out"] = filtered_out_candidates
         
-        self.save(workspace)
+        self.save_reco(reco_workspace)
 
     def clear_generated_candidates(self) -> None:
-        """Clear generated candidates from workspace."""
-        workspace = self.load()
+        """Clear generated candidates from reco workspace."""
+        reco_workspace = self.load_reco()
         
-        if "generated_candidates" in workspace:
-            del workspace["generated_candidates"]
-            self.save(workspace)
+        if "generated_candidates" in reco_workspace:
+            del reco_workspace["generated_candidates"]
+            self.save_reco(reco_workspace)
 
     def has_generated_candidates(self) -> bool:
         """
-        Check if workspace has generated candidates.
+        Check if reco workspace has generated candidates.
         
         Returns:
             True if generated candidates exist
         """
-        workspace = self.load()
-        return "generated_candidates" in workspace
+        reco_workspace = self.load_reco()
+        return "generated_candidates" in reco_workspace
 
     def get_raw_candidates_count(self) -> int:
         """Get count of raw generated candidates."""
@@ -483,14 +587,14 @@ class WorkspaceManager:
         Args:
             scored_candidates: List of candidates with scores and analysis
         """
-        workspace = self.load()
+        reco_workspace = self.load_reco()
         
-        if "generated_candidates" not in workspace:
+        if "generated_candidates" not in reco_workspace:
             raise ValueError("No generated candidates to score")
         
-        workspace["generated_candidates"]["scored"] = scored_candidates
+        reco_workspace["generated_candidates"]["scored"] = scored_candidates
         
-        self.save(workspace)
+        self.save_reco(reco_workspace)
     
     def get_scored_candidates_count(self) -> int:
         """Get count of scored candidates."""
@@ -500,29 +604,29 @@ class WorkspaceManager:
         return len(gen_cands.get("scored", []))
     
     def clear_scored_candidates(self) -> None:
-        """Clear only scored candidates from workspace."""
-        workspace = self.load()
+        """Clear only scored candidates from reco workspace."""
+        reco_workspace = self.load_reco()
         
-        if "generated_candidates" in workspace:
-            workspace["generated_candidates"]["scored"] = []
-            self.save(workspace)
+        if "generated_candidates" in reco_workspace:
+            reco_workspace["generated_candidates"]["scored"] = []
+            self.save_reco(reco_workspace)
 
     def set_filtered_candidates(self, filtered_candidates: List[Dict[str, Any]], 
                                 rejected_candidates: List[Dict[str, Any]] = None) -> None:
         """
-        Save filtered candidates to workspace.
+        Save filtered candidates to reco workspace.
         
         Args:
             filtered_candidates: Candidates that passed filters
             rejected_candidates: Candidates that were rejected
         """
-        workspace = self.load()
+        reco_workspace = self.load_reco()
         
-        gen_cands = workspace.get("generated_candidates", {})
+        gen_cands = reco_workspace.get("generated_candidates", {})
         gen_cands["filtered"] = filtered_candidates
         
         if rejected_candidates:
             gen_cands["rejected"] = gen_cands.get("rejected", []) + rejected_candidates
         
-        workspace["generated_candidates"] = gen_cands
-        self.save(workspace)
+        reco_workspace["generated_candidates"] = gen_cands
+        self.save_reco(reco_workspace)

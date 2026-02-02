@@ -1055,9 +1055,10 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         # Load workspace
         workspace = self.ctx.workspace_mgr.load()
-        
+        reco_workspace = self.ctx.workspace_mgr.load_reco()
+
         # Check for existing generation session
-        gen_state = workspace.get("generation_state", {})
+        gen_state = reco_workspace.get("generation_state", {})
         existing_method = gen_state.get("method")
         existing_meal = gen_state.get("meal_type")
         
@@ -1073,9 +1074,9 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         # Route to appropriate generator
         if method == "history":
-            self._generate_from_history(meal_key, count, workspace)
+            self._generate_from_history(meal_key, count, workspace, reco_workspace, template_name)
         else:  # exhaustive
-            self._generate_exhaustive(meal_key, count, workspace, template_name)
+            self._generate_exhaustive(meal_key, count, workspace, reco_workspace, template_name)
     
     def _filter(self, args: List[str]) -> None:
         """
@@ -1135,7 +1136,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
         locks = workspace.get("locks", {"include": {}, "exclude": []})
         inventory = workspace.get("inventory", {})
 
-        gen_state = workspace.get("generation_state", {})
+        reco_workspace = self.ctx.workspace_mgr.load_reco()
+        gen_state = reco_workspace.get("generation_state", {})
         meal_type = gen_state.get("meal_type")
         template_name = gen_state.get("template_name")
 
@@ -2051,49 +2053,52 @@ class RecommendCommand(Command, CommandHistoryMixin):
 
     def _discard(self, args: List[str]) -> None:
         """
-        Discard generated candidates.
-        
-        Fully clears both generated_candidates and generation_state,
-        allowing immediate re-generation without --reset.
+        Discard candidates from workspace.
         
         Usage:
-            recommend discard           # Discard all (raw, filtered, scored)
-            recommend discard raw       # Discard only raw candidates
-            recommend discard filtered  # Discard only filtered candidates
-            recommend discard scored    # Discard only scored candidates
+            recommend discard             # Full reset (all candidates + state)
+            recommend discard raw         # Discard only raw candidates
+            recommend discard filtered    # Discard filtered + rejected
+            recommend discard scored      # Discard only scored
         
         Args:
-            args: Optional [array_name]
+            args: Optional array name (raw|filtered|scored), empty for full reset
         """
-        # Check for generated candidates
-        gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
-        
-        if not gen_cands:
-            print("\nNo generated candidates to discard")
-            print()
-            return
-        
         # Determine what to discard
-        valid_arrays = ['raw', 'filtered', 'scored']
-        
         if not args:
-            # Discard all - full reset
+            # Full reset
             target_arrays = ['raw', 'filtered', 'scored']
-            target_label = "all candidates"
+            target_label = "all"
             full_reset = True
         else:
-            # Discard specific array
             array_name = args[0].lower()
-            
-            if array_name not in valid_arrays:
-                print(f"\nError: Invalid array '{array_name}'")
-                print(f"Valid arrays: {', '.join(valid_arrays)}")
+            if array_name not in ['raw', 'filtered', 'scored']:
+                print(f"\nUnknown array: {array_name}")
+                print("Valid options: raw, filtered, scored")
+                print("Or use 'recommend discard' with no args for full reset")
                 print()
                 return
             
-            target_arrays = [array_name]
-            target_label = f"{array_name} candidates"
+            # Determine cascade
+            if array_name == 'raw':
+                target_arrays = ['raw', 'filtered', 'scored']
+                target_label = "raw (and filtered, scored)"
+            elif array_name == 'filtered':
+                target_arrays = ['filtered', 'scored']
+                target_label = "filtered (and scored)"
+            else:  # scored
+                target_arrays = ['scored']
+                target_label = "scored"
+            
             full_reset = False
+        
+        # Check for candidates
+        gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
+        
+        if not gen_cands:
+            print("\nNo candidates to discard")
+            print()
+            return
         
         # Count what will be discarded
         meal_type = gen_cands.get("meal_type", "unknown")
@@ -2114,7 +2119,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
             total_to_discard += raw_count
         
         if 'filtered' in target_arrays:
-            # When discarding filtered, also discard rejected (they come from same source)
             if filtered_count > 0 or rejected_count > 0:
                 print(f"  Filtered candidates: {filtered_count}")
                 print(f"  Rejected candidates: {rejected_count}")
@@ -2143,30 +2147,30 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
             return
         
-        # Load workspace
-        workspace = self.ctx.workspace_mgr.load()
+        # Load reco workspace
+        reco_workspace = self.ctx.workspace_mgr.load_reco()
         
         # Perform discard
         if full_reset:
             # Complete reset - clear everything
-            workspace["generated_candidates"] = {}
-            workspace["generation_state"] = {}
-            self.ctx.workspace_mgr.save(workspace)
+            reco_workspace["generated_candidates"] = {}
+            reco_workspace["generation_state"] = {}
+            self.ctx.workspace_mgr.save_reco(reco_workspace)
             
             print(f"\nDiscarded all candidates ({total_to_discard} total)")
             print("Generation state fully reset - ready for new generation")
         else:
             # Partial discard - clear specific arrays only
-            if "generated_candidates" in workspace:
+            if "generated_candidates" in reco_workspace:
                 for array_name in target_arrays:
-                    if array_name in workspace["generated_candidates"]:
-                        workspace["generated_candidates"][array_name] = []
+                    if array_name in reco_workspace["generated_candidates"]:
+                        reco_workspace["generated_candidates"][array_name] = []
                     
                     # When discarding filtered, also discard rejected
                     if array_name == "filtered":
-                        workspace["generated_candidates"]["rejected"] = []
+                        reco_workspace["generated_candidates"]["rejected"] = []
                 
-                self.ctx.workspace_mgr.save(workspace)
+                self.ctx.workspace_mgr.save_reco(reco_workspace)
             
             print(f"\nDiscarded {target_label} ({total_to_discard} total)")
             print("Note: Generation state NOT reset. Use 'recommend discard' (no args) for full reset.")
@@ -2641,13 +2645,9 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print(f"\nError writing file: {e}")
             print()
 
-    def _generate_from_history(
-        self, 
-        meal_key: str, 
-        count: int, 
-        workspace: Dict[str, Any],
-        template_name: Optional[str] = None 
-    ) -> None:
+    def _generate_from_history(self, meal_key: str, count: int, 
+                          workspace: Dict[str, Any], reco_workspace: Dict[str, Any],
+                          template_name: Optional[str] = None) -> None:
         """
         Generate candidates from meal history (original method).
         
@@ -2688,26 +2688,27 @@ class RecommendCommand(Command, CommandHistoryMixin):
             meal_type=meal_key,
             raw_candidates=candidates
         )
-        
+        print(f"DEBUG: {len(candidates)}")
+
         # Reload workspace to get the updated version with generated_candidates
-        workspace = self.ctx.workspace_mgr.load()
+        reco_workspace = self.ctx.workspace_mgr.load_reco()
         
         # Update generation state
-        workspace["generation_state"] = {
+        reco_workspace["generation_state"] = {
             "method": "history",
             "meal_type": meal_key,
-            "template_name": template_name,  # NEW
+            "template_name": template_name,
             "cursor": len(candidates)
         }
-        
-        # Save workspace with generation state
-        self.ctx.workspace_mgr.save(workspace)
-        
+        self.ctx.workspace_mgr.save_reco(reco_workspace)
+       
         # Display results
         print(f"\nGenerated {len(candidates)} raw candidates for {meal_key}")
         print()
 
-    def _generate_exhaustive(self, meal_key: str, count: int, workspace: dict, template_name: Optional[str] = None) -> None:
+    def _generate_exhaustive(self, meal_key: str, count: int, 
+                        workspace: Dict[str, Any], reco_workspace: Dict[str, Any],
+                        template_name: Optional[str]) -> None:
         """
         Generate candidates exhaustively from component pools.
         
@@ -2718,7 +2719,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
             template_name: Specific template to use (None = use first available)
         """
         # Load or initialize generation state
-        gen_state = workspace.get("generation_state", {})
+        gen_state = reco_workspace.get("generation_state", {})
         cursor = gen_state.get("cursor", 0)
         
         print(f"\n=== EXHAUSTIVE GENERATION: {meal_key.upper()} ===")
@@ -2758,20 +2759,20 @@ class RecommendCommand(Command, CommandHistoryMixin):
                     meal_type=meal_key,
                     raw_candidates=all_raw
                 )
-        
-        # Reload workspace to get updated version
-        workspace = self.ctx.workspace_mgr.load()
-        
+
+        # Reload reco workspace to get updated version
+        reco_workspace = self.ctx.workspace_mgr.load_reco()
+
         # Update generation state
-        workspace["generation_state"] = {
+        reco_workspace["generation_state"] = {
             "method": "exhaustive",
             "meal_type": meal_key,
             "cursor": new_cursor,
             "template_name": template_name
         }
-        
-        # Save workspace with generation state
-        self.ctx.workspace_mgr.save(workspace)
+
+        # Save reco workspace with generation state
+        self.ctx.workspace_mgr.save_reco(reco_workspace)
         
         # Display results
         print(f"Generated {len(candidates)} candidates (positions {cursor}-{new_cursor-1})")
@@ -2795,13 +2796,13 @@ class RecommendCommand(Command, CommandHistoryMixin):
         # Check for force flag
         force = "--force" in args or "-f" in args
         
-        # Load workspace
-        workspace = self.ctx.workspace_mgr.load()
-        
+        # Load reco workspace
+        reco_workspace = self.ctx.workspace_mgr.load_reco()
+
         # Check for existing generation session
-        gen_state = workspace.get("generation_state", {})
-        gen_cands = workspace.get("generated_candidates", {})
-        
+        gen_state = reco_workspace.get("generation_state", {})
+        gen_cands = reco_workspace.get("generated_candidates", {})
+                
         # Check if there's anything to reset
         has_state = bool(gen_state)
         has_raw = len(gen_cands.get("raw", [])) > 0
@@ -2852,15 +2853,15 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 return
         
         # Perform reset
-        workspace["generation_state"] = {}
-        workspace["generated_candidates"] = {
+        reco_workspace["generation_state"] = {}
+        reco_workspace["generated_candidates"] = {
             "raw": [],
             "filtered": [],
             "filtered_out": [],
             "scored": []
         }
-        
-        self.ctx.workspace_mgr.save(workspace)
+
+        self.ctx.workspace_mgr.save_reco(reco_workspace)
         
         print("\n✓ Generation session reset")
         print("Ready for new generation with any method/meal combination")
