@@ -282,7 +282,7 @@ class WorkspaceManager:
                 "created": candidate.get("created"),
                 "meal_name": candidate.get("meal_name"),
                 "type": candidate.get("type"),
-                "items": candidate.get("meal", {}).get("items", []),
+                "items": candidate.get("items", []),
                 "totals": candidate.get("totals", {}),
                 "source_date": candidate.get("source_date"),
                 "source_time": candidate.get("source_time"),
