@@ -3074,22 +3074,56 @@ class RecommendCommand(Command, CommandHistoryMixin):
             return "rejected"
         else:
             return "raw"
-        
+            
     def _calculate_candidate_totals(self, items: List[Dict[str, Any]]) -> Dict[str, float]:
-        """Calculate totals from items using ReportBuilder."""
-        from meal_planner.reports import ReportBuilder
-        builder = ReportBuilder(self.ctx.master)
-        report = builder.build_from_items(items, title="Generation")
-        totals_obj = report.totals
+        """
+        Calculate nutritional totals for a list of items.
         
-        return {
-            'cal': getattr(totals_obj, 'calories', 0),
-            'prot_g': getattr(totals_obj, 'protein_g', 0),
-            'carbs_g': getattr(totals_obj, 'carbs_g', 0),
-            'fat_g': getattr(totals_obj, 'fat_g', 0),
-            'sugar_g': getattr(totals_obj, 'sugar_g', 0),
-            'gl': getattr(totals_obj, 'glycemic_load', 0)
+        Optimized lightweight version - just arithmetic, no formatting.
+        Used during candidate generation to pre-populate totals.
+        
+        Args:
+            items: List of item dicts with code and mult
+        
+        Returns:
+            Dict with cal, prot_g, carbs_g, fat_g, sugar_g, gl keys
+        """
+        if not items:
+            return {
+                'cal': 0.0,
+                'prot_g': 0.0,
+                'carbs_g': 0.0,
+                'fat_g': 0.0,
+                'sugar_g': 0.0,
+                'gl': 0.0
+            }
+        
+        totals = {
+            'cal': 0.0,
+            'prot_g': 0.0,
+            'carbs_g': 0.0,
+            'fat_g': 0.0,
+            'sugar_g': 0.0,
+            'gl': 0.0
         }
+        
+        for item in items:
+            code = str(item["code"]).upper()
+            mult = float(item.get("mult", 1.0))
+            
+            # Lookup food in master
+            food = self.ctx.master.lookup_code(code)
+            
+            if food is not None:
+                # Direct accumulation - just multiply and add
+                totals['cal'] += food.get('cal', 0) * mult
+                totals['prot_g'] += food.get('prot_g', 0) * mult
+                totals['carbs_g'] += food.get('carbs_g', 0) * mult
+                totals['fat_g'] += food.get('fat_g', 0) * mult
+                totals['sugar_g'] += food.get('sugar_g', 0) * mult
+                totals['gl'] += food.get('GL', 0) * mult
+        
+        return totals
     
     def _status(self, args: List[str]) -> None:
         """
