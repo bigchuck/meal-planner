@@ -5,8 +5,10 @@ Nutrient constraint filter for meal candidates.
 Enforces hard and soft nutrient limits from meal_generation templates.
 """
 from typing import List, Dict, Any, Tuple, Optional
+from .base_filter import BaseFilter
 
-class NutrientConstraintFilter:
+
+class NutrientConstraintFilter(BaseFilter):
     """
     Filters meal candidates based on nutrient constraints from generation templates.
     
@@ -36,10 +38,17 @@ class NutrientConstraintFilter:
             meal_type: Meal category (breakfast, lunch, dinner, etc.)
             template_name: Generation template name (e.g., "protein_low_carb")
         """
+        super().__init__()
+        
         self.master = master
         self.thresholds_mgr = thresholds_mgr
         self.meal_type = meal_type
         self.template_name = template_name
+        
+        # Check collect_all setting from thresholds
+        self.collect_all = self.thresholds_mgr.thresholds.get(
+            "recommendation", {}
+        ).get("collect_all_rejection_reasons", False)
         
         # Resolve actual nutrient limits from template references
         self.nutrient_constraints = self._resolve_constraints()
@@ -130,10 +139,6 @@ class NutrientConstraintFilter:
         if not self.nutrient_constraints:
             # No constraints to enforce - all pass
             return candidates, []
-        # Check if we should accumulate all rejection reasons
-        collect_all = self.thresholds_mgr.thresholds.get(
-            "recommendation", {}
-        ).get("collect_all_rejection_reasons", False)
         
         passed = []
         rejected = []
@@ -145,15 +150,17 @@ class NutrientConstraintFilter:
     
             # Calculate nutrient totals for this candidate
             totals = self._calculate_totals(candidate)
+            
             # Check against all constraints
             violations = self._check_violations(totals)
+            
             if violations:
                 # Add rejection reasons
                 candidate["rejection_reasons"].extend(
                     [f"nutrient:{v}" for v in violations]
                 )
                 
-                if collect_all:
+                if self.collect_all:
                     # Continue processing - don't reject yet
                     passed.append(candidate)
                 else:
@@ -179,27 +186,26 @@ class NutrientConstraintFilter:
         Returns:
             Dict mapping nutrient names to total values
         """
-        # Import here to avoid circular dependency
-        # from meal_planner.reports import ReportBuilder
-        
-        # builder = ReportBuilder(self.master)
-        items = candidate.get("items", [])
+        # Access items from nested meal structure (unified format)
+        items = candidate.get("meal", {}).get("items", [])
         if not items:
             return {}
         
-        # report = builder.build_from_items(items, title="Filter")
-        # totals_obj = report.totals
-            code = str(item["code"]).upper()
-            mult = float(item.get("mult", 1.0))
-            
-            # Look up in master
-            row_data = self.master.lookup_code(code)
+        totals_dict = {
+            "protein": 0, 
+            "carbs": 0, 
+            "fat": 0, 
+            "fiber": 0, 
+            "sugar": 0, 
+            "gl": 0, 
+            "cal": 0
+        }
         
-        totals_dict = {"protein": 0, "carbs": 0, "fat": 0, "fiber": 0, "sugar": 0, "gl": 0, "cal": 0}
         for item in items:
             code = str(item["code"]).upper()
             mult = float(item.get("mult", 1.0))
             food = self.master.lookup_code(code)
+            
             totals_dict["protein"] += food.get("prot_g", 0) * mult
             totals_dict["carbs"] += food.get("carbs_g", 0) * mult
             totals_dict["fat"] += food.get("fat_g", 0) * mult
@@ -209,17 +215,6 @@ class NutrientConstraintFilter:
             totals_dict["cal"] += food.get("cal", 0) * mult
     
         return totals_dict
-        
-        # Map to nutrient names used in constraints
-        # return {
-        #     "protein": getattr(totals_obj, "protein_g", 0),
-        #     "carbs": getattr(totals_obj, "carbs_g", 0),
-        #     "fat": getattr(totals_obj, "fat_g", 0),
-        #     "fiber": getattr(totals_obj, "fiber_g", 0),
-        #     "sugar": getattr(totals_obj, "sugar_g", 0),
-        #     "gl": getattr(totals_obj, "glycemic_load", 0),
-        #     "cal": getattr(totals_obj, "calories", 0)
-        # }
     
     def _check_violations(self, totals: Dict[str, float]) -> List[str]:
         """

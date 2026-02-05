@@ -60,6 +60,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
         # Route to subcommand handlers
         if subcommand == "generate":
             self._generate_candidates(subargs)
+        elif subcommand == "status":
+            self._status(subargs)
         elif subcommand == "show":
             self._show(subargs)
         elif subcommand == "filter":
@@ -126,6 +128,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("  recommend generate <meal_type> [--method <method>] [--count N] [--template <template>] ")
         print("    <method> := [history|exhaustive]")
         print("    <template> := [template name used for exhaustive]")
+        print("  recommend status [--verbose]") 
         print("  recommend reset [--force]")
         print("  recommend show [rejected] [[id]|--limit N [--skip N]]")
         print("  recommend filter [--verbose]")
@@ -137,9 +140,9 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("    <array> := [raw|filtered|rejected|scored]")
         print("Pipeline flow:")
         print("  1. recommend generate lunch      # Generate raw candidates")
-        print("  2. recommend show                # Preview candidates")
+        print("  2. recommend status              # Check pipeline state")
         print("  3. recommend filter              # Apply pre-score filters")
-        print("  4. recommend show                # View filtered candidates")
+        print("  4. recommend status              # Verify filtering results")
         print("  5. recommend score               # Score filtered candidates")
         print("  6. recommend accept G3           # Accept a recommendation")
         print("  7. recommend discard             # Clean up when done")
@@ -1099,16 +1102,10 @@ class RecommendCommand(Command, CommandHistoryMixin):
         """
         Apply pre-score filters to candidates.
         
-        Incremental by default - only processes candidates without filter_result.
-        Use --refilter to clear all filter_result and reprocess everything.
-        
-        Filters applied in order:
-        1. Nutrient constraints (hard/soft limits from generation template)
-        2. Lock constraints (include/exclude)
-        3. Availability constraints (exclude_from_recommendations)
-        4. Reserved items (inventory)
-        5. Depleted rotating items
-        6. Leftover portion matching (exact multiplier required)
+        Refactored into 3 phases:
+        1. Setup and preparation
+        2. Execute filters in sequence
+        3. Wrap up and persist results
         
         Usage:
             recommend filter              # Process only unfiltered candidates
@@ -1118,11 +1115,15 @@ class RecommendCommand(Command, CommandHistoryMixin):
         Args:
             args: Optional flags (--verbose, --refilter)
         """
-        # Parse flags
+        # =========================================================================
+        # PHASE 1: SETUP AND PREPARATION
+        # =========================================================================
+        
+        # Parse command flags
         verbose = "--verbose" in args or "-v" in args
         refilter = "--refilter" in args
         
-        # Check for generated candidates
+        # Load candidates and workspace data
         gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
         
         if not gen_cands:
@@ -1157,7 +1158,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
                     print(f"[REFILTER] Cleared {score_cleared_count} score results (scoring depends on filtering)")
                 print()
         
-        # Find candidates to process (those without filter_result)
+        # Find candidates to process (incremental by default)
         candidates_to_filter = [c for c in all_candidates if c.get("filter_result") is None]
         
         if not candidates_to_filter:
@@ -1167,7 +1168,16 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
             return
         
-        # Check if we should collect all rejection reasons
+        # Load context data needed by filters
+        workspace = self.ctx.workspace_mgr.load()
+        reco_workspace = self.ctx.workspace_mgr.load_reco()
+        gen_state = reco_workspace.get("generation_state", {})
+        template_name = gen_state.get("template_name")
+        
+        locks = workspace.get("locks", {"include": {}, "exclude": []})
+        inventory = workspace.get("inventory", {"leftovers": {}, "batch": {}, "rotating": {}})
+        
+        # Check collect_all mode
         collect_all = self.ctx.thresholds.thresholds.get(
             "recommendation", {}
         ).get("collect_all_rejection_reasons", False)
@@ -1175,6 +1185,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         if collect_all and verbose:
             print("[DEBUG MODE: Collecting all rejection reasons]\n")
         
+        # Display header
         print(f"\n=== FILTERING {len(candidates_to_filter)} {meal_type.upper()} CANDIDATES ===")
         if refilter:
             print(f"(Refiltering mode - processing all candidates)")
@@ -1184,101 +1195,81 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 print(f"(Incremental mode - {already_done} already filtered, processing new ones)")
         print()
         
-        # Initialize rejection_reasons tracking
+        # Initialize rejection_reasons tracking on all candidates
         for candidate in candidates_to_filter:
-            candidate["rejection_reasons"] = []  # Temp field for tracking
+            candidate["rejection_reasons"] = []
         
-        # Load workspace data
-        # workspace = self.ctx.workspace_mgr.load()
-        # locks = workspace.get("locks", {"include": {}, "exclude": []})
-        # inventory = workspace.get("inventory", {})
+        # =========================================================================
+        # PHASE 2: EXECUTE FILTERS IN SEQUENCE
+        # =========================================================================
         
-        # Load reco workspace for generation_state
-        reco_workspace = self.ctx.workspace_mgr.load_reco()
-        gen_state = reco_workspace.get("generation_state", {})
-        template_name = gen_state.get("template_name")
+        # Build filter registry - filters run in order
+        filters_to_run = self._build_filter_registry(
+            meal_type=meal_type,
+            template_name=template_name,
+            locks=locks,
+            inventory=inventory,
+            collect_all=collect_all
+        )
         
-        current_candidates = candidates_to_filter
+        # Execute each filter
+        for filter_name, filter_instance, filter_config in filters_to_run:
+            if filter_instance is None:
+                # Filter not available (e.g., no template for nutrient constraints)
+                if verbose and filter_config.get("warn_if_missing"):
+                    print(f"Warning: {filter_config['warn_message']}")
+                    print()
+                continue
+            
+            # Run filter directly - all filters use unified structure
+            passed, rejected = filter_instance.filter_candidates(candidates_to_filter)
+            
+            # Map results back to original candidates
+            self._apply_filter_results(
+                candidates_to_filter,
+                passed,
+                rejected,
+                collect_all
+            )
+            
+            # Display stats if verbose
+            if verbose:
+                stats = filter_instance.get_filter_stats(
+                    len(candidates_to_filter),
+                    len(passed)
+                )
+                print(f"{filter_name}: {stats}")
+                print()
+        
+        # =========================================================================
+        # PHASE 3: WRAP UP AND PERSIST RESULTS
+        # =========================================================================
+        
+        # Transform rejection_reasons into filter_result for each candidate
         passed_count = 0
         rejected_count = 0
         
-        # PHASE 1: Nutrient constraint filtering
-        if not template_name:
-            print("Warning: No template specified in generation state")
-            print("Skipping nutrient constraint filtering\n")
-        else:
-            from meal_planner.filters.nutrient_constraint_filter import NutrientConstraintFilter
-            nutrient_filter = NutrientConstraintFilter(
-                self.ctx.master,
-                self.ctx.thresholds,
-                meal_type=meal_type,
-                template_name=template_name
-            )
-        
-            # Transform candidates for filter (needs meal structure)
-            filter_input = []
-            for c in current_candidates:
-                # Create temp candidate structure for filter
-                temp = {
-                    "id": c["id"],
-                    "items": c["meal"]["items"],
-                    "totals": c["meal"]["totals"],
-                    "rejection_reasons": c["rejection_reasons"]
-                }
-                filter_input.append(temp)
-            
-            passed_temp, rejected_temp = nutrient_filter.filter_candidates(filter_input)
-            
-            # Map results back
-            passed_ids = {c["id"] for c in passed_temp}
-            rejected_dict = {r["id"]: r for r in rejected_temp}
-            for c in current_candidates:
-                if c["id"] not in passed_ids:
-                    rejected_info = rejected_dict.get(c["id"])
-                    if rejected_info:
-                        c["rejection_reasons"] = rejected_info.get("rejection_reasons", [])
-            
-            if not collect_all:
-                current_candidates = [c for c in current_candidates if c["id"] in passed_ids]
-            
-            if verbose:
-                print(f"Nutrient Constraints: {nutrient_filter.get_filter_stats(len(filter_input), len(passed_temp))}")
-                print()
-        
-        # PHASE 2-6: Other filters (lock, availability, inventory, rotating, leftover)
-        # ... [Continue with other filter phases similar to current implementation]
-        # ... [Each phase updates _rejection_reasons and optionally filters current_candidates]
-        
-        # FINAL: Write filter_result to each candidate
-        filtered_list = []
-        rejected_list = []
-
         for candidate in candidates_to_filter:
             rejection_reasons = candidate.pop("rejection_reasons", [])
+            
             if rejection_reasons:
                 candidate["filter_result"] = {
                     "passed": False,
                     "violations": rejection_reasons
                 }
-                rejected_list.append(candidate)
                 rejected_count += 1
             else:
                 candidate["filter_result"] = {
                     "passed": True,
                     "violations": []
                 }
-                filtered_list.append(candidate)
                 passed_count += 1
         
-        # Place updated candidates back into workspace
-        #reco_workspace["generated_candidates"]["filtered"] = filtered_list
-        #reco_workspace["generated_candidates"]["rejected"] = rejected_list
-
+        # Save updated candidates back to workspace
         reco_workspace["generated_candidates"] = gen_cands
-        # Save back to reco workspace
         self.ctx.workspace_mgr.save_reco(reco_workspace)
         
-        # Summary
+        # Display summary
         print(f"\nFiltering complete:")
         print(f"  Processed:      {len(candidates_to_filter)} candidates")
         print(f"  Passed filters: {passed_count} candidates")
@@ -1291,6 +1282,125 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         print(f"Next: Run 'recommend score' to rank filtered candidates")
         print()
+
+    def _build_filter_registry(
+        self,
+        meal_type: str,
+        template_name: Optional[str],
+        locks: Dict[str, Any],
+        inventory: Dict[str, Any],
+        collect_all: bool
+    ) -> List[Tuple[str, Optional[Any], Dict[str, Any]]]:
+        """
+        Build registry of filters to execute in order.
+        
+        Returns list of (filter_name, filter_instance, config_dict) tuples.
+        Config dict contains metadata about how to run the filter.
+        
+        Args:
+            meal_type: Meal category (breakfast, lunch, etc.)
+            template_name: Optional template name for nutrient constraints
+            locks: Lock configuration from workspace
+            inventory: Inventory data from workspace
+            collect_all: Whether to collect all rejection reasons
+        
+        Returns:
+            List of (name, instance, config) tuples
+        """
+        from meal_planner.filters import (
+            NutrientConstraintFilter,
+            PreScoreFilter,
+            LeftoverMatchFilter
+        )
+        
+        filters = []
+        
+        # Filter 1: Nutrient Constraints
+        if template_name:
+            nutrient_filter = NutrientConstraintFilter(
+                self.ctx.master,
+                self.ctx.thresholds,
+                meal_type=meal_type,
+                template_name=template_name
+            )
+            filters.append((
+                "Nutrient Constraints",
+                nutrient_filter,
+                {"warn_if_missing": False}
+            ))
+        else:
+            filters.append((
+                "Nutrient Constraints",
+                None,
+                {
+                    "warn_if_missing": True,
+                    "warn_message": "No template specified in generation state\nSkipping nutrient constraint filtering"
+                }
+            ))
+        
+        # Filter 2: Pre-Score (locks, availability, inventory checks)
+        prescore_filter = PreScoreFilter(
+            locks=locks,
+            meal_type=meal_type,
+            user_prefs=self.ctx.user_prefs,
+            inventory=inventory
+        )
+        prescore_filter.set_collect_all(collect_all)
+        
+        filters.append((
+            "Lock/Availability/Inventory",
+            prescore_filter,
+            {"warn_if_missing": False}
+        ))
+        
+        # Filter 3: Leftover Matching
+        leftover_filter = LeftoverMatchFilter(
+            inventory=inventory,
+            allow_under_use=False
+        )
+        leftover_filter.set_collect_all(collect_all)
+        
+        filters.append((
+            "Leftover Matching",
+            leftover_filter,
+            {"warn_if_missing": False}
+        ))
+        
+        return filters
+
+
+    def _apply_filter_results(
+        self,
+        original_candidates: List[Dict[str, Any]],
+        passed: List[Dict[str, Any]],
+        rejected: List[Dict[str, Any]],
+        collect_all: bool
+    ) -> None:
+        """
+        Apply filter results back to original candidate list.
+        
+        Updates rejection_reasons on candidates that were rejected.
+        In collect_all mode, candidates stay in the list but accumulate reasons.
+        
+        Args:
+            original_candidates: Original unified candidate list (modified in-place)
+            passed: Candidates that passed this filter
+            rejected: Candidates rejected by this filter
+            collect_all: Whether we're in accumulate mode
+        """
+        # Build lookup of results
+        passed_ids = {c["id"] for c in passed}
+        rejected_dict = {r["id"]: r for r in rejected}
+        
+        # Update rejection_reasons on original candidates
+        for candidate in original_candidates:
+            cand_id = candidate["id"]
+            
+            if cand_id not in passed_ids:
+                # This candidate was rejected - merge reasons
+                rejected_info = rejected_dict.get(cand_id)
+                if rejected_info:
+                    candidate["rejection_reasons"] = rejected_info.get("rejection_reasons", [])
 
     def _show(self, args: List[str]) -> None:
         """
@@ -2695,13 +2805,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
             lookback_days=60
         )
         
-        self.ctx.workspace_mgr.set_generated_candidates(
-            meal_type=meal_key,
-            raw_candidates=candidates,
-            cursor=0,
-            append=False
-        )
-        
         if not candidates:
             print(f"\nNo {meal_key} meals found in history")
             print("Try:")
@@ -2709,6 +2812,17 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print("  - Increasing lookback days (future feature)")
             print()
             return
+
+        for candidate in candidates:
+            items = candidate.get("items", [])
+            candidate["totals"] = self._calculate_candidate_totals(items)
+        
+        self.ctx.workspace_mgr.set_generated_candidates(
+            meal_type=meal_key,
+            raw_candidates=candidates,
+            cursor=0,
+            append=False
+        )
         
         # Load reco workspace
         reco_workspace = self.ctx.workspace_mgr.load_reco()
@@ -2771,6 +2885,10 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
             return
         
+        for candidate in candidates:
+            items = candidate.get("items", [])
+            candidate["totals"] = self._calculate_candidate_totals(items)
+
         self.ctx.workspace_mgr.set_generated_candidates(
             meal_type=meal_key,
             raw_candidates=candidates,
@@ -2956,3 +3074,148 @@ class RecommendCommand(Command, CommandHistoryMixin):
             return "rejected"
         else:
             return "raw"
+        
+    def _calculate_candidate_totals(self, items: List[Dict[str, Any]]) -> Dict[str, float]:
+        """Calculate totals from items using ReportBuilder."""
+        from meal_planner.reports import ReportBuilder
+        builder = ReportBuilder(self.ctx.master)
+        report = builder.build_from_items(items, title="Generation")
+        totals_obj = report.totals
+        
+        return {
+            'cal': getattr(totals_obj, 'calories', 0),
+            'prot_g': getattr(totals_obj, 'protein_g', 0),
+            'carbs_g': getattr(totals_obj, 'carbs_g', 0),
+            'fat_g': getattr(totals_obj, 'fat_g', 0),
+            'sugar_g': getattr(totals_obj, 'sugar_g', 0),
+            'gl': getattr(totals_obj, 'glycemic_load', 0)
+        }
+    
+    def _status(self, args: List[str]) -> None:
+        """
+        Show recommendation pipeline status.
+        
+        Displays counts of candidates in each stage:
+        - Raw (generated but unfiltered)
+        - Filtered (passed filtering)
+        - Rejected (failed filtering)
+        - Scored (filtered and scored)
+        
+        Usage:
+            recommend status
+            recommend status --verbose    # Show additional details
+        
+        Args:
+            args: Optional flags (--verbose)
+        """
+        verbose = "--verbose" in args or "-v" in args
+        
+        # Check for generated candidates
+        gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
+        
+        if not gen_cands:
+            print("\n=== RECOMMENDATION PIPELINE STATUS ===")
+            print("\nNo active recommendation session")
+            print()
+            print("Start with: recommend generate <meal_type>")
+            print()
+            return
+        
+        all_candidates = gen_cands.get("candidates", [])
+        meal_type = gen_cands.get("meal_type", "unknown")
+        
+        # Load generation state
+        reco_workspace = self.ctx.workspace_mgr.load_reco()
+        gen_state = reco_workspace.get("generation_state", {})
+        method = gen_state.get("method", "unknown")
+        template_name = gen_state.get("template_name", "none")
+        
+        # Count candidates by state
+        raw_count = sum(1 for c in all_candidates if c.get("filter_result") is None)
+        
+        filtered_count = sum(1 for c in all_candidates 
+                            if c.get("filter_result") is not None 
+                            and c.get("filter_result").get("passed") == True)
+        
+        rejected_count = sum(1 for c in all_candidates 
+                            if c.get("filter_result") is not None
+                            and c.get("filter_result").get("passed") == False)
+        
+        scored_count = sum(1 for c in all_candidates 
+                        if c.get("score_result") is not None)
+        
+        total_count = len(all_candidates)
+        
+        # Display header
+        print(f"\n=== RECOMMENDATION PIPELINE STATUS ===")
+        print()
+        print(f"Meal Type:    {meal_type.upper()}")
+        print(f"Method:       {method}")
+        print(f"Template:     {template_name}")
+        print()
+        
+        # Display counts
+        print("Pipeline Stage                Count    %")
+        print("-" * 45)
+        
+        # Raw (unfiltered)
+        raw_pct = (raw_count / total_count * 100) if total_count > 0 else 0
+        print(f"Raw (unfiltered)           {raw_count:>8}  {raw_pct:>5.1f}%")
+        
+        # Filtered (passed)
+        filtered_pct = (filtered_count / total_count * 100) if total_count > 0 else 0
+        status_filtered = "→" if raw_count == 0 else " "
+        print(f"{status_filtered} Filtered (passed)        {filtered_count:>8}  {filtered_pct:>5.1f}%")
+        
+        # Rejected
+        rejected_pct = (rejected_count / total_count * 100) if total_count > 0 else 0
+        status_rejected = "→" if raw_count == 0 else " "
+        print(f"{status_rejected} Rejected (failed)        {rejected_count:>8}  {rejected_pct:>5.1f}%")
+        
+        # Scored
+        scored_pct = (scored_count / total_count * 100) if total_count > 0 else 0
+        status_scored = "→" if filtered_count > 0 and scored_count > 0 else " "
+        print(f"{status_scored} Scored (ranked)          {scored_count:>8}  {scored_pct:>5.1f}%")
+        
+        print("-" * 45)
+        print(f"Total                     {total_count:>8}  100.0%")
+        print()
+        
+        # Show next step suggestion
+        if raw_count > 0:
+            print(f"Next: recommend filter              # Process {raw_count} unfiltered candidates")
+        elif filtered_count > 0 and scored_count == 0:
+            print(f"Next: recommend score               # Score {filtered_count} filtered candidates")
+        elif scored_count > 0:
+            print(f"Next: recommend show scored         # View top recommendations")
+            print(f"      recommend accept <G-ID>       # Accept a candidate")
+        elif rejected_count > 0 and filtered_count == 0:
+            print("All candidates were rejected - consider:")
+            print("  - Adjusting constraints in template")
+            print("  - Using different locks")
+            print("  - Generating more candidates")
+        
+        print()
+        
+        # Verbose mode: Show rejection reason breakdown
+        if verbose and rejected_count > 0:
+            print("=== REJECTION BREAKDOWN ===")
+            print()
+            
+            # Count rejection reasons
+            reason_counts = {}
+            for candidate in all_candidates:
+                filter_result = candidate.get("filter_result")
+                if filter_result and not filter_result.get("passed"):
+                    violations = filter_result.get("violations", [])
+                    for violation in violations:
+                        # Extract reason type (e.g., "nutrient:protein<40" -> "nutrient")
+                        reason_type = violation.split(":")[0] if ":" in violation else violation
+                        reason_counts[reason_type] = reason_counts.get(reason_type, 0) + 1
+            
+            if reason_counts:
+                print("Rejection Reasons:")
+                for reason, count in sorted(reason_counts.items(), key=lambda x: -x[1]):
+                    print(f"  {reason:<25} {count:>5} candidates")
+            
+            print()
