@@ -1737,7 +1737,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 
                 # Format score/list column
                 if list_type == "scored":
-                    score = candidate.get("aggregate_score", 0.0)
+                    score = candidate.get("score_result", {}).get("aggregate_score", 0.0)
                     score_str = f"{score:.3f}"
                 else:
                     score_str = list_type
