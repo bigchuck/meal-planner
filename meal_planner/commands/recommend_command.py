@@ -1565,6 +1565,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         # Determine which to show based on priority
         if scored:
+            scored.sort(key=lambda x: x.get("score_result", {}).get("aggregate_score", 0), 
+               reverse=True)
             candidates = scored
             list_type = "scored"
         elif filtered:
