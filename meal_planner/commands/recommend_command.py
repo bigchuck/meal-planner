@@ -3054,7 +3054,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 if c.get("filter_result") is  not None 
                 and c.get("filter_result", {}).get("passed") == False]
         elif state == "scored":
-            return [c for c in all_candidates if c.get("score_result") is not None]
+            scored = [c for c in all_candidates if c.get("score_result") is not None]
+            return sorted(scored, key=lambda x: x.get("score_result", {}).get("aggregate_score", 0), reverse=True)
         else:
             return []
         
