@@ -130,7 +130,6 @@ class NutrientConstraintFilter:
         if not self.nutrient_constraints:
             # No constraints to enforce - all pass
             return candidates, []
-        
         # Check if we should accumulate all rejection reasons
         collect_all = self.thresholds_mgr.thresholds.get(
             "recommendation", {}
@@ -143,12 +142,18 @@ class NutrientConstraintFilter:
             # Initialize rejection reasons if not present
             if "rejection_reasons" not in candidate:
                 candidate["rejection_reasons"] = []
-            
+    
             # Calculate nutrient totals for this candidate
             totals = self._calculate_totals(candidate)
-            
             # Check against all constraints
             violations = self._check_violations(totals)
+            if candidate.get("id") == "G4444":
+                items = candidate.get("items", [])
+                for item in items:
+                    code = str(item["code"]).upper()
+                    mult = float(item.get("mult", 1.0))
+                    food = self.master.lookup_code(code)
+                    protein = food.get("prot_g", 0) * mult
             
             if violations:
                 # Add rejection reasons
@@ -183,27 +188,46 @@ class NutrientConstraintFilter:
             Dict mapping nutrient names to total values
         """
         # Import here to avoid circular dependency
-        from meal_planner.reports import ReportBuilder
+        # from meal_planner.reports import ReportBuilder
         
-        builder = ReportBuilder(self.master)
+        # builder = ReportBuilder(self.master)
         items = candidate.get("items", [])
-        
         if not items:
             return {}
         
-        report = builder.build_from_items(items, title="Filter")
-        totals_obj = report.totals
+        # report = builder.build_from_items(items, title="Filter")
+        # totals_obj = report.totals
+            code = str(item["code"]).upper()
+            mult = float(item.get("mult", 1.0))
+            
+            # Look up in master
+            row_data = self.master.lookup_code(code)
+        
+        totals_dict = {"protein": 0, "carbs": 0, "fat": 0, "fiber": 0, "sugar": 0, "gl": 0, "cal": 0}
+        for item in items:
+            code = str(item["code"]).upper()
+            mult = float(item.get("mult", 1.0))
+            food = self.master.lookup_code(code)
+            totals_dict["protein"] += food.get("prot_g", 0) * mult
+            totals_dict["carbs"] += food.get("carbs_g", 0) * mult
+            totals_dict["fat"] += food.get("fat_g", 0) * mult
+            totals_dict["fiber"] += food.get("fiber_g", 0) * mult
+            totals_dict["sugar"] += food.get("sugar_g", 0) * mult
+            totals_dict["gl"] += food.get("GL", 0) * mult
+            totals_dict["cal"] += food.get("cal", 0) * mult
+    
+        return totals_dict
         
         # Map to nutrient names used in constraints
-        return {
-            "protein": getattr(totals_obj, "protein_g", 0),
-            "carbs": getattr(totals_obj, "carbs_g", 0),
-            "fat": getattr(totals_obj, "fat_g", 0),
-            "fiber": getattr(totals_obj, "fiber_g", 0),
-            "sugar": getattr(totals_obj, "sugar_g", 0),
-            "gl": getattr(totals_obj, "glycemic_load", 0),
-            "cal": getattr(totals_obj, "calories", 0)
-        }
+        # return {
+        #     "protein": getattr(totals_obj, "protein_g", 0),
+        #     "carbs": getattr(totals_obj, "carbs_g", 0),
+        #     "fat": getattr(totals_obj, "fat_g", 0),
+        #     "fiber": getattr(totals_obj, "fiber_g", 0),
+        #     "sugar": getattr(totals_obj, "sugar_g", 0),
+        #     "gl": getattr(totals_obj, "glycemic_load", 0),
+        #     "cal": getattr(totals_obj, "calories", 0)
+        # }
     
     def _check_violations(self, totals: Dict[str, float]) -> List[str]:
         """

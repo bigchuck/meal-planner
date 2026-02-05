@@ -58,7 +58,7 @@ class PreScoreFilter:
             Tuple of (passed_candidates, rejected_candidates)
         """
         filtered = []
-        filtered_out = []
+        rejected = []
         
         for candidate in candidates:
             # Initialize rejection reasons if not present
@@ -99,12 +99,12 @@ class PreScoreFilter:
                     filtered.append(candidate)
                 else:
                     # Reject immediately (current behavior)
-                    filtered_out.append(candidate)
+                    rejected.append(candidate)
             else:
                 candidate["filter_passed"] = True
                 filtered.append(candidate)
 
-        return filtered, filtered_out    
+        return filtered, rejected    
 
     def _extract_codes(self, candidate: Dict[str, Any]) -> Set[str]:
         """
@@ -117,7 +117,7 @@ class PreScoreFilter:
             Set of uppercase food codes
         """
         codes = set()
-        items = candidate.get("items", [])
+        items = candidate.get("meal", {}).get("items", [])
         
         for item in items:
             if "code" in item:

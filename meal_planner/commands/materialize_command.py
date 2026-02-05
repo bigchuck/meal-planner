@@ -412,7 +412,7 @@ class MaterializeCommand(Command):
             components, multiplier
         )
 
-        print(f"DEBUG: nutrition_data\n{nutrition_data}")
+        # print(f"DEBUG: nutrition_data\n{nutrition_data}")
         
         if not nutrition_data:
             print("\nError: Could not calculate nutrition (invalid components)")
@@ -442,7 +442,7 @@ class MaterializeCommand(Command):
         # Create nutrients entry if manager exists
         if self.ctx.master:
             nutrients_data = self._calculate_alias_nutrients(components, multiplier)
-            print(f"DEBUG: nutrients_data\n{nutrients_data}")
+            # print(f"DEBUG: nutrients_data\n{nutrients_data}")
             if nutrients_data:
                 self._add_nutrients_entry(target_code, nutrients_data)
         

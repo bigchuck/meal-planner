@@ -282,7 +282,7 @@ class WorkspaceManager:
                 "created": candidate.get("created"),
                 "meal_name": candidate.get("meal_name"),
                 "type": candidate.get("type"),
-                "items": candidate.get("items", []),
+                "items": candidate.get("meal", {}).get("items", []),
                 "totals": candidate.get("totals", {}),
                 "source_date": candidate.get("source_date"),
                 "source_time": candidate.get("source_time"),
@@ -485,7 +485,7 @@ class WorkspaceManager:
         Get generated candidates section from reco workspace.
         
         Returns:
-            Dict with meal_type, generated_at, raw, filtered
+            Dict with meal_type, generated_at, candidates list
             None if no generated candidates exist
         """
         reco_workspace = self.load_reco()
@@ -493,55 +493,72 @@ class WorkspaceManager:
         return gen_cands if gen_cands else None
 
     def set_generated_candidates(
-        self,
-        meal_type: str,
-        raw_candidates: List[Dict[str, Any]]
-    ) -> None:
+            self,
+            meal_type: str,
+            raw_candidates: List[Dict[str, Any]],
+            cursor: int = 0,
+            append: bool = False
+        ) -> None:
         """
-        Set generated candidates in reco workspace (replaces existing).
-        Assigns G-IDs to each candidate.
+        Set or append generated candidates in reco workspace.
+        Assigns G-IDs and creates unified structure with subordinate dicts.
         
         Args:
             meal_type: Meal category (breakfast, lunch, etc.)
             raw_candidates: List of raw generated candidate dicts (without IDs)
+            cursor: Starting ID number (0 = start at G1, 5 = start at G6)
+            append: If True, append to existing candidates; if False, replace
         """
         reco_workspace = self.load_reco()
         
-        # Assign IDs to candidates (G1, G2, G3, ...)
-        for i, candidate in enumerate(raw_candidates, 1):
-            candidate["id"] = f"G{i}"
-            if not candidate.get("meal_name"):
-                candidate["meal_name"] = meal_type
+        # Get existing candidates if appending
+        existing_candidates = []
+        if append and "generated_candidates" in reco_workspace:
+            existing_candidates = reco_workspace["generated_candidates"].get("candidates", [])
         
-        reco_workspace["generated_candidates"] = {
-            "meal_type": meal_type,
-            "generated_at": datetime.now().isoformat(),
-            "next_id": len(raw_candidates) + 1,
-            "raw": raw_candidates,
-            "filtered": []
-        }
+        # Transform to unified structure
+        unified_candidates = []
+        for i, raw_cand in enumerate(raw_candidates, 1):
+            # Extract meal data
+            meal_data = {
+                "items": raw_cand.get("items", []),
+                "totals": raw_cand.get("totals", {}),
+                "meal_type": raw_cand.get("meal_type", meal_type),
+                "source_date": raw_cand.get("source_date"),
+                "description": raw_cand.get("description", "")
+            }
+            
+            # Extract generation metadata
+            gen_metadata = {
+                "method": raw_cand.get("generation_method", "unknown"),
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Add template info if present
+            if "template_info" in raw_cand:
+                gen_metadata["template_info"] = raw_cand["template_info"]
+            
+            # Create unified candidate with cursor-based ID
+            unified = {
+                "id": f"G{cursor + i}",  # Use cursor for ID offset
+                "meal": meal_data,
+                "generation_metadata": gen_metadata,
+                "filter_result": None,  # Until filtered
+                "score_result": None    # Until scored
+            }
+            
+            unified_candidates.append(unified)
         
-        self.save_reco(reco_workspace)
-
-    def update_filtered_candidates(
-        self,
-        filtered_candidates: List[Dict[str, Any]],
-        filtered_out_candidates: List[Dict[str, Any]]
-    ) -> None:
-        """
-        Update filtered candidates list (after pre-score filtering).
+        # Combine with existing if appending
+        all_candidates = existing_candidates + unified_candidates if append else unified_candidates
         
-        Args:
-            filtered_candidates: List of candidates that passed filters
-            filtered_out_candidates: List of candidates that were rejected
-        """
-        reco_workspace = self.load_reco()
-        
+        # Ensure generated_candidates exists
         if "generated_candidates" not in reco_workspace:
-            raise ValueError("No generated candidates to filter")
+            reco_workspace["generated_candidates"] = {}
         
-        reco_workspace["generated_candidates"]["filtered"] = filtered_candidates
-        reco_workspace["generated_candidates"]["filtered_out"] = filtered_out_candidates
+        # Set just the candidates array
+        reco_workspace["generated_candidates"]["candidates"] = all_candidates
+        reco_workspace["generated_candidates"]["meal_type"] = meal_type
         
         self.save_reco(reco_workspace)
 
@@ -564,69 +581,26 @@ class WorkspaceManager:
         return "generated_candidates" in reco_workspace
 
     def get_raw_candidates_count(self) -> int:
-        """Get count of raw generated candidates."""
+        """Get count of all candidates."""
         gen_cands = self.get_generated_candidates()
         if not gen_cands:
             return 0
-        return len(gen_cands.get("raw", []))
+        return len(gen_cands.get("candidates", []))
 
     def get_filtered_candidates_count(self) -> int:
-        """Get count of filtered candidates."""
+        """Get count of filtered (passed) candidates."""
         gen_cands = self.get_generated_candidates()
         if not gen_cands:
             return 0
-        return len(gen_cands.get("filtered", []))
-     
-    def update_scored_candidates(
-        self,
-        scored_candidates: List[Dict[str, Any]]
-    ) -> None:
-        """
-        Update scored candidates list (after batch scoring).
-        
-        Args:
-            scored_candidates: List of candidates with scores and analysis
-        """
-        reco_workspace = self.load_reco()
-        
-        if "generated_candidates" not in reco_workspace:
-            raise ValueError("No generated candidates to score")
-        
-        reco_workspace["generated_candidates"]["scored"] = scored_candidates
-        
-        self.save_reco(reco_workspace)
-    
+        candidates = gen_cands.get("candidates", [])
+        return sum(1 for c in candidates 
+                if c.get("filter_result", {}).get("passed", False))
+
     def get_scored_candidates_count(self) -> int:
         """Get count of scored candidates."""
         gen_cands = self.get_generated_candidates()
         if not gen_cands:
             return 0
-        return len(gen_cands.get("scored", []))
+        candidates = gen_cands.get("candidates", [])
+        return sum(1 for c in candidates if c.get("score_result") is not None)
     
-    def clear_scored_candidates(self) -> None:
-        """Clear only scored candidates from reco workspace."""
-        reco_workspace = self.load_reco()
-        
-        if "generated_candidates" in reco_workspace:
-            reco_workspace["generated_candidates"]["scored"] = []
-            self.save_reco(reco_workspace)
-
-    def set_filtered_candidates(self, filtered_candidates: List[Dict[str, Any]], 
-                                rejected_candidates: List[Dict[str, Any]] = None) -> None:
-        """
-        Save filtered candidates to reco workspace.
-        
-        Args:
-            filtered_candidates: Candidates that passed filters
-            rejected_candidates: Candidates that were rejected
-        """
-        reco_workspace = self.load_reco()
-        
-        gen_cands = reco_workspace.get("generated_candidates", {})
-        gen_cands["filtered"] = filtered_candidates
-        
-        if rejected_candidates:
-            gen_cands["rejected"] = gen_cands.get("rejected", []) + rejected_candidates
-        
-        reco_workspace["generated_candidates"] = gen_cands
-        self.save_reco(reco_workspace)

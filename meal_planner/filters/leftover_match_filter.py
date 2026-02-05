@@ -114,7 +114,7 @@ class LeftoverMatchFilter:
         leftover_items = {}
         leftovers = self.inventory.get("leftovers", {})
         
-        for item in candidate.get("items", []):
+        for item in candidate.get("meal", {}).get("items", []):
             code = item.get("code", "").upper()
             mult = item.get("mult", 1.0)
             
