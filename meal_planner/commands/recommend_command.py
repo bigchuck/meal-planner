@@ -613,17 +613,12 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 "weighted": result.get_weighted_score(weight),
                 "details": result.details
             }
-            if candidate_id == "G4444":
-                print(f"\n\nDEBUG: scorer_name\n{scorer_name}")
-                print(f"\n\nDEBUG: scorer_results[scorer_name]\n{scorer_results[scorer_name]}")
         
         # Calculate aggregate score
         aggregate_score = sum(
             scorer_results[name]["weighted"]
             for name in scorer_results
         )
-        if candidate_id == "G4444":
-            print(f"\nDEBUG: aggregate_score\n{aggregate_score}")
         
         # Return score data only (not the candidate)
         return {

@@ -147,14 +147,6 @@ class NutrientConstraintFilter:
             totals = self._calculate_totals(candidate)
             # Check against all constraints
             violations = self._check_violations(totals)
-            if candidate.get("id") == "G4444":
-                items = candidate.get("items", [])
-                for item in items:
-                    code = str(item["code"]).upper()
-                    mult = float(item.get("mult", 1.0))
-                    food = self.master.lookup_code(code)
-                    protein = food.get("prot_g", 0) * mult
-            
             if violations:
                 # Add rejection reasons
                 candidate["rejection_reasons"].extend(
