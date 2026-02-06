@@ -6,6 +6,8 @@ Enforces hard and soft nutrient limits from meal_generation templates.
 """
 from typing import List, Dict, Any, Tuple, Optional
 from .base_filter import BaseFilter
+from meal_planner.utils.nutrient_mapping import init_totals_dict, get_filter_totals_mapping, get_nutrient_spec
+
 
 
 class NutrientConstraintFilter(BaseFilter):
@@ -176,44 +178,26 @@ class NutrientConstraintFilter(BaseFilter):
         
         return passed, rejected    
 
-    def _calculate_totals(self, candidate: Dict[str, Any]) -> Dict[str, float]:
-        """
-        Calculate nutrient totals for a candidate.
-        
-        Args:
-            candidate: Candidate dict with items list
-        
-        Returns:
-            Dict mapping nutrient names to total values
-        """
-        # Access items from nested meal structure (unified format)
+    def _calculate_totals(self, candidate):
         items = candidate.get("meal", {}).get("items", [])
         if not items:
             return {}
         
-        totals_dict = {
-            "protein": 0, 
-            "carbs": 0, 
-            "fat": 0, 
-            "fiber": 0, 
-            "sugar": 0, 
-            "gl": 0, 
-            "cal": 0
-        }
+        # Initialize with correct keys from utils
+        totals_dict = init_totals_dict()  # Returns {"calories": 0, "protein": 0, ...}
+        
+        # Get mapping from template keys to CSV keys
+        csv_mapping = get_filter_totals_mapping()  # {"calories": "cal", "protein": "prot_g", ...}
         
         for item in items:
             code = str(item["code"]).upper()
             mult = float(item.get("mult", 1.0))
             food = self.master.lookup_code(code)
             
-            totals_dict["protein"] += food.get("prot_g", 0) * mult
-            totals_dict["carbs"] += food.get("carbs_g", 0) * mult
-            totals_dict["fat"] += food.get("fat_g", 0) * mult
-            totals_dict["fiber"] += food.get("fiber_g", 0) * mult
-            totals_dict["sugar"] += food.get("sugar_g", 0) * mult
-            totals_dict["gl"] += food.get("GL", 0) * mult
-            totals_dict["cal"] += food.get("cal", 0) * mult
-    
+            # Use mapping to accumulate - no more hardcoded keys
+            for template_key, csv_key in csv_mapping.items():
+                totals_dict[template_key] += food.get(csv_key, 0) * mult
+        
         return totals_dict
     
     def _check_violations(self, totals: Dict[str, float]) -> List[str]:

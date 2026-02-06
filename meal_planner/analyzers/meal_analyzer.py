@@ -11,6 +11,7 @@ from meal_planner.models.analysis_result import (
 )
 from meal_planner.models.daily_totals import DailyTotals
 from meal_planner.reports.report_builder import ReportBuilder
+from meal_planner.utils.nutrient_mapping import get_analyzer_mapping
 
 
 class MealAnalyzer:
@@ -110,38 +111,19 @@ class MealAnalyzer:
             current = current[part]
         
         return current if isinstance(current, dict) else None
-    
-    def _find_gaps(self, totals: DailyTotals, template: Dict[str, Any]) -> List[NutrientGap]:
-        """
-        Find nutrient deficits relative to template targets.
-        
-        Args:
-            totals: Meal nutritional totals
-            template: Template with targets
-        
-        Returns:
-            List of NutrientGap objects
-        """
+
+
+    def _find_gaps_NEW(self, totals, template):
         gaps = []
         targets = template.get("targets", {})
         
-        # Map template nutrient keys to DailyTotals attributes
-        # Get priorities from config, with fallback defaults
+        # GET MAPPING FROM UTILS - single source of truth
         priorities = self.thresholds.thresholds.get("nutrient_priorities", {}) if self.thresholds else {}
-
-        nutrient_mapping = {
-            "protein": ("protein_g", "g", priorities.get("protein", 1)),
-            "carbs": ("carbs_g", "g", priorities.get("carbs", 2)),
-            "fat": ("fat_g", "g", priorities.get("fat", 2)),
-            "fiber": ("fiber_g", "g", priorities.get("fiber", 2)),
-            "gl": ("glycemic_load", "", priorities.get("gl", 2)),
-            "calories": ("calories", "", priorities.get("calories", 2))
-        }
+        nutrient_mapping = get_analyzer_mapping(priorities)
         
         for template_key, target_def in targets.items():
             if template_key not in nutrient_mapping:
                 continue
-            
             attr_name, unit, priority = nutrient_mapping[template_key]
             current_value = getattr(totals, attr_name, 0.0)
             
@@ -165,41 +147,25 @@ class MealAnalyzer:
                     )
                     gaps.append(gap)
         
-        # Sort by priority (lower number = higher priority)
         gaps.sort(key=lambda g: (g.priority, -g.deficit))
-        
         return gaps
-    
+
     def _find_excesses(self, totals: DailyTotals, template: Dict[str, Any]) -> List[NutrientExcess]:
-        """
-        Find nutrient surpluses relative to template thresholds.
-        
-        Args:
-            totals: Meal nutritional totals
-            template: Template with targets
-        
-        Returns:
-            List of NutrientExcess objects
-        """
+        """Find nutrient surpluses relative to template thresholds."""
         excesses = []
+
         targets = template.get("targets", {})
         
-        # Map template nutrient keys to DailyTotals attributes
-        nutrient_mapping = {
-            "protein": ("protein_g", "g", 2),
-            "carbs": ("carbs_g", "g", 2),
-            "fat": ("fat_g", "g", 2),
-            "gl": ("glycemic_load", "", 1),
-            "calories": ("calories", "", 2)
-        }
+        # GET MAPPING FROM UTILS - single source of truth
+        priorities = self.thresholds.thresholds.get("nutrient_priorities", {}) if self.thresholds else {}
+        nutrient_mapping = get_analyzer_mapping(priorities)
         
         for template_key, target_def in targets.items():
             if template_key not in nutrient_mapping:
                 continue
-            
             attr_name, unit, priority = nutrient_mapping[template_key]
             current_value = getattr(totals, attr_name, 0.0)
-            
+
             # Check for maximum threshold
             if "max" in target_def:
                 max_val = target_def["max"]
@@ -216,10 +182,9 @@ class MealAnalyzer:
                     )
                     excesses.append(excess)
         
-        # Sort by priority (lower number = higher priority)
         excesses.sort(key=lambda e: (e.priority, -e.overage))
-        
         return excesses
+
     
     def calculate_daily_context(self, pending_items: List[Dict[str, Any]], 
                                 current_meal_name: str) -> DailyContext:

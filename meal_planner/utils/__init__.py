@@ -23,4 +23,12 @@ __all__ = [
     'UsageTracker',
     'render_explanation',
     'list_available_topics',
+    'get_totals_dict_keys',
+    'get_analyzer_mapping',
+    'get_filter_totals_mapping',
+    'init_totals_dict',
+    'validate_template_targets',
+    'get_all_template_keys',
+    'get_display_name',
+    'get_unit',
 ]

@@ -180,6 +180,10 @@ class Report:
               f"F: {int(rounded.fat_g)} g | "
               f"Sugars: {int(rounded.sugar_g)} g | "
               f"GL: {int(rounded.glycemic_load)}")
+        # Add nutrient totals if available
+        nutrient_line = self.format_nutrient_totals()
+        if nutrient_line:
+            print(f"Micros = {nutrient_line}")
         
         if self.missing:
             print(f"Missing (not counted): {', '.join(self.missing)}")
@@ -407,3 +411,33 @@ class Report:
         
         # Build line: CODE xMULT - Description
         return f"  {row.code} x{mult_str} - {row.option}"
+    
+    def format_nutrient_totals(self) -> str:
+        """
+        Format nutrient totals line similar to macros.
+        
+        Returns:
+            Formatted string like: "Fiber: 25g | Na: 2300mg | K: 3500mg | VitA: 900mcg | VitC: 90mg | Fe: 18mg"
+        """
+        t = self.totals.rounded()
+        
+        parts = []
+        
+        # Only include non-zero values
+        if t.fiber_g > 0:
+            parts.append(f"Fiber: {int(t.fiber_g)}g")
+        if t.sodium_mg > 0:
+            parts.append(f"Na: {int(t.sodium_mg)}mg")
+        if t.potassium_mg > 0:
+            parts.append(f"K: {int(t.potassium_mg)}mg")
+        if t.vitA_mcg > 0:
+            parts.append(f"VitA: {int(t.vitA_mcg)}mcg")
+        if t.vitC_mg > 0:
+            parts.append(f"VitC: {int(t.vitC_mg)}mg")
+        if t.iron_mg > 0:
+            parts.append(f"Fe: {int(t.iron_mg)}mg")
+        
+        if not parts:
+            return ""
+        
+        return " | ".join(parts)

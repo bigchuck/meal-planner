@@ -815,3 +815,64 @@ class MasterLoader:
         """
         code_upper = code.upper()
         return self._master_dict.get(code_upper)
+    
+    def get_nutrients(self, code: str) -> Optional[Dict[str, float]]:
+        """
+        Get micronutrients for a code.
+        
+        Args:
+            code: Meal code
+        
+        Returns:
+            Dict with nutrient keys (fiber_g, sodium_mg, etc.) or None
+        """
+        if not self._master_dict:
+            self.load()
+        
+        code_upper = code.upper()
+        entry = self._master_dict.get(code_upper)
+        
+        if not entry:
+            return None
+        
+        nutrients = entry.get('nutrients', {})
+        return nutrients if nutrients else None
+
+
+    def has_nutrients(self, code: str) -> bool:
+        """
+        Check if a code has micronutrient data.
+        
+        Args:
+            code: Meal code
+        
+        Returns:
+            True if code has nutrients defined, False otherwise
+        """
+        nutrients = self.get_nutrients(code)
+        return nutrients is not None and len(nutrients) > 0
+
+
+    def get_available_nutrients(self) -> list:
+        """
+        Get list of nutrient keys that have data in master.
+        
+        Returns:
+            List of nutrient field names (e.g., ['fiber_g', 'sodium_mg', ...])
+        """
+        if not self._master_dict:
+            self.load()
+        
+        # Check a few entries to see what nutrients are available
+        nutrient_keys = set()
+        for entry in list(self._master_dict.values())[:100]:  # Sample first 100
+            nutrients = entry.get('nutrients', {})
+            nutrient_keys.update(nutrients.keys())
+        
+        if not nutrient_keys:
+            return []
+        
+        # Return in standard order
+        standard_order = ['fiber_g', 'sodium_mg', 'potassium_mg', 
+                        'vitA_mcg', 'vitC_mg', 'iron_mg']
+        return [k for k in standard_order if k in nutrient_keys]
