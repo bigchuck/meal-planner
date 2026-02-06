@@ -134,7 +134,8 @@ class MealAnalyzer:
             "carbs": ("carbs_g", "g", priorities.get("carbs", 2)),
             "fat": ("fat_g", "g", priorities.get("fat", 2)),
             "fiber": ("fiber_g", "g", priorities.get("fiber", 2)),
-            "gl": ("glycemic_load", "", priorities.get("gl", 2))
+            "gl": ("glycemic_load", "", priorities.get("gl", 2)),
+            "calories": ("calories", "", priorities.get("calories", 2))
         }
         
         for template_key, target_def in targets.items():
@@ -188,7 +189,8 @@ class MealAnalyzer:
             "protein": ("protein_g", "g", 2),
             "carbs": ("carbs_g", "g", 2),
             "fat": ("fat_g", "g", 2),
-            "gl": ("glycemic_load", "", 1)
+            "gl": ("glycemic_load", "", 1),
+            "calories": ("calories", "", 2)
         }
         
         for template_key, target_def in targets.items():
