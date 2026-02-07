@@ -798,60 +798,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         return context
 
-
-    def _score_meal(self, context: 'ScoringContext') -> None:
-        """Score and display results for a meal."""
-        
-        # Display header
-        meal_display = context.meal_id if context.meal_id else "pending"
-        print(f"\nScoring meal: {meal_display} ({context.meal_category})")
-        
-        # Show template being used
-        if context.template_path:
-            print(f"Template: {context.template_path}")
-        
-        print(f"Items: {context.item_count()}")
-        
-        if context.totals:
-            cal = context.totals.get('cal', 0)
-            prot = context.totals.get('prot_g', 0)
-            carbs = context.totals.get('carbs_g', 0)
-            fat = context.totals.get('fat_g', 0)
-            print(f"Total: {cal:.0f} cal, {prot:.0f}g prot, {carbs:.0f}g carbs, {fat:.0f}g fat")
-        print()
-        
-        # Run each scorer
-        scorer_results = []
-        weights = self.ctx.thresholds.get_recommendation_weights()
-        
-        for scorer_name, scorer in self.ctx.scorers.items():
-            result = scorer.calculate_score(context)
-            scorer_results.append(result)
-            
-            weight = weights.get(scorer_name, 0.0)
-            weighted = result.get_weighted_score(weight)
-            
-            print(f"=== {scorer_name.upper()} ===")
-            print(f"Raw Score: {result.raw_score:.3f}")
-            print(f"Weight: {weight:.1f}")
-            print(f"Weighted Score: {weighted:.3f}")
-            print()
-            
-            # Display details
-            if result.details:
-                self._display_scorer_details(scorer_name, result.details)
-            print()
-        
-        # Calculate aggregate
-        final_score = sum(
-            r.get_weighted_score(weights.get(r.scorer_name, 0.0))
-            for r in scorer_results
-        )
-        
-        print(f"=== AGGREGATE SCORE ===")
-        print(f"Final Score: {final_score:.3f}")
-        print()
-
     def _display_scorer_details(self, scorer_name: str, details: Dict[str, Any]) -> None:
         """Display scorer-specific details."""
         if scorer_name == "nutrient_gap":

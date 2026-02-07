@@ -113,7 +113,7 @@ class MealAnalyzer:
         return current if isinstance(current, dict) else None
 
 
-    def _find_gaps_NEW(self, totals, template):
+    def _find_gaps(self, totals, template):
         gaps = []
         targets = template.get("targets", {})
         

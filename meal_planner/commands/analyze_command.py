@@ -239,7 +239,7 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
             self.ctx.save_workspace()
         
         # Get meal data
-        items = candidate.get("meal", {}).get("items", [])
+        items = candidate.get("items", [])
         meal_name = candidate.get("meal_name", "meal")
         meal_id = candidate.get("id")
         meal_description = candidate.get("description")
