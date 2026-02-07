@@ -16,7 +16,13 @@ from meal_planner.models.scoring_context import MealLocation, ScoringContext
 from meal_planner.generators.history_meal_generator import HistoryMealGenerator
 from meal_planner.models.scoring_context import ScoringContext, MealLocation
 from meal_planner.reports.report_builder import ReportBuilder
-
+from meal_planner.filters import (
+    NutrientConstraintFilter,
+    PreScoreFilter,
+    LeftoverMatchFilter,
+    MutualExclusionFilter,
+    ConditionalRequirementFilter
+)
 import pandas as pd        
 
 @register_command
@@ -1253,12 +1259,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
         Returns:
             List of (name, instance, config) tuples
         """
-        from meal_planner.filters import (
-            NutrientConstraintFilter,
-            PreScoreFilter,
-            LeftoverMatchFilter
-        )
-        
         filters = []
         
         # Filter 1: Nutrient Constraints
@@ -1284,7 +1284,42 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 }
             ))
         
-        # Filter 2: Pre-Score (locks, availability, inventory checks)
+        # Filter 2: Mutual Exclusion (NEW)
+        meal_filters = self._get_meal_filters(meal_type)
+        exclusion_rules = meal_filters.get("mutual_exclusions", [])
+        
+        if exclusion_rules:
+            mutual_exclusion_filter = MutualExclusionFilter(
+                meal_type=meal_type,
+                thresholds_mgr=self.ctx.thresholds,
+                exclusion_rules=exclusion_rules
+            )
+            mutual_exclusion_filter.set_collect_all(collect_all)
+            
+            filters.append((
+                "Mutual Exclusion",
+                mutual_exclusion_filter,
+                {"warn_if_missing": False}
+            ))
+        
+        # Filter 3: Conditional Requirements (NEW)
+        requirement_rules = meal_filters.get("conditional_requirements", [])
+        
+        if requirement_rules:
+            conditional_req_filter = ConditionalRequirementFilter(
+                meal_type=meal_type,
+                thresholds_mgr=self.ctx.thresholds,
+                requirement_rules=requirement_rules
+            )
+            conditional_req_filter.set_collect_all(collect_all)
+            
+            filters.append((
+                "Conditional Requirements",
+                conditional_req_filter,
+                {"warn_if_missing": False}
+            ))
+        
+        # Filter 4: Pre-Score (locks, availability, inventory checks)
         prescore_filter = PreScoreFilter(
             locks=locks,
             meal_type=meal_type,
@@ -1299,7 +1334,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
             {"warn_if_missing": False}
         ))
         
-        # Filter 3: Leftover Matching
+        # Filter 5: Leftover Matching
         leftover_filter = LeftoverMatchFilter(
             inventory=inventory,
             allow_under_use=False
@@ -1313,7 +1348,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
         ))
         
         return filters
-
 
     def _apply_filter_results(
         self,
@@ -3202,3 +3236,25 @@ class RecommendCommand(Command, CommandHistoryMixin):
                     print(f"  {reason:<25} {count:>5} candidates")
             
             print()
+
+    def _get_meal_filters(self, meal_type: str) -> Dict[str, Any]:
+        """
+        Get meal_filters section for specific meal type from config.
+        
+        Args:
+            meal_type: Meal category (breakfast, lunch, dinner, etc.)
+        
+        Returns:
+            Dict with 'mutual_exclusions' and 'conditional_requirements' lists,
+            or empty dict with empty lists if not configured
+        """
+        if not self.ctx.thresholds or not self.ctx.thresholds.is_valid:
+            return {"mutual_exclusions": [], "conditional_requirements": []}
+        
+        meal_filters = self.ctx.thresholds.thresholds.get("meal_filters", {})
+        meal_type_filters = meal_filters.get(meal_type, {})
+        
+        return {
+            "mutual_exclusions": meal_type_filters.get("mutual_exclusions", []),
+            "conditional_requirements": meal_type_filters.get("conditional_requirements", [])
+        }

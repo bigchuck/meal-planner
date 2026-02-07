@@ -62,7 +62,16 @@ class NutrientConstraintFilter(BaseFilter):
         Returns:
             Dict mapping nutrient -> resolved constraint spec, or None if not available
         """
-        # Get the generation template
+        # Get enforcement policies from meal_filters (NEW LOCATION)
+        meal_filters = self.thresholds_mgr.thresholds.get("meal_filters", {})
+        meal_type_filters = meal_filters.get(self.meal_type, {})
+        nutrient_constraints_section = meal_type_filters.get("nutrient_constraints", {})
+        nutrient_constraints = nutrient_constraints_section.get(self.template_name, {})
+        
+        if not nutrient_constraints:
+            return None  # No constraints to enforce
+        
+        # Get targets_ref from generation template
         meal_gen = self.thresholds_mgr.get_meal_generation()
         if not meal_gen:
             return None
@@ -70,13 +79,6 @@ class NutrientConstraintFilter(BaseFilter):
         gen_template = meal_gen.get(self.meal_type, {}).get(self.template_name)
         if not gen_template:
             return None
-        
-        # Get enforcement policies from constraints.nutrient_constraints
-        constraints = gen_template.get("constraints", {})
-        nutrient_constraints = constraints.get("nutrient_constraints", {})
-        
-        if not nutrient_constraints:
-            return None  # No constraints to enforce
         
         # Get targets_ref to find the meal_template
         targets_ref = gen_template.get("targets_ref")
