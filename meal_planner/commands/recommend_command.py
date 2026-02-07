@@ -2424,7 +2424,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
             "description": description if description else candidate.get("description", ""),
             "analyzed_as": candidate.get("analyzed_as"),
             "created": datetime.now().isoformat(),
-            "meal_name": candidate.get("meal_name"),
+            "meal_name": candidate.get("meal").get("meal_type").upper(),
             "type": "recommendation",
             "items": candidate_items,
             "totals": candidate.get("totals", {}),

@@ -361,7 +361,7 @@ Subcommands:
             meals_by_type[meal_type].append(c)  
         
         print("\n=== Planning Workspace ===\n")
-        
+
         for meal_type in sorted(meals_by_type.keys()):
             candidates = meals_by_type[meal_type]
             print(f"{meal_type.upper()}:")
