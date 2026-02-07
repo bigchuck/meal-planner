@@ -157,9 +157,6 @@ class NutrientGapScorer(Scorer):
             # Deficit of 50% = half weight penalty
             raw_penalty = deficit_pct * weight
             
-            # Normalize to reasonable scale (cap at priority weight)
-            normalized_penalty = min(weight * 0.2, raw_penalty * 0.2)  # Scale down
-            
             penalties.append({
                 "nutrient": gap.nutrient,
                 "current": gap.current,
@@ -169,7 +166,7 @@ class NutrientGapScorer(Scorer):
                 "deficit_pct": deficit_pct,
                 "priority": priority,
                 "weight": weight,
-                "penalty": normalized_penalty,
+                "penalty": raw_penalty,
                 "unit": gap.unit
             })
         
@@ -209,7 +206,6 @@ class NutrientGapScorer(Scorer):
             
             # Calculate penalty
             raw_penalty = overage_pct * excess_weight
-            normalized_penalty = min(excess_weight * 0.15, raw_penalty * 0.15)  # Scale down
             
             penalties.append({
                 "nutrient": excess.nutrient,
@@ -217,7 +213,7 @@ class NutrientGapScorer(Scorer):
                 "threshold": threshold,
                 "overage": excess.overage,
                 "overage_pct": overage_pct,
-                "penalty": normalized_penalty,
+                "penalty": raw_penalty,
                 "unit": excess.unit
             })
         
