@@ -154,137 +154,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("  7. recommend discard             # Clean up when done")
         print()
 
-    def _score(self, args: List[str]) -> None:
-        """
-        Debug scorer output for a meal.
-        
-        Args:
-            args: [meal_id, optional --meal flag]
-        
-        Examples:
-            recommend score 123a
-            recommend score N1
-            recommend score pending --meal breakfast
-        """
-        if not args:
-            print("\nUsage: recommend score <meal_id>")
-            print("\nExamples:")
-            print("  recommend score 123a")
-            print("  recommend score N1")
-            print("  recommend score pending --meal breakfast")
-            print()
-            return
-        
-        # Check dependencies
-        if not self.ctx.scorers:
-            print("\nScorer system not initialized")
-            print("Check meal_plan_config.json and user preferences")
-            print()
-            return
-        
-        # Parse meal_id
-        meal_id = args[0]
-        meal_category = None
-        
-        # Check for --meal flag (for pending)
-        if len(args) >= 3 and args[1] == "--meal":
-            meal_category = args[2]
-        
-        # Build scoring context
-        context = self._build_scoring_context(meal_id, meal_category)
-        if not context:
-            return
-        
-        # Score the meal
-        self._score_meal(context)
-
-    def _build_scoring_context(self, meal_id: str, meal_category: Optional[str]) -> Optional[ScoringContext]:
-        """Build scoring context from meal ID."""
-
-        # Determine location and get items
-        if meal_id.lower() == "pending":
-            location = MealLocation.PENDING
-            
-            # Get pending items for meal_category
-            if not meal_category:
-                print("\nError: --meal required for pending")
-                print("Example: recommend score pending --meal breakfast")
-                print()
-                return None
-            
-            # Extract items for this meal from pending
-            pending = self.ctx.pending.load()
-            if not pending or not pending.get('items'):
-                print(f"\nNo pending items for {meal_category}")
-                print()
-                return None
-            
-            # Extract items for target meal
-            items = self._extract_pending_meal_items(pending['items'], meal_category)
-            
-            if not items:
-                print(f"\nNo items found for pending {meal_category}")
-                print()
-                return None
-            
-            meal_id_str = None  # Pending doesn't have persistent ID
-            
-        else:
-            location = MealLocation.WORKSPACE
-            
-            # Get workspace meal by ID
-            ws = self.ctx.planning_workspace
-            meal = None
-            
-            for candidate in ws['candidates']:
-                if candidate['id'].upper() == meal_id.upper():
-                    meal = candidate
-                    break
-            
-            if not meal:
-                print(f"\nMeal '{meal_id}' not found in workspace")
-                print("Use 'plan show' to see available meals")
-                print()
-                return None
-            
-            items = meal.get('items', [])
-            meal_category = meal.get('meal_name', 'unknown')
-            meal_id_str = meal['id']
-        
-        # Get template path
-        template_path = self._get_template_for_meal(meal_category)
-        
-        # Run analysis to get gaps/excesses
-        analyzer = MealAnalyzer(
-            self.ctx.master,
-            self.ctx.thresholds
-        )
-        
-        try:
-            analysis_result = analyzer.calculate_analysis(
-                items=items,
-                template_path=template_path,
-                meal_name=meal_category,
-                meal_id=meal_id_str
-            )
-        except Exception as e:
-            print(f"\nAnalysis error: {e}")
-            print()
-            return None
-        
-        # Build context
-        context = ScoringContext(
-            location=location,
-            meal_id=meal_id_str,
-            meal_category=meal_category,
-            template_path=template_path,
-            items=items,
-            totals=analysis_result.totals.to_dict() if hasattr(analysis_result.totals, 'to_dict') else {},
-            analysis_result=analysis_result
-        )
-        
-        return context
-
     def _score_meal(self, context: ScoringContext) -> None:
         """Score and display results for a meal."""
         
@@ -332,66 +201,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print(f"=== AGGREGATE SCORE ===")
         print(f"Final Score: {final_score:.3f}")
         print()
-
-    def _display_scorer_details(self, scorer_name: str, details: Dict[str, Any]) -> None:
-        """Display scorer-specific details."""
-        if scorer_name == "nutrient_gap":
-            self._display_nutrient_gap_details(details)
-
-    def _display_nutrient_gap_details(self, details: Dict[str, Any]) -> None:
-        """Display nutrient gap scorer details."""
-        print("Gap Analysis:")
-        
-        gap_count = details.get("gap_count", 0)
-        excess_count = details.get("excess_count", 0)
-        
-        print(f"  Gaps: {gap_count}")
-        
-        # Show gap penalties
-        gap_penalties = details.get("gap_penalties", [])
-        for gap in gap_penalties:
-            nutrient = gap["nutrient"]
-            current = gap["current"]
-            target = gap["target"]
-            deficit = gap["deficit"]
-            deficit_pct = gap["deficit_pct"]
-            priority = gap["priority"]
-            weight = gap["weight"]
-            penalty = gap["penalty"]
-            unit = gap.get("unit", "")
-            
-            print(f"    {nutrient}: {current:.1f}{unit} / {target:.1f}{unit} target "
-                f"(-{deficit:.1f}{unit}, {deficit_pct*100:.0f}% deficit)")
-            print(f"      Priority: {priority}, Weight: {weight:.1f}x, Penalty: {penalty:.2f}")
-        
-        print(f"\n  Excesses: {excess_count}")
-        
-        # Show excess penalties
-        excess_penalties = details.get("excess_penalties", [])
-        for excess in excess_penalties:
-            nutrient = excess["nutrient"]
-            current = excess["current"]
-            threshold = excess["threshold"]
-            overage = excess["overage"]
-            overage_pct = excess["overage_pct"]
-            penalty = excess["penalty"]
-            unit = excess.get("unit", "")
-            
-            print(f"    {nutrient}: {current:.1f}{unit} / {threshold:.1f}{unit} limit "
-                f"(+{overage:.1f}{unit}, {overage_pct*100:.0f}% over)")
-            print(f"      Penalty: {penalty:.2f}")
-        
-        # Show summary
-        total_gap_penalty = details.get("total_gap_penalty", 0.0)
-        total_excess_penalty = details.get("total_excess_penalty", 0.0)
-        bonus = details.get("perfect_match_bonus", 0.0)
-        
-        print(f"\n  Total Gap Penalty: {total_gap_penalty:.2f}")
-        print(f"  Total Excess Penalty: {total_excess_penalty:.2f}")
-        print(f"  Perfect Match Bonus: {bonus:.2f}")
-        print(f"  ")
-        print(f"  Base Score: {details.get('base_score', 1.0):.2f}")
-        print(f"  Final Score: {details.get('final_score', 0.0):.2f}")
 
     # =========================================================================
     # Scorer integration methods
@@ -840,7 +649,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
             
             # CLEANER: Just show current / target / deficit (no redundant %)
             print(f"    {nutrient}: {current:.1f}{unit} / {target_str} target (-{deficit:.1f}{unit})")
-            print(f"      Priority: {priority}, Weight: {weight:.1f}x, Penalty: {penalty:.2f}")
+            print(f"      Priority: {priority}, Weight: {weight:.3f}x, Penalty: {penalty:.3f}")
         
         print(f"\n  Excesses: {excess_count}")
         
