@@ -119,15 +119,14 @@ class NutrientGapScorer(Scorer):
         penalties = []
         
         # Get priority weights from config
-        config_nutrient_gap = self.config.get("scorers", {}).get("nutrient_gap", {}) 
-        gap_penalty_weights = config_nutrient_gap.get("gap_penalty_weights", {
-            1: 3.0,  # Highest priority (protein)
-            2: 2.0,  # Medium priority (fiber, carbs)
-            3: 0.001  # Lower priority (fat, other)
+        gap_penalty_weights = self.config.get("gap_penalty_weights", {
+            '1': 3.0,  # Highest priority (protein)
+            '2': 2.0,  # Medium priority (fiber, carbs)
+            '3': 1.0   # Lower priority (fat, other)
         })
-        
+
         # Tolerance for "close enough"
-        tolerance_pct = config_nutrient_gap.get("tolerance_pct", 0.10)  # 10% tolerance
+        tolerance_pct = self.config.get("tolerance_pct", 0.10)  # 10% tolerance
         
         for gap in gaps:
             # CRITICAL FIX: Skip if current value is within acceptable range
@@ -151,7 +150,7 @@ class NutrientGapScorer(Scorer):
             
             # Get priority weight
             priority = gap.priority
-            weight = gap_penalty_weights.get(priority, 1.0)
+            weight = gap_penalty_weights.get(str(priority), 1.0)
             
             # Calculate penalty (normalized to 0-1 scale)
             # Deficit of 100% = full weight penalty
@@ -187,12 +186,11 @@ class NutrientGapScorer(Scorer):
         """
         penalties = []
         
-        config_nutrient_gap = self.config.get("scorers", {}).get("nutrient_gap", {}) 
         # Excess penalty weight (lower than gap penalties)
-        excess_weight = config_nutrient_gap.get("excess_penalty_weight", 0.5)
+        excess_weight = self.config.get("excess_penalty_weight", 0.5)
         
         # Tolerance for excesses
-        tolerance_pct = config_nutrient_gap.get("tolerance_pct", 0.10)
+        tolerance_pct = self.config.get("tolerance_pct", 0.10)
         
         for excess in excesses:
             # Calculate overage as % of threshold
