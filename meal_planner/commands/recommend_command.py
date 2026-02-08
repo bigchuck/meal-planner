@@ -2813,8 +2813,6 @@ class RecommendCommand(Command, CommandHistoryMixin):
         if "generated_candidates" not in reco_workspace:
             reco_workspace["generated_candidates"] = {}
         
-        reco_workspace["generated_candidates"]["candidates"] = candidates
-        
         # Update generation state
         reco_workspace["generation_state"] = {
             "method": "history",
