@@ -119,7 +119,7 @@ class NutrientGapScorer(Scorer):
         penalties = []
         
         # Get priority weights from config
-        gap_penalty_weights = self.config.get("gap_penalty_weights", {
+        gap_penalty_weights = self.config.get("scorers", {}).get("nutrient_gap", {}).get("gap_penalty_weights", {
             1: 3.0,  # Highest priority (protein)
             2: 2.0,  # Medium priority (fiber, carbs)
             3: 1.0   # Lower priority (fat, other)
