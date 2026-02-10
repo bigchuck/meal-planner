@@ -84,6 +84,10 @@ class RecommendCommand(Command, CommandHistoryMixin):
             self._accept(subargs)
         elif subcommand == "debugdump":
             self._debugdump(subargs)
+        elif subcommand == "subset":
+            self._subset(subargs)
+        elif subcommand == "sort":
+            self._sort(subargs)
         else:
             print(f"\nUnknown subcommand: {subcommand}")
             self._help()
@@ -142,6 +146,9 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("  recommend accept <G-ID> [--as <id>] [--desc <text>]")
         print("  recommend discard [array]")
         print("    <array> := [raw|filtered|scored]")
+        print("  recommend discard view <name>|==all")
+        print("  recommend subset scored --where <expr> --name <view_name>")
+        print("  recommend sort <view_name> --keys \"field:dir[,field:dir,...]\"")
         print("  recommend debugdump <array> <filename>")
         print("    <array> := [raw|filtered|rejected|scored]")
         print("Pipeline flow:")
@@ -261,6 +268,18 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         # Handle --rescore: clear score_result
         if rescore:
+            # Check for views that will be invalidated
+            existing_views = reco_workspace.get("views", {})
+            if existing_views:
+                view_list = ", ".join(existing_views.keys())
+                print(f"\nWarning: {len(existing_views)} active view(s) will be cleared ({view_list})")
+                response = input("Continue? [y/N]: ").strip().lower()
+                if response != "y":
+                    print("\nCancelled")
+                    print()
+                    return
+                reco_workspace["views"] = {}
+            
             cleared_count = sum(1 for c in filtered_candidates 
                             if c.get("score_result") is not None)
             
@@ -2298,6 +2317,12 @@ class RecommendCommand(Command, CommandHistoryMixin):
             full_reset = True
         else:
             array_name = args[0].lower()
+            
+            # Handle view discard: recommend discard view <name>|==all
+            if array_name == "view":
+                self._discard_view(args[1:])
+                return
+            
             if array_name not in ['raw', 'filtered', 'scored']:
                 print(f"\nUnknown array: {array_name}")
                 print("Valid options: raw, filtered, scored")
@@ -2464,6 +2489,70 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 print("Note: Candidates remain in workspace. Use 'recommend discard' (no args) to delete all candidates.")
         
         print()
+
+    def _discard_view(self, args: List[str]) -> None:
+        """
+        Discard a specific view or all views.
+        
+        Usage:
+            recommend discard view <name>    # Discard specific view
+            recommend discard view ==all     # Discard all views
+        
+        Args:
+            args: [view_name | ==all]
+        """
+        if not args:
+            print("\nUsage: recommend discard view <name>|==all")
+            print()
+            return
+        
+        reco_workspace = self.ctx.workspace_mgr.load_reco()
+        views = reco_workspace.get("views", {})
+        
+        if not views:
+            print("\nNo views to discard")
+            print()
+            return
+        
+        target = args[0]
+        
+        if target == "==all":
+            view_count = len(views)
+            view_list = ", ".join(views.keys())
+            print(f"\nDiscard ALL {view_count} views: {view_list}")
+            print()
+            response = input("Type 'yes' to confirm: ").strip().lower()
+            if response != "yes":
+                print("\nCancelled")
+                print()
+                return
+            
+            reco_workspace["views"] = {}
+            self.ctx.workspace_mgr.save_reco(reco_workspace)
+            print(f"\nDiscarded {view_count} view(s)")
+            print()
+        else:
+            if target not in views:
+                print(f"\nError: view '{target}' not found")
+                available = ", ".join(views.keys()) if views else "(none)"
+                print(f"Available views: {available}")
+                print()
+                return
+            
+            view_info = views[target]
+            cand_count = len(view_info.get("candidate_ids", []))
+            print(f"\nDiscard view '{target}' ({cand_count} candidates, filter: {view_info.get('filter', '')})")
+            print()
+            response = input("Type 'yes' to confirm: ").strip().lower()
+            if response != "yes":
+                print("\nCancelled")
+                print()
+                return
+            
+            del views[target]
+            self.ctx.workspace_mgr.save_reco(reco_workspace)
+            print(f"\nDiscarded view '{target}'")
+            print()
 
     def _accept(self, args: List[str]) -> None:
         """
@@ -3124,7 +3213,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
 
         self.ctx.workspace_mgr.save_reco(reco_workspace)
         
-        print("\n✓ Generation session reset")
+        print("\nâœ“ Generation session reset")
         print("Ready for new generation with any method/meal combination")
         print()
     
@@ -3339,17 +3428,17 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         # Filtered (passed)
         filtered_pct = (filtered_count / total_count * 100) if total_count > 0 else 0
-        status_filtered = "→" if raw_count == 0 else " "
+        status_filtered = "-" if raw_count == 0 else " "
         print(f"{status_filtered} Filtered (passed)        {filtered_count:>8}  {filtered_pct:>5.1f}%")
         
         # Rejected
         rejected_pct = (rejected_count / total_count * 100) if total_count > 0 else 0
-        status_rejected = "→" if raw_count == 0 else " "
+        status_rejected = "-" if raw_count == 0 else " "
         print(f"{status_rejected} Rejected (failed)        {rejected_count:>8}  {rejected_pct:>5.1f}%")
         
         # Scored
         scored_pct = (scored_count / total_count * 100) if total_count > 0 else 0
-        status_scored = "→" if filtered_count > 0 and scored_count > 0 else " "
+        status_scored = "-" if filtered_count > 0 and scored_count > 0 else " "
         print(f"{status_scored} Scored (ranked)          {scored_count:>8}  {scored_pct:>5.1f}%")
         
         print("-" * 45)
@@ -3393,6 +3482,17 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 for reason, count in sorted(reason_counts.items(), key=lambda x: -x[1]):
                     print(f"  {reason:<25} {count:>5} candidates")
             
+            print()
+
+        # Show views if any exist
+        views = reco_workspace.get("views", {})
+        if views:
+            print(f"=== VIEWS ({len(views)}) ===")
+            print()
+            for vname, vdata in views.items():
+                cand_count = len(vdata.get("candidate_ids", []))
+                filt = vdata.get("filter", "")
+                print(f"  {vname:<20} {cand_count:>4} candidates  ({filt})")
             print()
 
     def _get_meal_filters(self, meal_type: str) -> Dict[str, Any]:
@@ -3538,6 +3638,244 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         return result
 
+
+    def _subset(self, args: List[str]) -> None:
+        """
+        Create a named view from scored candidates using a --where filter.
+        
+        Usage:
+            recommend subset scored --where "score>85" --name "finalists"
+            recommend subset scored --where "fiber>5 and score>80" --name "fiber_boost"
+            recommend subset scored --where "cal<500 or fat<15" --name "light"
+        
+        Both --where and --name are required. Source is always "scored".
+        
+        Args:
+            args: [scored] --where <expression> --name <view_name>
+        """
+        if not args:
+            print("\nUsage: recommend subset scored --where <expression> --name <view_name>")
+            print("\nExamples:")
+            print('  recommend subset scored --where "score>85" --name "finalists"')
+            print('  recommend subset scored --where "fiber>5 and cal<600" --name "fiber_boost"')
+            print()
+            return
+        
+        # First arg must be "scored"
+        source = args[0].lower()
+        if source != "scored":
+            print(f"\nError: subset source must be 'scored', got '{args[0]}'")
+            print()
+            return
+        
+        # Parse --where and --name flags
+        where_expr = None
+        view_name = None
+        
+        i = 1
+        while i < len(args):
+            if args[i] == "--where" and i + 1 < len(args):
+                where_expr = args[i + 1]
+                i += 2
+            elif args[i] == "--name" and i + 1 < len(args):
+                view_name = args[i + 1]
+                i += 2
+            else:
+                print(f"\nError: unexpected argument '{args[i]}'")
+                print()
+                return
+        
+        # Validate required flags
+        if not where_expr:
+            print("\nError: --where is required")
+            print('Example: --where "score>85 and fiber>5"')
+            print()
+            return
+        
+        if not view_name:
+            print("\nError: --name is required")
+            print('Example: --name "finalists"')
+            print()
+            return
+        
+        # Validate view name (no spaces, not a reserved name)
+        reserved = ["scored", "filtered", "rejected", "raw"]
+        if view_name.lower() in reserved:
+            print(f"\nError: '{view_name}' is a reserved name")
+            print()
+            return
+        
+        # Get scored candidates
+        reco_workspace = self.ctx.workspace_mgr.load_reco()
+        gen_cands = reco_workspace.get("generated_candidates", {})
+        all_candidates = gen_cands.get("candidates", [])
+        
+        scored_candidates = [c for c in all_candidates 
+                           if c.get("score_result") is not None]
+        
+        if not scored_candidates:
+            print("\nNo scored candidates available")
+            print("Run 'recommend score' first")
+            print()
+            return
+        
+        # Validate expression field names before filtering
+        test_terms = where_expr.lower().replace(" or ", " and ").split(" and ")
+        for term in test_terms:
+            term = term.strip()
+            for op in [">=", "<=", ">", "<"]:
+                if op in term:
+                    field_name = term.split(op, 1)[0].strip()
+                    if field_name not in self.FIELD_NAME_MAPPING:
+                        print(f"\nError: unknown field '{field_name}'")
+                        print(f"Valid fields: {', '.join(sorted(set(self.FIELD_NAME_MAPPING.keys())))}")
+                        print()
+                        return
+                    break
+        
+        # Apply filter
+        matching_ids = []
+        for candidate in scored_candidates:
+            if self._evaluate_where_expression(candidate, where_expr):
+                matching_ids.append(candidate.get("id"))
+        
+        if not matching_ids:
+            print(f"\nNo candidates matched: {where_expr}")
+            print(f"(tested {len(scored_candidates)} scored candidates)")
+            print()
+            return
+        
+        # Create view
+        views = reco_workspace.setdefault("views", {})
+        views[view_name] = {
+            "candidate_ids": matching_ids,
+            "filter": where_expr,
+            "sort_keys": [],
+            "created": datetime.now().isoformat()
+        }
+        
+        self.ctx.workspace_mgr.save_reco(reco_workspace)
+        
+        print(f"\nView '{view_name}' created: {len(matching_ids)} candidates (from {len(scored_candidates)} scored)")
+        print(f"Filter: {where_expr}")
+        print(f"\nNext: recommend show {view_name} 1-10 --items")
+        print()
+
+    def _sort(self, args: List[str]) -> None:
+            """
+            Sort a view's candidates in-place by one or more keys.
+            
+            Usage:
+                recommend sort <view_name> --keys "score:d"
+                recommend sort finalists --keys "fiber:d,score:d"
+                recommend sort fiber_boost --keys "cal:a,fat:a"
+            
+            Direction is required for each key: a/asc (ascending), d/desc (descending).
+            First key is primary sort, second is tiebreaker, etc.
+            
+            Args:
+                args: <view_name> --keys "<field:dir,...>"
+            """
+            if not args:
+                print("\nUsage: recommend sort <view_name> --keys \"field:dir[,field:dir,...]\"")
+                print("  dir := a|asc (ascending) or d|desc (descending)")
+                print("\nExamples:")
+                print('  recommend sort finalists --keys "score:d"')
+                print('  recommend sort fiber_boost --keys "fiber:d,score:d"')
+                print()
+                return
+            
+            # First arg is view name
+            view_name = args[0]
+            
+            # Validate view exists
+            reco_workspace = self.ctx.workspace_mgr.load_reco()
+            views = reco_workspace.get("views", {})
+            
+            if view_name not in views:
+                available = ", ".join(views.keys()) if views else "(none)"
+                print(f"\nError: view '{view_name}' not found")
+                print(f"Available views: {available}")
+                print()
+                return
+            
+            # Parse --keys flag
+            keys_str = None
+            i = 1
+            while i < len(args):
+                if args[i] == "--keys" and i + 1 < len(args):
+                    keys_str = args[i + 1]
+                    i += 2
+                else:
+                    print(f"\nError: unexpected argument '{args[i]}'")
+                    print()
+                    return
+            
+            if not keys_str:
+                print("\nError: --keys is required")
+                print('Example: --keys "score:d,fiber:d"')
+                print()
+                return
+            
+            # Parse key:direction pairs
+            sort_keys = []
+            for part in keys_str.split(","):
+                part = part.strip()
+                if ":" not in part:
+                    print(f"\nError: direction required for '{part}' (use field:a or field:d)")
+                    print()
+                    return
+                
+                field, direction = part.rsplit(":", 1)
+                field = field.strip().lower()
+                direction = direction.strip().lower()
+                
+                # Validate field
+                if field not in self.FIELD_NAME_MAPPING:
+                    print(f"\nError: unknown field '{field}'")
+                    print(f"Valid fields: {', '.join(sorted(set(self.FIELD_NAME_MAPPING.keys())))}")
+                    print()
+                    return
+                
+                # Validate direction
+                if direction not in ("a", "asc", "d", "desc"):
+                    print(f"\nError: invalid direction '{direction}' for '{field}'")
+                    print("Use a/asc (ascending) or d/desc (descending)")
+                    print()
+                    return
+                
+                reverse = direction in ("d", "desc")
+                sort_keys.append((field, reverse))
+            
+            # Get candidates for this view
+            candidates = self._get_candidates_for_view(view_name)
+            
+            if not candidates:
+                print(f"\nView '{view_name}' has no candidates")
+                print()
+                return
+            
+            # Multi-key sort: build a sort key function
+            # Python sort is stable, so we sort by keys in reverse priority order
+            for field, reverse in reversed(sort_keys):
+                candidates.sort(
+                    key=lambda c, f=field: self._resolve_field_value(c, f) or 0.0,
+                    reverse=reverse
+                )
+            
+            # Write reordered IDs back
+            views[view_name]["candidate_ids"] = [c.get("id") for c in candidates]
+            views[view_name]["sort_keys"] = [
+                f"{f}:{'d' if r else 'a'}" for f, r in sort_keys
+            ]
+            
+            self.ctx.workspace_mgr.save_reco(reco_workspace)
+            
+            keys_display = ", ".join(views[view_name]["sort_keys"])
+            print(f"\nView '{view_name}' sorted by: {keys_display}")
+            print(f"({len(candidates)} candidates)")
+            print(f"\nNext: recommend show {view_name} 1-10 --items")
+            print()
 
     def _format_items_line(self, candidate: Dict[str, Any]) -> str:
         """
@@ -3785,11 +4123,139 @@ class RecommendCommand(Command, CommandHistoryMixin):
 
 
 
-    # NOTE: Phase 2 will add field name mapping
-    # This is a placeholder for the nutrient field name discussion
+    # --where field name mapping: short_name -> (path_prefix, key)
+    # path_prefix "score_result" -> candidate["score_result"][key]
+    # path_prefix "meal.totals"  -> candidate["meal"]["totals"][key]
     FIELD_NAME_MAPPING = {
-        # To be established in Phase 2
-        # "fiber": "meal.totals.Fiber (g)",
-        # "sodium": "meal.totals.Sodium (mg)",
-        # etc.
+        # Aggregate score
+        "score":     ("score_result", "aggregate_score"),
+        # Macros (long + display aliases from --nutrients output)
+        "calories":  ("meal.totals", "cal"),
+        "cal":       ("meal.totals", "cal"),
+        "protein":   ("meal.totals", "prot_g"),
+        "prot":      ("meal.totals", "prot_g"),
+        "pro":       ("meal.totals", "prot_g"),
+        "carbs":     ("meal.totals", "carbs_g"),
+        "carb":      ("meal.totals", "carbs_g"),
+        "fat":       ("meal.totals", "fat_g"),
+        "sugar":     ("meal.totals", "sugar_g"),
+        "gl":        ("meal.totals", "gl"),
+        # Micros (long + display aliases)
+        "fiber":     ("meal.totals", "fiber_g"),
+        "sodium":    ("meal.totals", "sodium_mg"),
+        "na":        ("meal.totals", "sodium_mg"),
+        "potassium": ("meal.totals", "potassium_mg"),
+        "potas":     ("meal.totals", "potassium_mg"),
+        "k":         ("meal.totals", "potassium_mg"),
+        "vita":      ("meal.totals", "vitA_mcg"),
+        "vitc":      ("meal.totals", "vitC_mg"),
+        "iron":      ("meal.totals", "iron_mg"),
+        "fe":      ("meal.totals", "iron_mg"),
     }
+
+    def _resolve_field_value(self, candidate: Dict[str, Any], field_name: str) -> Optional[float]:
+        """
+        Resolve a --where field name to its numeric value from a candidate.
+        
+        Uses FIELD_NAME_MAPPING to navigate the candidate dict.
+        
+        Args:
+            candidate: Candidate dict
+            field_name: Short field name (e.g., "score", "fiber", "pro")
+        
+        Returns:
+            Numeric value, or None if field not found
+        """
+        mapping = self.FIELD_NAME_MAPPING.get(field_name.lower())
+        if not mapping:
+            return None
+        
+        path_prefix, key = mapping
+        
+        if path_prefix == "score_result":
+            container = candidate.get("score_result")
+        elif path_prefix == "meal.totals":
+            container = candidate.get("meal", {}).get("totals")
+        else:
+            return None
+        
+        if not container:
+            return None
+        
+        value = container.get(key)
+        return float(value) if value is not None else None
+
+    def _evaluate_where_expression(self, candidate: Dict[str, Any], expression: str) -> bool:
+        """
+        Evaluate a --where filter expression against a candidate.
+        
+        Supports:
+            - Comparisons: field>value, field<value, field>=value, field<=value
+            - AND/OR logic: "score>85 and fiber>5", "cal<600 or fat<20"
+            - AND binds tighter than OR (standard precedence)
+        
+        Args:
+            candidate: Candidate dict
+            expression: Filter expression string
+        
+        Returns:
+            True if candidate matches the expression
+        """
+        # Split on OR first (lower precedence)
+        or_groups = [g.strip() for g in expression.lower().split(" or ")]
+        
+        for or_group in or_groups:
+            # Split each OR group on AND (higher precedence)
+            and_terms = [t.strip() for t in or_group.split(" and ")]
+            
+            # All AND terms must be true for this OR group to be true
+            group_result = True
+            for term in and_terms:
+                if not self._evaluate_single_term(candidate, term):
+                    group_result = False
+                    break
+            
+            # Any OR group being true means the whole expression is true
+            if group_result:
+                return True
+        
+        return False
+
+    def _evaluate_single_term(self, candidate: Dict[str, Any], term: str) -> bool:
+        """
+        Evaluate a single comparison term like "score>85" or "fiber>=10".
+        
+        Args:
+            candidate: Candidate dict
+            term: Single comparison (e.g., "score>85", "cal<=600")
+        
+        Returns:
+            True if comparison holds
+        """
+        # Try operators in order (>= and <= before > and <)
+        for op in [">=", "<=", ">", "<"]:
+            if op in term:
+                parts = term.split(op, 1)
+                if len(parts) != 2:
+                    return False
+                
+                field_name = parts[0].strip()
+                try:
+                    target_value = float(parts[1].strip())
+                except ValueError:
+                    return False
+                
+                actual_value = self._resolve_field_value(candidate, field_name)
+                if actual_value is None:
+                    return False
+                
+                if op == ">":
+                    return actual_value > target_value
+                elif op == "<":
+                    return actual_value < target_value
+                elif op == ">=":
+                    return actual_value >= target_value
+                elif op == "<=":
+                    return actual_value <= target_value
+        
+        return False
