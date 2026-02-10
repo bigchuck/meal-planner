@@ -5,7 +5,7 @@ Recommend command for meal optimization suggestions.
 Analyzes meal gaps/excesses and suggests additions, portions, or swaps.
 """
 import shlex
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Union
 from datetime import date, timedelta, datetime
 from .base import Command, CommandHistoryMixin, register_command
 from meal_planner.analyzers.meal_analyzer import MealAnalyzer
@@ -1193,58 +1193,67 @@ class RecommendCommand(Command, CommandHistoryMixin):
 
     def _show(self, args: List[str]) -> None:
         """
-        Show generated candidates with pagination and detail support.
+        Show candidates with enhanced range syntax and display options.
         
-        Phase 2: Works with unified candidate structure.
-        Queries by state (filter_result/score_result) instead of separate lists.
+        Phase 1 Enhancements:
+        - Range support: single (5), range (1-5), list (1,3,7), or omit for all
+        - Display modes:
+        * Single candidate: always detailed view
+        * Multiple candidates without flags: detailed view (existing behavior)
+        * Multiple candidates with flags: compact one-line view
+        - New flags: --items, --gaps, --excesses, --nutrients
+        - View support: accepts view names in addition to array names
         
         Usage:
-            recommend show                      # Show all candidates (compact)
-            recommend show --items              # Show all with macro tables
-            recommend show G3                   # Show detailed view
-            recommend show scored 5             # Show position 5 in scored
-            recommend show rejected 12          # Show position 12 in rejected
-            recommend show --limit 10           # Show first 10 (compact)
-            recommend show --limit 10 --items   # Show first 10 with macro tables
-            recommend show rejected             # Show rejected (compact)
-            recommend show rejected --items     # Show rejected with macro tables
+            recommend show                          # All candidates, detailed view
+            recommend show G3                       # Specific candidate, detailed view
+            recommend show scored 5                 # Position 5, detailed view
+            recommend show scored 1-10 --items      # Range with items, compact view
+            recommend show scored --gaps            # All with gaps, compact view
+            recommend show finalists 1,3,7 --nutrients # Specific positions, compact view
+            recommend show rejected --items --gaps  # Multiple flags, compact view
         
         Args:
-            args: Optional arguments [array] [position|id|--limit N [--skip N] [--items]]
+            args: Optional arguments [array|view] [range|id] [flags]
         """
         # Parse arguments
-        rejected_mode = False
         candidate_id = None
-        array_name = None
-        position = None
+        array_or_view_name = None
+        range_spec = None  # Can be int, range, List[int], or "all"
         limit = None
         skip = 0
+        
+        # Display flags
         items_flag = False
+        gaps_flag = False
+        excesses_flag = False
+        nutrients_flag = False
         
         i = 0
         while i < len(args):
             arg = args[i]
             
-            # Check if this is an array name
-            if arg.lower() in ["scored", "filtered", "rejected", "raw"]:
-                array_name = arg.lower()
-                # Check if next arg is a position number
-                if i + 1 < len(args):
-                    try:
-                        position = int(args[i + 1])
-                        if position <= 0:
-                            print("\nError: Position must be positive")
-                            print()
-                            return
-                        i += 2  # Consume both array and position
-                        continue
-                    except ValueError:
-                        # Not a position, just array name
-                        pass
+            # Check for flags first
+            if arg == "--items":
+                items_flag = True
                 i += 1
                 continue
             
-            # Check for flags
+            if arg == "--gaps":
+                gaps_flag = True
+                i += 1
+                continue
+            
+            if arg == "--excesses":
+                excesses_flag = True
+                i += 1
+                continue
+            
+            if arg == "--nutrients":
+                nutrients_flag = True
+                i += 1
+                continue
+            
             if arg == "--limit":
                 if i + 1 < len(args):
                     try:
@@ -1275,13 +1284,48 @@ class RecommendCommand(Command, CommandHistoryMixin):
                         print()
                         return
             
-            if arg == "--items":
-                items_flag = True
+            # Check if this is an array name, view name, or candidate ID
+            # First, check for array names (built-in)
+            if arg.lower() in ["scored", "filtered", "rejected", "raw"]:
+                array_or_view_name = arg.lower()
+                
+                # Check if next arg is a range specification
+                if i + 1 < len(args):
+                    next_arg = args[i + 1]
+                    # Skip if it's a flag
+                    if not next_arg.startswith("--"):
+                        try:
+                            range_spec = self._parse_range(next_arg)
+                            i += 2  # Consume both array and range
+                            continue
+                        except ValueError:
+                            # Not a range, just array name
+                            pass
+                i += 1
+                continue
+            
+            # Check for view names
+            view_names = self._get_view_names()
+            if arg in view_names:
+                array_or_view_name = arg  # Store view name
+                
+                # Check if next arg is a range specification
+                if i + 1 < len(args):
+                    next_arg = args[i + 1]
+                    # Skip if it's a flag
+                    if not next_arg.startswith("--"):
+                        try:
+                            range_spec = self._parse_range(next_arg)
+                            i += 2  # Consume both view and range
+                            continue
+                        except ValueError:
+                            # Not a range, just view name
+                            pass
                 i += 1
                 continue
             
             # Otherwise assume it's a candidate ID
-            if not candidate_id:
+            if not candidate_id and not array_or_view_name:
                 candidate_id = arg.upper()
                 i += 1
                 continue
@@ -1302,28 +1346,13 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         meal_type = gen_cands.get("meal_type", "unknown")
         
-        # Handle position-based lookup (e.g., reco show scored 5)
-        if array_name and position:
-            self._show_by_position(gen_cands, array_name, position, meal_type)
-            return
+        # Validate flags usage
+        any_display_flag = items_flag or gaps_flag or excesses_flag or nutrients_flag
         
-        # Handle array-only mode (e.g., reco show rejected without position)
-        if array_name and not position:
-            candidates = self._get_candidates_by_state(gen_cands, array_name)
-            if not candidates:
-                print(f"\nNo {array_name} candidates")
-                print()
-                return
-            self._show_all_candidates(candidates, meal_type, array_name, 
-                                    limit=limit, skip=skip, items=items_flag)
-            return
-        
-        # Show specific candidate by ID - SEARCH unified list
-        if candidate_id:
-            if limit is not None or skip > 0 or items_flag:
-                print("\nError: Cannot combine candidate ID with pagination/items flags")
-                print()
-                return
+        # Case 1: Show specific candidate by ID (detailed view, ignore flags)
+        if candidate_id and not array_or_view_name and not range_spec:
+            if any_display_flag:
+                print("\nWarning: Display flags ignored for detailed candidate view")
             
             all_candidates = gen_cands.get("candidates", [])
             
@@ -1339,8 +1368,74 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
             return
         
-        # Show list of candidates (default behavior)
-        # Priority: scored > filtered > rejected > raw
+        # Case 2: Show from array or view with optional range and flags
+        if array_or_view_name:
+            # Determine if this is an array or view
+            is_view = array_or_view_name not in ["scored", "filtered", "rejected", "raw"]
+            
+            if is_view:
+                # Get candidates from view
+                candidates = self._get_candidates_for_view(array_or_view_name)
+                list_type = f"view:{array_or_view_name}"
+            else:
+                # Get candidates from array
+                candidates = self._get_candidates_by_state(gen_cands, array_or_view_name)
+                list_type = array_or_view_name
+            
+            if not candidates:
+                print(f"\nNo candidates in {array_or_view_name}")
+                print()
+                return
+            
+            # Apply range if specified
+            if range_spec:
+                candidates_to_show = self._apply_range(candidates, range_spec)
+                if not candidates_to_show:
+                    print(f"\nNo candidates match range specification")
+                    print()
+                    return
+            else:
+                # No range specified means all candidates
+                candidates_to_show = candidates
+            
+            # Determine display mode:
+            # - Single candidate: always detailed view
+            # - Multiple candidates with flags: compact view
+            # - Multiple candidates without flags: detailed view
+            
+            if len(candidates_to_show) == 1:
+                # Single candidate - always show detail
+                candidate = candidates_to_show[0]
+                self._show_candidate_detail(candidate, meal_type, list_type)
+                return
+            
+            # Multiple candidates
+            if any_display_flag:
+                # With flags: compact display
+                self._show_candidates_compact(
+                    candidates_to_show,
+                    meal_type,
+                    list_type,
+                    limit=limit,
+                    skip=skip,
+                    items=items_flag,
+                    gaps=gaps_flag,
+                    excesses=excesses_flag,
+                    nutrients=nutrients_flag
+                )
+            else:
+                # Without flags: detailed display (existing behavior)
+                self._show_all_candidates(
+                    candidates_to_show,
+                    meal_type,
+                    list_type,
+                    limit=limit,
+                    skip=skip,
+                    items=False  # Old --items behavior disabled
+                )
+            return
+        
+        # Case 3: No specific array/view - show default (priority-based)
         all_candidates = gen_cands.get("candidates", [])
         
         scored = [c for c in all_candidates if c.get("score_result") is not None]
@@ -1355,7 +1450,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         # Determine which to show based on priority
         if scored:
             scored.sort(key=lambda x: x.get("score_result", {}).get("aggregate_score", 0), 
-               reverse=True)
+            reverse=True)
             candidates = scored
             list_type = "scored"
         elif filtered:
@@ -1369,13 +1464,256 @@ class RecommendCommand(Command, CommandHistoryMixin):
             list_type = "raw"
         
         if not candidates:
-            print(f"\nNo {list_type} candidates")
+            print(f"\nNo candidates available")
             print()
             return
         
-        # Show candidates with pagination
-        self._show_all_candidates(candidates, meal_type, list_type, 
-                                limit=limit, skip=skip, items=items_flag)
+        # Display: flags determine display mode
+        # - With flags: compact one-line view
+        # - Without flags: detailed view (existing behavior)
+        if any_display_flag:
+            self._show_candidates_compact(
+                candidates,
+                meal_type,
+                list_type,
+                limit=limit,
+                skip=skip,
+                items=items_flag,
+                gaps=gaps_flag,
+                excesses=excesses_flag,
+                nutrients=nutrients_flag
+            )
+        else:
+            # Detailed display
+            self._show_all_candidates(
+                candidates,
+                meal_type,
+                list_type,
+                limit=limit,
+                skip=skip,
+                items=False
+            )
+
+
+    def _apply_range(
+        self,
+        candidates: List[Dict[str, Any]],
+        range_spec: Union[int, range, List[int], str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Apply range specification to candidate list.
+        
+        Args:
+            candidates: List of candidates
+            range_spec: Range specification (int, range, List[int], or "all")
+        
+        Returns:
+            Filtered list of candidates
+        """
+        if range_spec == "all":
+            return candidates
+        
+        if isinstance(range_spec, int):
+            # Single position (1-based)
+            if range_spec > len(candidates):
+                return []
+            return [candidates[range_spec - 1]]
+        
+        if isinstance(range_spec, range):
+            # Range of positions (1-based)
+            result = []
+            for pos in range_spec:
+                if pos <= len(candidates):
+                    result.append(candidates[pos - 1])
+            return result
+        
+        if isinstance(range_spec, list):
+            # List of specific positions (1-based)
+            result = []
+            for pos in range_spec:
+                if pos <= len(candidates):
+                    result.append(candidates[pos - 1])
+            return result
+        
+        return candidates
+
+
+    def _show_candidates_compact(
+        self,
+        candidates: List[Dict[str, Any]],
+        meal_type: str,
+        list_type: str,
+        limit: Optional[int] = None,
+        skip: int = 0,
+        items: bool = False,
+        gaps: bool = False,
+        excesses: bool = False,
+        nutrients: bool = False
+    ) -> None:
+        """
+        Show candidates in compact format with specified flags.
+        
+        Args:
+            candidates: List of candidate dicts
+            meal_type: Meal type
+            list_type: Array or view name
+            limit: Maximum number to show
+            skip: Number to skip from start
+            items: Show items flag
+            gaps: Show gaps flag
+            excesses: Show excesses flag
+            nutrients: Show nutrients flag
+        """
+        total_count = len(candidates)
+        
+        # Apply skip
+        if skip >= total_count:
+            print(f"\nNo candidates to show (skip={skip} >= total={total_count})")
+            print()
+            return
+        
+        # Determine what to display
+        start_idx = skip
+        end_idx = min(total_count, skip + limit) if limit else total_count
+        display_candidates = candidates[start_idx:end_idx]
+        
+        # Header
+        print(f"\n=== {meal_type.upper()} CANDIDATES ({list_type.upper()}) ===")
+        
+        # Show pagination info
+        if limit or skip:
+            print(f"Showing {len(display_candidates)} of {total_count} "
+                f"(positions {start_idx+1}-{end_idx})")
+        else:
+            print(f"Total: {total_count} candidates")
+        
+        print()
+        
+        # Build flags dict
+        flags = {
+            "items": items,
+            "gaps": gaps,
+            "excesses": excesses,
+            "nutrients": nutrients
+        }
+        
+        # Display each candidate
+        for i, candidate in enumerate(display_candidates):
+            actual_position = start_idx + i + 1
+            self._display_candidate_compact(candidate, actual_position, flags)
+        
+        print()
+
+    def _apply_range(
+        self,
+        candidates: List[Dict[str, Any]],
+        range_spec: Union[int, range, List[int], str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Apply range specification to candidate list.
+        
+        Args:
+            candidates: List of candidates
+            range_spec: Range specification (int, range, List[int], or "all")
+        
+        Returns:
+            Filtered list of candidates
+        """
+        if range_spec == "all":
+            return candidates
+        
+        if isinstance(range_spec, int):
+            # Single position (1-based)
+            if range_spec > len(candidates):
+                return []
+            return [candidates[range_spec - 1]]
+        
+        if isinstance(range_spec, range):
+            # Range of positions (1-based)
+            result = []
+            for pos in range_spec:
+                if pos <= len(candidates):
+                    result.append(candidates[pos - 1])
+            return result
+        
+        if isinstance(range_spec, list):
+            # List of specific positions (1-based)
+            result = []
+            for pos in range_spec:
+                if pos <= len(candidates):
+                    result.append(candidates[pos - 1])
+            return result
+        
+        return candidates
+
+
+    def _show_candidates_compact(
+        self,
+        candidates: List[Dict[str, Any]],
+        meal_type: str,
+        list_type: str,
+        limit: Optional[int] = None,
+        skip: int = 0,
+        items: bool = False,
+        gaps: bool = False,
+        excesses: bool = False,
+        nutrients: bool = False
+    ) -> None:
+        """
+        Show candidates in compact format with specified flags.
+        
+        Args:
+            candidates: List of candidate dicts
+            meal_type: Meal type
+            list_type: Array or view name
+            limit: Maximum number to show
+            skip: Number to skip from start
+            items: Show items flag
+            gaps: Show gaps flag
+            excesses: Show excesses flag
+            nutrients: Show nutrients flag
+        """
+        total_count = len(candidates)
+        
+        # Apply skip
+        if skip >= total_count:
+            print(f"\nNo candidates to show (skip={skip} >= total={total_count})")
+            print()
+            return
+        
+        # Determine what to display
+        start_idx = skip
+        end_idx = min(total_count, skip + limit) if limit else total_count
+        display_candidates = candidates[start_idx:end_idx]
+        
+        # Header
+        print(f"\n=== {meal_type.upper()} CANDIDATES ({list_type.upper()}) ===")
+        
+        # Show pagination info
+        if limit or skip:
+            print(f"Showing {len(display_candidates)} of {total_count} "
+                f"(positions {start_idx+1}-{end_idx})")
+        else:
+            print(f"Total: {total_count} candidates")
+        
+        print()
+        
+        # Build flags dict
+        flags = {
+            "items": items,
+            "gaps": gaps,
+            "excesses": excesses,
+            "nutrients": nutrients
+        }
+        
+        # Display each candidate
+        for i, candidate in enumerate(display_candidates):
+            actual_position = start_idx + i + 1
+            self._display_candidate_compact(candidate, actual_position, flags)
+        
+        print()
+
+
         
     def _show_by_position(
         self,
@@ -2867,51 +3205,64 @@ class RecommendCommand(Command, CommandHistoryMixin):
             
     def _calculate_candidate_totals(self, items: List[Dict[str, Any]]) -> Dict[str, float]:
         """
-        Calculate nutritional totals for a list of items.
+        Calculate nutritional totals from items list.
         
         Optimized lightweight version - just arithmetic, no formatting.
         Used during candidate generation to pre-populate totals.
+        Calculates both macros and micros.
         
         Args:
             items: List of item dicts with code and mult
         
         Returns:
-            Dict with cal, prot_g, carbs_g, fat_g, sugar_g, gl keys
+            Dict with macro keys (cal, prot_g, carbs_g, fat_g, sugar_g, gl) 
+            and micro keys (fiber_g, sodium_mg, potassium_mg, vitA_mcg, vitC_mg, iron_mg)
         """
-        if not items:
-            return {
-                'cal': 0.0,
-                'prot_g': 0.0,
-                'carbs_g': 0.0,
-                'fat_g': 0.0,
-                'sugar_g': 0.0,
-                'gl': 0.0
-            }
-        
         totals = {
             'cal': 0.0,
             'prot_g': 0.0,
             'carbs_g': 0.0,
             'fat_g': 0.0,
             'sugar_g': 0.0,
-            'gl': 0.0
+            'gl': 0.0,
+            'fiber_g': 0.0,
+            'sodium_mg': 0.0,
+            'potassium_mg': 0.0,
+            'vitA_mcg': 0.0,
+            'vitC_mg': 0.0,
+            'iron_mg': 0.0
         }
+
+        if not items:
+            return totals
         
         for item in items:
             code = str(item["code"]).upper()
             mult = float(item.get("mult", 1.0))
             
-            # Lookup food in master
+            # Lookup food in master for macros
             food = self.ctx.master.lookup_code(code)
             
             if food is not None:
-                # Direct accumulation - just multiply and add
+                # Direct accumulation - just multiply and add (MACROS)
                 totals['cal'] += food.get('cal', 0) * mult
                 totals['prot_g'] += food.get('prot_g', 0) * mult
                 totals['carbs_g'] += food.get('carbs_g', 0) * mult
                 totals['fat_g'] += food.get('fat_g', 0) * mult
                 totals['sugar_g'] += food.get('sugar_g', 0) * mult
                 totals['gl'] += food.get('GL', 0) * mult
+            
+            # Get nutrients for micros
+            nutrients = self.ctx.master.get_nutrients(code)
+            
+            if nutrients is not None:
+                # Direct accumulation - just multiply and add (MICROS)
+                totals['fiber_g'] += nutrients.get('fiber_g', 0) * mult
+                totals['sodium_mg'] += nutrients.get('sodium_mg', 0) * mult
+                totals['potassium_mg'] += nutrients.get('potassium_mg', 0) * mult
+                totals['vitA_mcg'] += nutrients.get('vitA_mcg', 0) * mult
+                totals['vitC_mg'] += nutrients.get('vitC_mg', 0) * mult
+                totals['iron_mg'] += nutrients.get('iron_mg', 0) * mult
         
         return totals
     
@@ -3065,3 +3416,380 @@ class RecommendCommand(Command, CommandHistoryMixin):
             "mutual_exclusions": meal_type_filters.get("mutual_exclusions", []),
             "conditional_requirements": meal_type_filters.get("conditional_requirements", [])
         }
+    
+    def _parse_range(self, token: str) -> Union[int, range, List[int], str]:
+        """
+        Parse range syntax from a token.
+        
+        Args:
+            token: Token to parse (could be: 5, 1-5, 1,3,7, or "all")
+        
+        Returns:
+            - int: Single position
+            - range: Range object for hyphenated ranges
+            - List[int]: List of specific positions
+            - str: "all" literal
+        
+        Raises:
+            ValueError: If token cannot be parsed as range
+        """
+        # Check for "all"
+        if token.lower() == "all":
+            return "all"
+        
+        # Check for comma-separated list (1,3,7)
+        if "," in token:
+            try:
+                positions = [int(p.strip()) for p in token.split(",")]
+                if any(p <= 0 for p in positions):
+                    raise ValueError("Positions must be positive")
+                return positions
+            except ValueError as e:
+                raise ValueError(f"Invalid position list: {token}") from e
+        
+        # Check for hyphenated range (1-5)
+        if "-" in token:
+            try:
+                parts = token.split("-")
+                if len(parts) != 2:
+                    raise ValueError("Range must be format 'start-end'")
+                start = int(parts[0].strip())
+                end = int(parts[1].strip())
+                if start <= 0 or end <= 0:
+                    raise ValueError("Range positions must be positive")
+                if start > end:
+                    raise ValueError("Range start must be <= end")
+                return range(start, end + 1)  # +1 because range is exclusive
+            except ValueError as e:
+                raise ValueError(f"Invalid range: {token}") from e
+        
+        # Try single integer
+        try:
+            pos = int(token)
+            if pos <= 0:
+                raise ValueError("Position must be positive")
+            return pos
+        except ValueError as e:
+            raise ValueError(f"Invalid position: {token}") from e
+
+
+    def _get_view_names(self) -> List[str]:
+        """
+        Get list of available view names from reco workspace.
+        
+        Returns:
+            List of view names
+        """
+        reco_workspace = self.ctx.workspace_mgr.load_reco()
+        views = reco_workspace.get("views", {})
+        return list(views.keys())
+
+
+    def _get_view(self, view_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve a specific view from reco workspace.
+        
+        Args:
+            view_name: Name of the view
+        
+        Returns:
+            View dict or None if not found
+        """
+        reco_workspace = self.ctx.workspace_mgr.load_reco()
+        views = reco_workspace.get("views", {})
+        return views.get(view_name)
+
+
+    def _get_candidates_for_view(self, view_name: str) -> List[Dict[str, Any]]:
+        """
+        Get candidates for a specific view, preserving view's sort order.
+        
+        Args:
+            view_name: Name of the view
+        
+        Returns:
+            List of candidate dicts in view's order
+        """
+        # Get view
+        view = self._get_view(view_name)
+        if not view:
+            return []
+        
+        # Get candidate IDs from view
+        candidate_ids = view.get("candidate_ids", [])
+        if not candidate_ids:
+            return []
+        
+        # Get all candidates
+        gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
+        if not gen_cands:
+            return []
+        
+        all_candidates = gen_cands.get("candidates", [])
+        
+        # Build ID to candidate map
+        id_to_candidate = {c.get("id"): c for c in all_candidates}
+        
+        # Get candidates in view's order
+        result = []
+        for cid in candidate_ids:
+            if cid in id_to_candidate:
+                result.append(id_to_candidate[cid])
+        
+        return result
+
+
+    def _format_items_line(self, candidate: Dict[str, Any]) -> str:
+        """
+        Format items from a candidate in compact food code format.
+        
+        Format: "code1 xMULT1,code2,code3 xMULT3"
+        Only show multiplier if != 1.0
+        
+        Args:
+            candidate: Candidate dict
+        
+        Returns:
+            Formatted items string
+        """
+        meal = candidate.get("meal", {})
+        items = meal.get("items", [])
+        
+        # Extract codes and multipliers, sort alphabetically
+        code_mult_pairs = []
+        for item in items:
+            if "code" in item:
+                code = item["code"]
+                mult = item.get("multiplier", 1.0)
+                code_mult_pairs.append((code, mult))
+        
+        # Sort by code
+        code_mult_pairs.sort(key=lambda x: x[0].lower())
+        
+        # Format with multipliers
+        formatted = []
+        for code, mult in code_mult_pairs:
+            if mult == 1.0:
+                formatted.append(code)
+            else:
+                formatted.append(f"{code} x{mult}")
+        
+        return ",".join(formatted)
+
+
+    def _format_gaps_line(self, candidate: Dict[str, Any]) -> str:
+        """
+        Format nutrient gaps (deficiencies) from filter violations.
+        
+        Parses filter_result violations to extract gaps (< constraints).
+        Format: "fiber<10,vitC<20"
+        
+        Args:
+            candidate: Candidate dict
+        
+        Returns:
+            Formatted gaps string, or empty if no gaps
+        """
+        filter_result = candidate.get("filter_result", {})
+        violations = filter_result.get("violations", [])
+        
+        gaps = []
+        for violation in violations:
+            # Skip non-nutrient violations
+            if not violation.startswith("nutrient:"):
+                continue
+            
+            # Strip "nutrient:" prefix
+            constraint = violation[9:]  # Remove "nutrient:"
+            
+            # Strip suffix like "(soft_limit)"
+            if "(" in constraint:
+                constraint = constraint[:constraint.index("(")]
+            
+            # Check if it's a gap (< constraint)
+            if "<" in constraint:
+                gaps.append(constraint)
+        
+        return ",".join(gaps) if gaps else ""
+
+
+    def _format_excesses_line(self, candidate: Dict[str, Any]) -> str:
+        """
+        Format nutrient excesses from filter violations.
+        
+        Parses filter_result violations to extract excesses (> constraints).
+        Format: "fat>30.0,sodium>2000"
+        
+        Args:
+            candidate: Candidate dict
+        
+        Returns:
+            Formatted excesses string, or empty if no excesses
+        """
+        filter_result = candidate.get("filter_result", {})
+        violations = filter_result.get("violations", [])
+        
+        excesses = []
+        for violation in violations:
+            # Skip non-nutrient violations
+            if not violation.startswith("nutrient:"):
+                continue
+            
+            # Strip "nutrient:" prefix
+            constraint = violation[9:]  # Remove "nutrient:"
+            
+            # Strip suffix like "(soft_limit)"
+            if "(" in constraint:
+                constraint = constraint[:constraint.index("(")]
+            
+            # Check if it's an excess (> constraint)
+            if ">" in constraint:
+                excesses.append(constraint)
+        
+        return ",".join(excesses) if excesses else ""
+
+    def _format_nutrients_lines(self, candidate: Dict[str, Any]) -> tuple[str, str]:
+        """
+        Format nutrient lines (macros and micros) from a candidate.
+        
+        Reads from candidate["meal"]["totals"] dictionary.
+        Returns two lines showing actual consumed amounts:
+        - Macros: "Cal 520 | Pro 45g | Carb 58g | Fat 12g | Sugar 5g | GL 2"
+        - Micros: "Fiber 18g | Sodium 890mg | Potas 1200mg | VitA 450mcg | VitC 38mg | Iron 4.2mg"
+        
+        Args:
+            candidate: Candidate dict
+        
+        Returns:
+            Tuple of (macros_line, micros_line)
+        """
+        meal = candidate.get("meal", {})
+        totals = meal.get("totals", {})
+        
+        if not totals:
+            return ("Cal 0 | Pro 0g | Carb 0g | Fat 0g | Sugar 0g | GL 0", 
+                    "Fiber 0g | Sodium 0mg | Potas 0mg | VitA 0mcg | VitC 0mg | Iron 0.0mg")
+        
+        # Macros
+        cal = totals.get("cal", 0)
+        pro = totals.get("prot_g", 0)
+        carb = totals.get("carbs_g", 0)
+        fat = totals.get("fat_g", 0)
+        sugar = totals.get("sugar_g", 0)
+        gl = totals.get("gl", 0)
+        
+        macros = f"Cal {cal:.0f} | Pro {pro:.0f}g | Carb {carb:.0f}g | Fat {fat:.0f}g | Sugar {sugar:.0f}g | GL {gl:.1f}"
+        
+        # Micros
+        fiber = totals.get("fiber_g", 0)
+        sodium = totals.get("sodium_mg", 0)
+        potas = totals.get("potassium_mg", 0)
+        vitA = totals.get("vitA_mcg", 0)
+        vitC = totals.get("vitC_mg", 0)
+        iron = totals.get("iron_mg", 0)
+        
+        micros = f"Fiber {fiber:.0f}g | Sodium {sodium:.0f}mg | Potas {potas:.0f}mg | VitA {vitA:.0f}mcg | VitC {vitC:.0f}mg | Iron {iron:.1f}mg"
+        
+        return macros, micros
+
+    def _display_candidate_compact(
+        self,
+        candidate: Dict[str, Any],
+        position: int,
+        flags: Dict[str, bool]
+    ) -> None:
+        """
+        Display a candidate in compact one-line format based on flags.
+        
+        Single flag: One line with ID, score, and flag data
+        Multiple flags: Multiple lines stacked
+        
+        Args:
+            candidate: Candidate dict
+            position: Position in list (for display)
+            flags: Dict of flag names to bool (items, gaps, excesses, nutrients)
+        """
+        candidate_id = candidate.get("id", "???")
+        
+        # Get score if available
+        score_result = candidate.get("score_result")
+        if score_result:
+            score = score_result.get("aggregate_score", 0.0)
+            score_str = f"{score:.3f}"
+        else:
+            score_str = "N/A"
+        
+        # Count active flags
+        active_flags = [k for k, v in flags.items() if v]
+        
+        if len(active_flags) == 0:
+            # No flags - shouldn't happen, but handle gracefully
+            print(f"{candidate_id}: {score_str}")
+            return
+        
+        if len(active_flags) == 1:
+            # Single flag - one line format
+            flag = active_flags[0]
+            
+            if flag == "items":
+                items_str = self._format_items_line(candidate)
+                print(f"{candidate_id}: {score_str}, Items: {items_str}")
+            
+            elif flag == "gaps":
+                gaps_str = self._format_gaps_line(candidate)
+                if gaps_str:
+                    print(f"{candidate_id}: {score_str}, Gaps: {gaps_str}")
+                else:
+                    print(f"{candidate_id}: {score_str}, Gaps: (none)")
+            
+            elif flag == "excesses":
+                excesses_str = self._format_excesses_line(candidate)
+                if excesses_str:
+                    print(f"{candidate_id}: {score_str}, Excesses: {excesses_str}")
+                else:
+                    print(f"{candidate_id}: {score_str}, Excesses: (none)")
+            
+            elif flag == "nutrients":
+                # Nutrients needs two lines
+                macros, micros = self._format_nutrients_lines(candidate)
+                print(f"{candidate_id}: {score_str}")
+                print(f"  Macros: {macros}")
+                print(f"  Micros: {micros}")
+        
+        else:
+            # Multiple flags - stack them
+            print(f"{candidate_id}: {score_str}")
+            
+            if flags.get("items"):
+                items_str = self._format_items_line(candidate)
+                print(f"  Items: {items_str}")
+            
+            if flags.get("gaps"):
+                gaps_str = self._format_gaps_line(candidate)
+                if gaps_str:
+                    print(f"  Gaps: {gaps_str}")
+                else:
+                    print(f"  Gaps: (none)")
+            
+            if flags.get("excesses"):
+                excesses_str = self._format_excesses_line(candidate)
+                if excesses_str:
+                    print(f"  Excesses: {excesses_str}")
+                else:
+                    print(f"  Excesses: (none)")
+            
+            if flags.get("nutrients"):
+                macros, micros = self._format_nutrients_lines(candidate)
+                print(f"  Macros: {macros}")
+                print(f"  Micros: {micros}")
+
+
+
+    # NOTE: Phase 2 will add field name mapping
+    # This is a placeholder for the nutrient field name discussion
+    FIELD_NAME_MAPPING = {
+        # To be established in Phase 2
+        # "fiber": "meal.totals.Fiber (g)",
+        # "sodium": "meal.totals.Sodium (mg)",
+        # etc.
+    }
