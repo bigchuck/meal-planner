@@ -320,7 +320,7 @@ class GAConfig:
                     expanded = thresholds_mgr.expand_pool(pool_ref)
                     all_codes.update(expanded)
 
-            result[slot.meal_type] = sorted(all_codes)
+            result[slot.meal_type] = sorted(c.lower() for c in all_codes)
 
         return result
 

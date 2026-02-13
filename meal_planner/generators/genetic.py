@@ -75,7 +75,7 @@ class GeneticAlgorithm:
     """
 
     # Filename for GA population state (alongside reco_workspace.json)
-    GA_POPULATION_FILENAME = "ga_population.json"
+    GA_POPULATION_FILENAME = "meal_plan_ga_population.json"
 
     def __init__(self, ctx):
         """
