@@ -4,5 +4,6 @@ Meal candidate generation for recommendation engine.
 """
 from .history_meal_generator import HistoryMealGenerator
 from .exhaustive_meal_generator import ExhaustiveMealGenerator
+from .genetic import GeneticAlgorithm
 
-__all__ = ['HistoryMealGenerator', 'ExhaustiveMealGenerator']
+__all__ = ['HistoryMealGenerator', 'ExhaustiveMealGenerator', 'GeneticAlgorithm']

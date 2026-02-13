@@ -783,14 +783,14 @@ class RecommendCommand(Command, CommandHistoryMixin):
         Generate meal candidates using specified method.
         
         Usage:
-            recommend generate <meal_type> [--method history|exhaustive] [--count N] [--template NAME] [--reset]
+            recommend generate <meal_type> [--method history|exhaustive|ga] [--count N] [--template NAME] [--reset]
         
         Args:
             args: Command arguments
         """
         # Parse arguments
         if not args:
-            print("\nUsage: recommend generate <meal_type> [--method history|exhaustive] [--count N] [--template NAME]")
+            print("\nUsage: recommend generate <meal_type> [--method history|exhaustive|ga] [--count N] [--template NAME]")
             print("\nMethods:")
             print("  history (default): Generate from meal history")
             print("  exhaustive: Generate all combinations from component pools")
@@ -808,12 +808,13 @@ class RecommendCommand(Command, CommandHistoryMixin):
         count = 50
         reset = False
         template_name = None
+        count_explicit = False
         
         i = 1
         while i < len(args):
             if args[i] == "--method" and i + 1 < len(args):
                 method = args[i + 1]
-                if method not in ["history", "exhaustive"]:
+                if method not in ["history", "exhaustive", "ga"]:
                     print(f"\nError: Invalid method '{method}'")
                     print("Valid methods: history, exhaustive")
                     print()
@@ -822,6 +823,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
             elif args[i] == "--count" and i + 1 < len(args):
                 try:
                     count = int(args[i + 1])
+                    count_explicit = True
                     if count <= 0:
                         print("\nError: --count must be positive")
                         print()
@@ -872,9 +874,18 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
             return
         
+        # GA does not accept --count; population size is config-driven
+        if method == "ga" and count_explicit:
+            print("\nError: --count is not used with --method ga")
+            print("GA population size is controlled by the 'genetic' block in config.json")
+            print()
+            return
+
         # Route to appropriate generator
         if method == "history":
             self._generate_from_history(meal_key, count, workspace, reco_workspace, template_name)
+        elif method == "ga":
+            self._generate_ga(meal_key, workspace, reco_workspace, template_name)
         else:  # exhaustive
             self._generate_exhaustive(meal_key, count, workspace, reco_workspace, template_name)
     
@@ -3163,6 +3174,90 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print(f"Total raw candidates in workspace: {new_cursor}")
         print()
 
+    def _generate_ga(self, meal_key, workspace, reco_workspace, template_name=None):
+        """
+        Run the Genetic Algorithm to generate a population of candidates.
+
+        Uses the 'genetic' block in config.json for all GA parameters.
+        The meal_type and template_name from the command line are used
+        to override the meal_slots config, allowing the same GA config
+        to target different meals via the standard generate interface.
+
+        The GA population is saved to ga_population.json in the reco
+        workspace directory. The generation_state is updated so that
+        'recommend status' reflects the GA session.
+
+        Usage:
+            recommend generate lunch --method ga
+            recommend generate lunch --method ga --template protein_low_carb
+
+        Args:
+            meal_key: Normalized meal type (e.g., "lunch")
+            workspace: Workspace dict (unused currently, kept for signature consistency)
+            reco_workspace: Reco workspace dict
+            template_name: Optional template name override
+        """
+        # NOTE: --template works for single-meal GA by overriding config's
+        # meal_slots with one slot. For future multi-meal GA, the command line
+        # cannot express multiple slot/template pairs; multi-meal would rely
+        # on the full meal_slots array in config.json's genetic block, and
+        # --template would either be disallowed or override only the first slot.
+
+        try:
+            from meal_planner.generators.genetic import GeneticAlgorithm
+
+            # Check for genetic config block
+            config_dict = self.ctx.thresholds.thresholds
+            if "genetic" not in config_dict:
+                print("\nError: No 'genetic' block found in config.json")
+                print("Add a 'genetic' section with GA parameters.")
+                print()
+                return
+
+            # If template_name not provided, try to resolve default
+            if not template_name:
+                template_name = self._select_default_template(meal_key)
+                if not template_name:
+                    print(f"\nMultiple templates found for {meal_key}, please specify:")
+                    print(f"  recommend generate {meal_key} --method ga --template <name>")
+                    print()
+                    return
+
+            # Override meal_slots with command-line meal_type and template
+            # Save original so we can restore after GA runs
+            original_slots = config_dict["genetic"].get("meal_slots")
+            config_dict["genetic"]["meal_slots"] = [
+                {"meal_type": meal_key, "template_name": template_name}
+            ]
+
+            try:
+                ga = GeneticAlgorithm(self.ctx)
+                result = ga.run()
+            finally:
+                # Restore original meal_slots config
+                if original_slots is not None:
+                    config_dict["genetic"]["meal_slots"] = original_slots
+                else:
+                    config_dict["genetic"].pop("meal_slots", None)
+
+            # Update generation state for status display
+            reco_workspace = self.ctx.workspace_mgr.load_reco()
+            reco_workspace["generation_state"] = {
+                "method": "ga",
+                "meal_type": meal_key,
+                "template_name": template_name,
+            }
+            self.ctx.workspace_mgr.save_reco(reco_workspace)
+
+        except ValueError as e:
+            print(f"\nGA error: {e}")
+            print()
+        except Exception as e:
+            print(f"\nUnexpected GA error: {e}")
+            import traceback
+            traceback.print_exc()
+            print()
+
     def _reset(self, args: List[str]) -> None:
         """
         Reset the recommendation generation session.
@@ -3527,6 +3622,17 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 cand_count = len(vdata.get("candidate_ids", []))
                 filt = vdata.get("filter", "")
                 print(f"  {vname:<20} {cand_count:>4} candidates  ({filt})")
+            print()
+
+        # Show GA state if present
+        ga_state = reco_workspace.get("ga_state", {})
+        if ga_state:
+            print(f"=== GENETIC ALGORITHM ===")
+            print()
+            print(f"  Population file:    {ga_state.get('population_file', 'unknown')}")
+            print(f"  General pop:        {ga_state.get('general_size', 0)}")
+            print(f"  Immigrant pool:     {ga_state.get('immigrant_size', 0)}")
+            print(f"  Last updated:       {ga_state.get('last_updated', 'unknown')}")
             print()
 
     def _get_meal_filters(self, meal_type: str) -> Dict[str, Any]:
