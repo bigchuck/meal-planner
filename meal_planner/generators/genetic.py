@@ -122,6 +122,17 @@ class GeneticAlgorithm:
         # Build breeding pipeline
         self.breeding = BreedingPipeline(self.config, self.pool_codes)
 
+        # Build fitness engine from meal template
+        from meal_planner.generators.ga_scoring import FitnessEngine
+        slot = self.config.meal_slots[0]  # v1: single meal slot
+        self.fitness_engine = FitnessEngine.from_template(
+            thresholds_mgr=ctx.thresholds,
+            meal_type=slot.meal_type,
+            template_name=slot.template_name,
+            master_loader=ctx.master,
+            config=self.config,
+        )
+
         # Initialize empty population
         self.population = Population(self.config)
 
@@ -155,6 +166,8 @@ class GeneticAlgorithm:
         print()
         print(self.breeding.pool_summary())
         print()
+
+        self.fitness_engine.display_targets()
 
         # Check for existing population
         loaded = self.load_existing_population()
@@ -237,6 +250,18 @@ class GeneticAlgorithm:
                     f"({attempts} attempts, {duplicates} duplicates)"
                 )
 
+        # Score all members
+        print(f"Scoring {self.population.general_size} members...")
+        scored_count = 0
+        for member in self.population.general_members:
+            if not member.is_scored():
+                member.fitness = self.fitness_engine.score(member)
+                scored_count += 1
+
+        # Rank by fitness
+        self.population.rerank()
+        print(f"  Scored {scored_count} members, population ranked")
+
         # Final status
         print()
         if self.population.general_size >= target:
@@ -258,6 +283,10 @@ class GeneticAlgorithm:
                 "or smaller population_size."
             )
         print()
+
+        print(f"DEBUG:")
+        totals = self.fitness_engine.calculate_nutrient_totals(member.genomes[0])
+        print(f"DEBUG: totals\n{totals}")
 
     # =========================================================================
     # Epoch loop (stubs for future implementation)

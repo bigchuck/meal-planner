@@ -532,6 +532,15 @@ class Population:
                     f"{member.genome_length():<6}{member.origin.value:<8}"
                     f"{codes_str}"
                 )
+                
+                if verbose and member.fitness and member.fitness.nutrient_scores:
+                    for nname, ndata in member.fitness.nutrient_scores.items():
+                        print(
+                            f"{'':>10}{nname}: {ndata['value']:.1f} "
+                            f"raw={ndata['raw_score']:.3f} "
+                            f"w={ndata['weighted_score']:.3f}"
+                         )
+                        
             print()
 
     # =========================================================================
