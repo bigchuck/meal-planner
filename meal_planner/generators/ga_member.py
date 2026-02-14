@@ -443,7 +443,7 @@ class Member:
         """
         parts = []
         for genome in self.genomes:
-            parts.append("+".join(genome.codes))
+            parts.append(",".join(genome.codes))
         return " | ".join(parts)
 
     # --- Serialization (full GA format, not reco candidate format) ---
@@ -507,6 +507,30 @@ class Member:
             birth_epoch=data.get("birth_epoch", 0),
             member_id=data.get("member_id", ""),
         )
+
+    def to_filter_dict(self) -> dict:
+        """
+        Produce a candidate dict in the shape the filter pipeline expects.
+
+        The existing filters (PreScoreFilter, MutualExclusionFilter,
+        ConditionalRequirementFilter) extract food codes from:
+            candidate["meal"]["items"][i]["code"]
+
+        This adapter builds that structure from the member's genomes.
+        All codes get mult=1.0 since GA members don't carry multipliers.
+
+        Returns:
+            Dict compatible with BaseFilter.filter_candidates() input
+        """
+        items = []
+        for genome in self.genomes:
+            for code in genome.codes:
+                items.append({"code": code, "mult": 1.0})
+
+        return {
+            "meal": {"items": items},
+            "rejection_reasons": [],
+        }
 
     def __repr__(self) -> str:
         score_str = f", score={self.fitness.aggregate_score:.3f}" if self.fitness else ""

@@ -225,47 +225,147 @@ class BreedingPipeline:
         self, parent_a: Member, parent_b: Member, epoch: int
     ) -> BreedingResult:
         """
-        Apply crossover operator to produce offspring.
+        Apply crossover operator across all meal slots.
 
-        Stub: will implement one-point and two-point crossover
-        that respects genome/meal-slot boundaries.
+        For each meal slot, crosses the corresponding genomes from
+        both parents using either one-point or two-point crossover
+        (selected randomly, biased toward one-point for short genomes).
+
+        Produces up to 2 offspring Members. An offspring is discarded
+        if any of its genomes came back None (failed size validation
+        after deduplication).
 
         Args:
-            parent_a: First parent
+            parent_a: First parent (selected via rank-based roulette)
             parent_b: Second parent
             epoch: Current epoch for offspring birth_epoch
 
         Returns:
             BreedingResult with 0-2 offspring
         """
-        # TODO: Implement crossover_one_point and crossover_two_point
+        child_1_genomes = []
+        child_2_genomes = []
+        operator_name = None
+
+        for slot_idx in range(len(self.config.meal_slots)):
+            genome_a = parent_a.genomes[slot_idx]
+            genome_b = parent_b.genomes[slot_idx]
+
+            # Choose 1pt or 2pt: use 2pt only if both genomes >= 4 codes
+            # and coin flip favors it
+            use_two_point = (
+                len(genome_a.codes) >= 4
+                and len(genome_b.codes) >= 4
+                and random.random() < 0.5
+            )
+
+            if use_two_point:
+                g1, g2 = self.crossover_two_point(genome_a, genome_b)
+                operator_name = operator_name or "crossover_2pt"
+            else:
+                g1, g2 = self.crossover_one_point(genome_a, genome_b)
+                operator_name = operator_name or "crossover_1pt"
+
+            child_1_genomes.append(g1)
+            child_2_genomes.append(g2)
+
+        # Build offspring — discard if any genome slot is None
+        offspring = []
+
+        if all(g is not None for g in child_1_genomes):
+            offspring.append(Member(
+                genomes=child_1_genomes,
+                tier=MemberTier.GENERAL,
+                origin=MemberOrigin.BRED,
+                birth_epoch=epoch,
+            ))
+
+        if all(g is not None for g in child_2_genomes):
+            offspring.append(Member(
+                genomes=child_2_genomes,
+                tier=MemberTier.GENERAL,
+                origin=MemberOrigin.BRED,
+                birth_epoch=epoch,
+            ))
+
         return BreedingResult(
-            offspring=[],
-            operator="crossover",
+            offspring=offspring,
+            operator=operator_name or "crossover_1pt",
             parents=(parent_a.member_id, parent_b.member_id),
-            discarded=True,
+            discarded=(len(offspring) == 0),
         )
 
     def _mutate_member(self, parent: Member, epoch: int) -> BreedingResult:
         """
         Apply mutation operator to a single parent.
 
-        Stub: will select random positions in a genome and replace
-        codes with alternatives from the unified pool.
+        Selects a random meal slot, picks a random code position within
+        that genome, and replaces it with a different code from the
+        unified pool. The replacement must not already exist in the
+        genome (no duplicates within a meal).
+
+        If the only available replacement is the same code (pool
+        exhausted relative to genome), the mutation fails and the
+        result is marked discarded.
+
+        The parent is never modified — a new Member is created.
 
         Args:
-            parent: Parent member to mutate
+            parent: Parent member selected via rank-based roulette
             epoch: Current epoch for offspring birth_epoch
 
         Returns:
-            BreedingResult with 0-1 offspring
+            BreedingResult with 0 or 1 offspring
         """
-        # TODO: Implement mutation with unified pool selection
+        # 1. Pick a random meal slot (genome index)
+        slot_idx = random.randrange(len(parent.genomes))
+        genome = parent.genomes[slot_idx]
+        meal_type = self.config.meal_slots[slot_idx].meal_type
+
+        # 2. Pick a random code position within the genome
+        pos = random.randrange(len(genome.codes))
+        old_code = genome.codes[pos]
+
+        # 3. Build candidates: codes in the unified pool that are NOT
+        #    already in this genome (ensures no intra-genome duplicates
+        #    and guarantees the replacement differs from old_code)
+        current_codes = set(genome.codes)
+        pool = self.pool_codes.get(meal_type, [])
+        candidates = [c for c in pool if c not in current_codes]
+
+        if not candidates:
+            # Pool exhausted — every code is already in this genome
+            return BreedingResult(
+                offspring=[],
+                operator="mutation",
+                parents=(parent.member_id, ""),
+                discarded=True,
+            )
+
+        # 4. Select replacement
+        new_code = random.choice(candidates)
+
+        # 5. Build new genome with the replacement
+        new_codes = list(genome.codes)
+        new_codes[pos] = new_code
+        new_genome = Genome(codes=new_codes, meal_slot=genome.meal_slot)
+
+        # 6. Build new member with the mutated genome
+        new_genomes = list(parent.genomes)
+        new_genomes[slot_idx] = new_genome
+
+        offspring = Member(
+            genomes=new_genomes,
+            tier=MemberTier.GENERAL,
+            origin=MemberOrigin.BRED,
+            birth_epoch=epoch,
+        )
+
         return BreedingResult(
-            offspring=[],
+            offspring=[offspring],
             operator="mutation",
             parents=(parent.member_id, ""),
-            discarded=True,
+            discarded=False,
         )
 
     def crossover_one_point(
@@ -274,10 +374,55 @@ class BreedingPipeline:
         """
         One-point crossover on a single meal slot's genomes.
 
-        Stub for future implementation.
+        Picks a random interior cut point on each parent (not at
+        position 0 or len), then swaps tails to produce two children.
+
+        Example:
+            Parent A (5 codes): [a1, a2 | a3, a4, a5]  cut at 2
+            Parent B (7 codes): [b1, b2, b3, b4 | b5, b6, b7]  cut at 4
+            Child 1: [a1, a2, b5, b6, b7]
+            Child 2: [b1, b2, b3, b4, a3, a4, a5]
+
+        After assembly, each child is deduplicated (codes that appear
+        in both head and tail segments). Genome constructor auto-sorts.
+
+        Returns None for a child if deduplication shrinks it below
+        min_genome_size.
+
+        Args:
+            genome_a: First parent genome
+            genome_b: Second parent genome
+
+        Returns:
+            Tuple of (child_1, child_2), either may be None
         """
-        # TODO: Implement
-        return (None, None)
+        len_a = len(genome_a.codes)
+        len_b = len(genome_b.codes)
+
+        # Need at least 2 codes for an interior cut point
+        if len_a < 2 or len_b < 2:
+            return (None, None)
+
+        # Interior cut: position 1 to len-1 inclusive
+        cut_a = random.randint(1, len_a - 1)
+        cut_b = random.randint(1, len_b - 1)
+
+        # Swap tails
+        child_1_codes = genome_a.codes[:cut_a] + genome_b.codes[cut_b:]
+        child_2_codes = genome_b.codes[:cut_b] + genome_a.codes[cut_a:]
+
+        # Build genomes (auto-sorts), then deduplicate
+        child_1 = Genome(codes=child_1_codes, meal_slot=genome_a.meal_slot).deduplicate()
+        child_2 = Genome(codes=child_2_codes, meal_slot=genome_a.meal_slot).deduplicate()
+
+        # Validate size after dedup
+        min_size = self.config.min_genome_size
+        max_size = self.config.max_genome_size
+
+        result_1 = child_1 if child_1.is_valid(min_size, max_size) else None
+        result_2 = child_2 if child_2.is_valid(min_size, max_size) else None
+
+        return (result_1, result_2)
 
     def crossover_two_point(
         self, genome_a: Genome, genome_b: Genome
@@ -285,19 +430,69 @@ class BreedingPipeline:
         """
         Two-point crossover on a single meal slot's genomes.
 
-        Stub for future implementation.
-        """
-        # TODO: Implement
-        return (None, None)
+        Picks two distinct interior cut points on each parent, then
+        swaps the middle segment to produce two children.
 
-    def mutate(self, parent: Member, epoch: int) -> Optional[Member]:
-        """
-        Mutation operator on a single parent.
+        Example:
+            Parent A (5 codes): [a1 | a2, a3 | a4, a5]  cuts at 1,3
+            Parent B (6 codes): [b1, b2 | b3, b4 | b5, b6]  cuts at 2,4
+            Child 1: [a1, b3, b4, a4, a5]  (A head + B middle + A tail)
+            Child 2: [b1, b2, a2, a3, b5, b6]  (B head + A middle + B tail)
 
-        Stub for future implementation.
+        Falls back to one-point crossover if either parent has fewer
+        than 4 codes (need at least 2 distinct interior positions).
+
+        Returns None for a child if deduplication shrinks it below
+        min_genome_size.
+
+        Args:
+            genome_a: First parent genome
+            genome_b: Second parent genome
+
+        Returns:
+            Tuple of (child_1, child_2), either may be None
         """
-        # TODO: Implement
-        return None
+        len_a = len(genome_a.codes)
+        len_b = len(genome_b.codes)
+
+        # Need at least 4 codes for two distinct interior cut points
+        # (interior positions are 1..len-1, need at least 2 distinct)
+        if len_a < 4 or len_b < 4:
+            return self.crossover_one_point(genome_a, genome_b)
+
+        # Pick two sorted, distinct interior cut points per parent
+        cuts_a = sorted(random.sample(range(1, len_a), 2))
+        cuts_b = sorted(random.sample(range(1, len_b), 2))
+
+        i_a, j_a = cuts_a
+        i_b, j_b = cuts_b
+
+        # Swap middle segments
+        # Child 1: A_head + B_middle + A_tail
+        child_1_codes = (
+            genome_a.codes[:i_a]
+            + genome_b.codes[i_b:j_b]
+            + genome_a.codes[j_a:]
+        )
+        # Child 2: B_head + A_middle + B_tail
+        child_2_codes = (
+            genome_b.codes[:i_b]
+            + genome_a.codes[i_a:j_a]
+            + genome_b.codes[j_b:]
+        )
+
+        # Build genomes (auto-sorts), then deduplicate
+        child_1 = Genome(codes=child_1_codes, meal_slot=genome_a.meal_slot).deduplicate()
+        child_2 = Genome(codes=child_2_codes, meal_slot=genome_a.meal_slot).deduplicate()
+
+        # Validate size after dedup
+        min_size = self.config.min_genome_size
+        max_size = self.config.max_genome_size
+
+        result_1 = child_1 if child_1.is_valid(min_size, max_size) else None
+        result_2 = child_2 if child_2.is_valid(min_size, max_size) else None
+
+        return (result_1, result_2)
 
     # =========================================================================
     # Diagnostics

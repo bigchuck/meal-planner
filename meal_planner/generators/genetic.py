@@ -30,6 +30,9 @@ from meal_planner.generators.ga_config import GAConfig, MemberTier
 from meal_planner.generators.ga_member import Member
 from meal_planner.generators.ga_population import Population, DiversityMetrics
 from meal_planner.generators.ga_breeding import BreedingPipeline
+from meal_planner.filters.pre_score_filter import PreScoreFilter
+from meal_planner.filters.mutual_exclusion_filter import MutualExclusionFilter
+from meal_planner.filters.conditional_requirement_filter import ConditionalRequirementFilter
 
 
 # =============================================================================
@@ -51,6 +54,49 @@ class EpochSummary:
     culled_count: int = 0
     graduated_count: int = 0
     diversity: DiversityMetrics = field(default_factory=DiversityMetrics)
+
+
+class FilterStats:
+    """
+    Tracks per-filter rejection counts during a GA run.
+
+    Used for diagnostics only — rejected members are discarded,
+    not stored.  Counts are displayed in the population summary.
+    """
+
+    def __init__(self):
+        self.counts = {}          # filter_name -> rejection count
+        self.total_tested = 0     # total members submitted to filtering
+        self.total_rejected = 0   # total members rejected by any filter
+
+    def record_rejection(self, filter_name: str) -> None:
+        """Increment rejection count for a specific filter."""
+        self.counts[filter_name] = self.counts.get(filter_name, 0) + 1
+        self.total_rejected += 1
+
+    def record_test(self) -> None:
+        """Increment the tested counter (call once per member)."""
+        self.total_tested += 1
+
+    @property
+    def total_passed(self) -> int:
+        return self.total_tested - self.total_rejected
+
+    def display(self) -> None:
+        """Print a compact summary of filter activity."""
+        if self.total_tested == 0:
+            return
+
+        pass_rate = (
+            self.total_passed / self.total_tested * 100
+            if self.total_tested > 0
+            else 0
+        )
+        print(f"  Filter stats: {self.total_passed}/{self.total_tested} passed ({pass_rate:.1f}%)")
+
+        if self.counts:
+            for name, count in sorted(self.counts.items(), key=lambda x: -x[1]):
+                print(f"    {name:<30} {count:>5} rejected")
 
 
 # =============================================================================
@@ -140,11 +186,21 @@ class GeneticAlgorithm:
         workspace_dir = ctx.workspace_mgr.reco_filepath.parent
         self.ga_filepath = workspace_dir / self.GA_POPULATION_FILENAME
 
+        # Build filter pipeline and stats tracker
+        self.ga_filters = self._build_ga_filters()
+        self.filter_stats = FilterStats()
+
+        # Parse component count constraints from meal_generation config
+        self._resolve_component_constraints()
+        if self.component_constraints:
+            comp_names = [c["name"] for c in self.component_constraints]
+            print(f"Component constraints: {', '.join(comp_names)}")
+
     # =========================================================================
     # Public API
     # =========================================================================
 
-    def run(self) -> Dict[str, Any]:
+    def run(self, restart: bool = False) -> Dict[str, Any]:
         """
         Execute the GA process.
 
@@ -157,6 +213,13 @@ class GeneticAlgorithm:
         3. Run epoch loop until limit or convergence
         4. Write final population to ga_population.json
         5. Return summary dict
+
+        The existing load_existing_population() check in run() already handles
+        the file-not-found case. The file deletion happens in _generate_ga()
+        before GeneticAlgorithm is instantiated, so by the time run() is
+        called, the file is already gone if --restart was used.
+        No other changes needed inside run().
+
 
         Returns:
             Summary dict with stats
@@ -177,15 +240,53 @@ class GeneticAlgorithm:
             print(f"  Immigrants: {self.population.immigrant_size} members")
             print()
         else:
+            # Reset filter stats for this run
+            self.filter_stats = FilterStats()
             # Seed initial population
             self.initialize_population()
 
-        # TODO: Future - epoch loop goes here
-        # for epoch in range(1, self.config.epochs_per_run + 1):
-        #     summary = self.run_epoch(epoch)
-        #     self.display_epoch_progress(summary)
-        #     if self._check_convergence(summary.diversity):
-        #         break
+        # Run epoch loop
+        print(f"\nRunning {self.config.epochs_per_run} epochs...")
+        print(
+            f"{'Epoch':>6}  {'Bred':>5} {'Imm':>4} {'Acc':>4} "
+            f"{'Cull':>5} {'Grad':>5} "
+            f"{'Best':>9} {'Median':>9} {'GenPop':>6} {'ImmPop':>6}"
+        )
+        print("-" * 80)
+
+        for epoch in range(1, self.config.epochs_per_run + 1):
+            summary = self.run_epoch(epoch)
+
+            # Gather score stats for display
+            scored = [
+                m.fitness.aggregate_score
+                for m in self.population.general_members
+                if m.fitness is not None
+            ]
+            best = max(scored) if scored else 0.0
+            median = sorted(scored)[len(scored) // 2] if scored else 0.0
+
+            # Compact progress line
+            print(
+                f"{epoch:>6}  "
+                f"{summary.bred_count:>5} "
+                f"{summary.immigrant_count:>4} "
+                f"{summary.accepted_count:>4} "
+                f"{summary.culled_count:>5} "
+                f"{summary.graduated_count:>5} "
+                f"{best:>9.3f} "
+                f"{median:>9.3f} "
+                f"{self.population.general_size:>6} "
+                f"{self.population.immigrant_size:>6}"
+            )
+
+            # TODO: convergence detection
+            # if self._check_convergence(summary):
+            #     print(f"\nConvergence detected at epoch {epoch}")
+            #     break
+
+        print()
+
 
         # Write results
         self.write_results()
@@ -194,6 +295,250 @@ class GeneticAlgorithm:
         self.display_final_summary()
 
         return self._build_summary_dict()
+
+    def _build_ga_filters(self):
+        """
+        Build the filter instances used to validate GA members.
+
+        Creates filters once at initialization. Called from __init__()
+        after config and context are available.
+
+        Filters included:
+            - PreScoreFilter:              locks, availability, reserved/depleted
+            - MutualExclusionFilter:       food combo exclusions
+            - ConditionalRequirementFilter: trigger -> required companion
+
+        Filters excluded:
+            - NutrientConstraintFilter:    handled by GA fitness scoring
+            - LeftoverMatchFilter:         GA members have no portion data
+
+        Returns:
+            List of (filter_name, filter_instance) tuples
+        """
+        filters = []
+        workspace = self.ctx.workspace_mgr.load()
+        locks = workspace.get("locks", {})
+        inventory = workspace.get("inventory", {})
+
+        # Determine meal_type from config (first slot for v1)
+        meal_type = self.config.meal_slots[0].meal_type
+
+        # 1. PreScoreFilter — locks, availability, reserved/depleted
+        prescore = PreScoreFilter(
+            locks=locks,
+            meal_type=meal_type,
+            user_prefs=self.ctx.user_prefs,
+            inventory=inventory,
+        )
+        prescore.set_collect_all(False)  # reject immediately
+        filters.append(("PreScore (locks/availability)", prescore))
+
+        # 2. MutualExclusionFilter — if rules exist for this meal type
+        meal_filters_section = self.ctx.thresholds.thresholds.get("meal_filters", {})
+        meal_type_filters = meal_filters_section.get(meal_type, {})
+
+        exclusion_rules = meal_type_filters.get("mutual_exclusions", [])
+        if exclusion_rules:
+            mutual_filter = MutualExclusionFilter(
+                meal_type=meal_type,
+                thresholds_mgr=self.ctx.thresholds,
+                exclusion_rules=exclusion_rules,
+            )
+            mutual_filter.set_collect_all(False)
+            filters.append(("Mutual Exclusion", mutual_filter))
+
+        # 3. ConditionalRequirementFilter — if rules exist
+        requirement_rules = meal_type_filters.get("conditional_requirements", [])
+        if requirement_rules:
+            cond_filter = ConditionalRequirementFilter(
+                meal_type=meal_type,
+                thresholds_mgr=self.ctx.thresholds,
+                requirement_rules=requirement_rules,
+            )
+            cond_filter.set_collect_all(False)
+            filters.append(("Conditional Requirement", cond_filter))
+
+        return filters
+
+    def _resolve_component_constraints(self):
+        """
+        Parse meal_generation config to extract per-component count rules.
+
+        Walks the generation template for the active meal slot, expands
+        each component's pool_ref to a set of food codes, and records
+        the min/max count constraints.
+
+        Builds self.component_constraints: list of dicts, each with:
+            - name: component name (e.g., "liquid_fuel", "protein")
+            - codes: set of food codes from the expanded pool
+            - min: minimum required count from this component
+            - max: maximum allowed count from this component
+
+        Returns:
+            List of constraint dicts (also stored on self)
+        """
+        constraints = []
+
+        # Get meal type and template name from first slot
+        if not self.config.meal_slots:
+            self.component_constraints = constraints
+            return constraints
+
+        slot = self.config.meal_slots[0]
+        meal_type = slot.meal_type
+        template_name = slot.template_name
+
+        # Navigate config: meal_generation -> meal_type -> template_name -> components
+        meal_gen = self.ctx.thresholds.thresholds.get("meal_generation", {})
+        meal_type_gen = meal_gen.get(meal_type, {})
+        template_gen = meal_type_gen.get(template_name, {})
+        components = template_gen.get("components", {})
+
+        if not components:
+            self.component_constraints = constraints
+            return constraints
+
+        for comp_name, comp_config in components.items():
+            pool_ref = comp_config.get("pool_ref", "")
+            count_config = comp_config.get("count", {})
+            min_count = count_config.get("min", 0)
+            max_count = count_config.get("max", 99)
+
+            # Expand pool_ref to actual codes
+            if pool_ref:
+                expanded = self.ctx.thresholds.expand_pool(pool_ref)
+                codes = set(c.upper() for c in expanded)
+            else:
+                codes = set()
+
+            if codes:
+                constraints.append({
+                    "name": comp_name,
+                    "codes": codes,
+                    "min": min_count,
+                    "max": max_count,
+                })
+
+        self.component_constraints = constraints
+        return constraints
+
+    def _check_component_counts(self, member) -> str:
+        """
+        Check a member's codes against component count constraints.
+
+        For each component, counts how many of the member's codes
+        fall within that component's pool, then checks against
+        the configured min/max.
+
+        Args:
+            member: Member to validate
+
+        Returns:
+            Empty string if all constraints pass.
+            Violation description string if any constraint fails.
+        """
+        if not self.component_constraints:
+            return ""
+
+        # Collect all member codes into a set (uppercased)
+        member_codes = set()
+        for genome in member.genomes:
+            for code in genome.codes:
+                member_codes.add(code.upper())
+
+        # Check each component
+        for constraint in self.component_constraints:
+            comp_name = constraint["name"]
+            comp_codes = constraint["codes"]
+            min_count = constraint["min"]
+            max_count = constraint["max"]
+
+            # Count how many member codes are in this component's pool
+            count = len(member_codes & comp_codes)
+
+            if count < min_count:
+                return (
+                    f"component({comp_name}): "
+                    f"has {count}, needs at least {min_count}"
+                )
+            if count > max_count:
+                return (
+                    f"component({comp_name}): "
+                    f"has {count}, max allowed is {max_count}"
+                )
+
+        return ""
+
+    def _filter_member(self, member) -> bool:
+        """
+        Run a member through the GA filter pipeline.
+
+        Converts the member to filter-compatible dict via the adapter,
+        then runs each filter in sequence.  On first rejection the
+        member is discarded and the failing filter name is recorded
+        in self.filter_stats.
+
+        Args:
+            member: A Member instance (not yet in the population)
+
+        Returns:
+            True if the member passed all filters, False if rejected
+        """
+        self.filter_stats.record_test()
+
+        # Adapt member to the dict shape filters expect
+        candidate_dict = member.to_filter_dict()
+
+        for filter_name, filter_instance in self.ga_filters:
+            passed, rejected = filter_instance.filter_candidates([candidate_dict])
+
+            if rejected:
+                self.filter_stats.record_rejection(filter_name)
+                return False
+
+        # Component count check
+        violation = self._check_component_counts(member)
+        if violation:
+            self.filter_stats.record_rejection("Component Counts")
+            return False
+
+        return True
+    
+    def _process_offspring(self, member, epoch: int) -> bool:
+        """
+        Pipeline for a newly created member: validate, filter, score, add.
+
+        Used for both bred offspring and new immigrants. The caller
+        sets the member's tier before calling this method.
+
+        Args:
+            member: New Member (not yet validated/scored/ID'd)
+            epoch: Current epoch number
+
+        Returns:
+            True if member was added to population, False otherwise
+        """
+        # 1. Validate structure
+        is_valid, issues = member.validate(self.config)
+        if not is_valid:
+            return False
+
+        # 2. Filter
+        if not self._filter_member(member):
+            return False
+
+        # 3. Check uniqueness (before scoring to avoid wasted work)
+        if self.population.is_duplicate(member):
+            return False
+
+        # 4. Score
+        member.fitness = self.fitness_engine.score(member)
+
+        # 5. Assign ID and add to population
+        self.population.assign_id(member)
+        added = self.population.add_member(member)
+
+        return added
 
     def initialize_population(self) -> None:
         """
@@ -212,43 +557,38 @@ class GeneticAlgorithm:
         max_attempts = target * 10  # Safety limit
         attempts = 0
         duplicates = 0
+        filtered_out = 0
+        epoch = 0
 
         print(f"Seeding initial population (target: {target} members)...")
         print()
 
         while self.population.general_size < target and attempts < max_attempts:
+            member = self.breeding.generate_random_member(epoch)
             attempts += 1
 
-            # Generate random member for general population
-            member = self.breeding.generate_random_member(
-                epoch=0,
-                tier=MemberTier.GENERAL,
-            )
-
-            if member is None:
-                print("Error: Failed to generate random member (insufficient pool codes)")
-                break
-
-            # Validate structure
-            is_valid, issues = member.validate(self.config)
-            if not is_valid:
-                # Should not happen with random generation, but be safe
-                print(f"  Warning: Generated invalid member: {', '.join(issues)}")
+            if not member.validate(self.config):
                 continue
 
-            # Assign ID and attempt insertion
-            self.population.assign_id(member)
-            added = self.population.add_member(member)
+            if not self._filter_member(member):
+                filtered_out += 1
+                continue
 
-            if not added:
+            if self.population.is_duplicate(member):
                 duplicates += 1
+                continue
+
+            self.population.assign_id(member)
+            self.population.add_member(member)
 
             # Progress display every 25% or every 100 members
             if self.population.general_size % max(1, target // 4) == 0:
                 print(
-                    f"  {self.population.general_size}/{target} members "
-                    f"({attempts} attempts, {duplicates} duplicates)"
+                    f"Population seeded: {self.population.general_size} members "
+                    f"in {attempts} attempts "
+                    f"({duplicates} duplicates, {filtered_out} filtered out)"
                 )
+                self.filter_stats.display()
 
         # Score all members
         print(f"Scoring {self.population.general_size} members...")
@@ -284,10 +624,6 @@ class GeneticAlgorithm:
             )
         print()
 
-        print(f"DEBUG:")
-        totals = self.fitness_engine.calculate_nutrient_totals(member.genomes[0])
-        print(f"DEBUG: totals\n{totals}")
-
     # =========================================================================
     # Epoch loop (stubs for future implementation)
     # =========================================================================
@@ -296,23 +632,90 @@ class GeneticAlgorithm:
         """
         Execute one epoch of the GA.
 
-        Stub for future implementation. Sequence:
-        1. Graduate aged-out immigrants -> general pop, rerank, cull
+        Sequence:
+        1. Graduate aged-out immigrants → general pop, rerank, cull
         2. Generate random immigrants up to pool cap
         3. Breed from combined population
-        4. Validate, filter, score new members
-        5. Rerank general population, cull to target
-        6. Compute diversity metrics
-        7. Display epoch progress
+        4. Rerank general population, cull to target
+        5. Return epoch summary
 
         Args:
-            epoch: Current epoch number
+            epoch: Current epoch number (1-based)
 
         Returns:
-            EpochSummary with counts and metrics
+            EpochSummary with counts for display
         """
-        # TODO: Implement epoch processing
-        return EpochSummary(epoch=epoch)
+        summary = EpochSummary(epoch=epoch)
+
+        # Reset per-epoch tracking
+        self.filter_stats = FilterStats()
+        self.population.reset_epoch_stats()
+
+        # =================================================================
+        # Step 1: Graduate aged-out immigrants
+        # =================================================================
+        graduated, grad_culled = self.population.graduate_immigrants(epoch)
+        summary.graduated_count = graduated
+
+        # =================================================================
+        # Step 2: Generate random immigrants
+        # =================================================================
+        immigrant_target = self.config.immigrant_pool_size_per_epoch
+        current_immigrants = self.population.immigrant_size
+        max_total = self.config.max_immigrant_pool_total
+        spots_available = max_total - current_immigrants
+        to_generate = min(immigrant_target, spots_available)
+
+        immigrants_added = 0
+        immigrant_attempts = 0
+        max_immigrant_attempts = to_generate * 5  # safety limit
+
+        while immigrants_added < to_generate and immigrant_attempts < max_immigrant_attempts:
+            immigrant_attempts += 1
+            member = self.breeding.generate_random_member(
+                epoch=epoch,
+                tier=MemberTier.IMMIGRANT,
+            )
+            if member is None:
+                break
+
+            if self._process_offspring(member, epoch):
+                immigrants_added += 1
+
+        summary.immigrant_count = immigrants_added
+
+        # =================================================================
+        # Step 3: Breed from combined population
+        # =================================================================
+        breed_target = self.config.new_members_per_epoch
+        bred_accepted = 0
+        breed_attempts = 0
+
+        # Need at least 2 members to breed
+        if self.population.size >= 2:
+            while breed_attempts < breed_target:
+                breed_attempts += 1
+
+                # Select parents and apply operator
+                parent_a, parent_b = self.population.select_pair()
+                result = self.breeding.breed(parent_a, parent_b, epoch)
+
+                # Process each offspring through the pipeline
+                for offspring in result.offspring:
+                    if self._process_offspring(offspring, epoch):
+                        bred_accepted += 1
+
+        summary.bred_count = breed_attempts
+        summary.accepted_count = bred_accepted + immigrants_added
+
+        # =================================================================
+        # Step 4: Rerank and cull general population
+        # =================================================================
+        self.population.rerank()
+        culled = self.population.cull_general()
+        summary.culled_count = culled + grad_culled
+
+        return summary
 
     # =========================================================================
     # Output

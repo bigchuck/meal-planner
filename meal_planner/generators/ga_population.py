@@ -331,6 +331,32 @@ class Population:
     # Selection for breeding (stub for future implementation)
     # =========================================================================
 
+    def select_one(self) -> Member:
+        """
+        Select a single member via rank-based roulette.
+
+        Uses the same weighting as select_pair(): combined population
+        (general + immigrant) ranked by fitness, with selection
+        probability proportional to (N - rank + 1) ^ pressure.
+
+        Returns:
+            Selected Member
+
+        Raises:
+            ValueError: If population is empty
+        """
+        import random
+
+        combined = self.all_members
+        if not combined:
+            raise ValueError("Cannot select from empty population")
+
+        n = len(combined)
+        pressure = self.config.selection_pressure
+        weights = [(n - i) ** pressure for i in range(n)]
+
+        return random.choices(combined, weights=weights, k=1)[0]
+
     def select_pair(self) -> Tuple[Member, Member]:
         """
         Select two distinct members for breeding via rank-based roulette.

@@ -135,15 +135,16 @@ class RecommendCommand(Command, CommandHistoryMixin):
         """Display help for recommend command."""
         print("\nRECOMMEND - Meal recommendation pipeline")
         print("Subcommands:")
-        print("  recommend generate <meal_type> [--method <method>] [--count N] [--template <template>] ")
-        print("    <method> := [history|exhaustive]")
+        print("  recommend generate <meal_type> [--method <method>] [--count N] [--template <template>] [--restart]")
+        print("    <method> := [history|exhaustive|ga]")
+        print("    --restart: (GA only) delete existing GA file and start fresh")
         print("    <template> := [template name used for exhaustive]")
         print("  recommend status [--verbose]") 
         print("  recommend reset [--force]")
         print("  recommend show [rejected] [[id]|--limit N [--skip N]]")
         print("  recommend filter [--verbose]")
         print("  recommend score [--verbose]")
-        print("  recommend accept <G-ID> [--as <id>] [--desc <text>]")
+        print("  recommend accept <G-ID|GA-N> [--as <id>] [--desc <text>]")
         print("  recommend discard [array]")
         print("    <array> := [raw|filtered|scored]")
         print("  recommend discard view <name>|==all")
@@ -159,6 +160,14 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print("  5. recommend score               # Score filtered candidates")
         print("  6. recommend accept G3           # Accept a recommendation")
         print("  7. recommend discard             # Clean up when done")
+        print()
+        print("GA workflow:")
+        print("  1. recommend generate breakfast --method ga          # Run GA")
+        print("  2. recommend generate breakfast --method ga          # Resume")
+        print("  3. recommend show GA-1                               # View member")
+        print("  4. recommend show GA-1 --verbose                     # Detailed report")
+        print("  5. recommend accept GA-1                             # Accept to workspace")
+        print("  6. recommend generate breakfast --method ga --restart # Fresh start")
         print()
 
     def _score_meal(self, context: ScoringContext) -> None:
@@ -809,6 +818,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         reset = False
         template_name = None
         count_explicit = False
+        restart = False
         
         i = 1
         while i < len(args):
@@ -836,6 +846,9 @@ class RecommendCommand(Command, CommandHistoryMixin):
             elif args[i] == "--template" and i + 1 < len(args):
                 template_name = args[i + 1]
                 i += 2
+            elif args[i] == "--restart":
+                restart = True
+                i += 1                
             else:
                 print(f"\nError: Unknown flag '{args[i]}'")
                 print()
@@ -885,7 +898,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         if method == "history":
             self._generate_from_history(meal_key, count, workspace, reco_workspace, template_name)
         elif method == "ga":
-            self._generate_ga(meal_key, workspace, reco_workspace, template_name)
+            self._generate_ga(meal_key, workspace, reco_workspace, template_name, restart)
         else:  # exhaustive
             self._generate_exhaustive(meal_key, count, workspace, reco_workspace, template_name)
     
@@ -1316,7 +1329,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
             
             # Check if this is an array name, view name, or candidate ID
             # First, check for array names (built-in)
-            if arg.lower() in ["scored", "filtered", "rejected", "raw"]:
+            if arg.lower() in ["scored", "filtered", "rejected", "raw", "ga"]:
                 array_or_view_name = arg.lower()
                 
                 # Check if next arg is a range specification
@@ -1365,6 +1378,29 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
             return
         
+        # Route GA- prefixed IDs to GA population
+        if candidate_id and candidate_id.upper().startswith("GA-"):
+            self._ga_show_member([candidate_id] + (
+                ["--verbose"] if any(f in args for f in ["--verbose", "-v"]) else []
+            ))
+            return
+        
+        if array_or_view_name == "ga":
+            # --- GA population routing ---
+            if array_or_view_name == "ga":
+                verbose = "--verbose" in args or "-v" in args
+                self._ga_show_from_population(
+                    range_spec=range_spec,
+                    verbose=verbose,
+                    items_flag=items_flag,
+                    gaps_flag=gaps_flag,
+                    excesses_flag=excesses_flag,
+                    nutrients_flag=nutrients_flag,
+                    limit=limit,
+                    skip=skip,
+                )
+                return
+
         # Load candidates
         gen_cands = self.ctx.workspace_mgr.get_generated_candidates()
         
@@ -1378,7 +1414,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         # Validate flags usage
         any_display_flag = items_flag or gaps_flag or excesses_flag or nutrients_flag
-        
+
         # Case 1: Show specific candidate by ID (detailed view, ignore flags)
         if candidate_id and not array_or_view_name and not range_spec:
             if any_display_flag:
@@ -1400,6 +1436,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         # Case 2: Show from array or view with optional range and flags
         if array_or_view_name:
+                    
             # Determine if this is an array or view
             is_view = array_or_view_name not in ["scored", "filtered", "rejected", "raw"]
             
@@ -2158,6 +2195,66 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print("Use 'recommend show rejected --items' to see macro tables")
         print()
 
+    def _ga_show_member(self, args: list) -> None:
+        """
+        Show details or report for a GA population member.
+
+        If just the member ID is given, shows a detailed view with
+        items, scores, and nutrient breakdown.
+
+        Args:
+            args: [member_id] plus optional flags
+        """
+        if not args:
+            # No specific member — show population summary
+            population = self._load_ga_population()
+            if population:
+                population.display_summary(verbose=True)
+            return
+
+        member_id = args[0].upper()
+        verbose = "--verbose" in args or "-v" in args
+
+        member = self._load_ga_member(member_id)
+        if member is None:
+            return
+
+        # Header
+        score_str = (
+            f"{member.fitness.aggregate_score:.3f}"
+            if member.fitness else "unscored"
+        )
+        print(f"\n=== GA Member: {member.member_id} ===")
+        print(f"Score:    {score_str}")
+        print(f"Origin:   {member.origin.value}")
+        print(f"Epoch:    {member.birth_epoch}")
+        print(f"Tier:     {member.tier.value}")
+        print(f"Codes:    {member._build_description()}")
+        print()
+
+        # Run report on the member's items
+        items = member.to_items_list()
+        if items:
+            from meal_planner.reports.report_builder import ReportBuilder
+            report = ReportBuilder(self.ctx.master)
+            built_report = report.build_from_items(items)
+            built_report.print(verbose=verbose)
+
+        # Show fitness breakdown if scored and verbose
+        if verbose and member.fitness and member.fitness.nutrient_scores:
+            print(f"\n--- Fitness Breakdown ---")
+            for nname, ndata in member.fitness.nutrient_scores.items():
+                print(
+                    f"  {nname:<12} value={ndata['value']:.1f}  "
+                    f"raw={ndata['raw_score']:.3f}  "
+                    f"w={ndata['weighted_score']:.3f}"
+                )
+            if member.fitness.penalties:
+                for pname, pval in member.fitness.penalties.items():
+                    print(f"  {pname:<12} penalty={pval:.3f}")
+            print()
+
+
     def _get_candidate_totals(self, candidate: Dict[str, Any]) -> Dict[str, float]:
         """
         Get or calculate nutritional totals for a candidate.
@@ -2626,6 +2723,12 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         # Parse arguments
         g_id = args[0].upper()
+        
+        # Route GA- prefixed IDs to GA acceptance
+        if g_id.startswith("GA-"):
+            self._ga_accept_member(args)
+            return
+
         custom_id = None
         description = None
         
@@ -2645,7 +2748,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 break
             else:
                 i += 1
-        
+
         # Validate G-ID format
         if not g_id.startswith("G"):
             print(f"\nError: Invalid ID '{g_id}' - must be a G-ID (e.g., G3)")
@@ -2854,6 +2957,127 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
         
         print(f"Use 'plan show {target_id}' to view details")
+        print()
+
+    def _ga_accept_member(self, args: list) -> None:
+        """
+        Accept a GA member and promote to planning workspace.
+
+        Converts the GA member to a standard candidate dict via
+        to_candidate_dict(), then saves it into the planning workspace
+        using the same path as exhaustive candidate acceptance.
+
+        Args:
+            args: [member_id] plus optional --as and --desc flags
+        """
+        if not args:
+            print("\nUsage: recommend accept GA-<n> [--as <id>] [--desc <text>]")
+            print()
+            return
+
+        member_id = args[0].upper()
+
+        # Parse optional flags
+        custom_id = None
+        description = None
+
+        i = 1
+        while i < len(args):
+            if args[i] == "--as" and i + 1 < len(args):
+                custom_id = args[i + 1]
+                i += 2
+            elif args[i] == "--desc" and i + 1 < len(args):
+                description = " ".join(args[i + 1:])
+                if description.startswith('"') and description.endswith('"'):
+                    description = description[1:-1]
+                elif description.startswith("'") and description.endswith("'"):
+                    description = description[1:-1]
+                break
+            else:
+                i += 1
+
+        # Load the member
+        member = self._load_ga_member(member_id)
+        if member is None:
+            return
+
+        # Convert to candidate dict
+        candidate = member.to_candidate_dict()
+
+        # Build meal data for workspace
+        meal_name = candidate.get("meal", {}).get("meal_type", "meal")
+        items = candidate.get("meal", {}).get("items", [])
+
+        if not items:
+            print(f"\nError: Member {member_id} has no items")
+            print()
+            return
+
+        # Calculate totals
+        totals = {}
+        for item in items:
+            code = item.get("code", "").upper()
+            mult = float(item.get("mult", 1.0))
+            food = self.ctx.master.lookup_code(code)
+            if food:
+                for key in ["cal", "prot_g", "carbs_g", "fat_g", "sugar_g"]:
+                    totals[key] = totals.get(key, 0) + food.get(key, 0) * mult
+                gl_key = "GL"
+                totals["gl"] = totals.get("gl", 0) + food.get(gl_key, 0) * mult
+
+        # Determine target ID
+        from datetime import datetime
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+        ws = self.ctx.planning_workspace
+
+        if custom_id:
+            target_id = custom_id
+        else:
+            target_id = member_id  # Use GA-N as the workspace ID
+
+        # Check for duplicate ID
+        for existing in ws['candidates']:
+            if existing['id'].upper() == target_id.upper():
+                print(f"\nError: Workspace meal '{target_id}' already exists")
+                print("Use --as <custom_id> to specify a different ID")
+                print()
+                return
+
+        # Build workspace meal entry
+        meal_data = {
+            'id': target_id,
+            'type': 'ga',
+            'meal_name': meal_name,
+            'items': items,
+            'totals': totals,
+            'source_date': None,
+            'source_time': None,
+            'constraints_met': True,
+            'modification_log': [],
+            'immutable': False,
+            'description': description or f"GA member {member.member_id} (score: {member.fitness.aggregate_score:.3f})" if member.fitness else f"GA member {member.member_id}",
+            'history': [{
+                'timestamp': timestamp,
+                'command': f'recommend accept {member_id}',
+                'note': f'accepted from GA population (origin: {member.origin.value}, epoch: {member.birth_epoch})'
+            }]
+        }
+
+        # Add to workspace
+        ws['candidates'].append(meal_data)
+        self.ctx.save_workspace()
+
+        # Refresh planning workspace in context
+        workspace = self.ctx.workspace_mgr.load()
+        self.ctx.planning_workspace = self.ctx.workspace_mgr.convert_to_planning_workspace(workspace)
+
+        print(f"\nAccepted {member_id} as workspace meal '{target_id}'")
+        print(f"  Meal type: {meal_name}")
+        print(f"  Items:     {len(items)}")
+        if member.fitness:
+            print(f"  GA score:  {member.fitness.aggregate_score:.3f}")
+        print()
+        print("Use 'plan show' to review workspace")
         print()
 
     def _debugdump(self, args: List[str]) -> None:
@@ -3174,7 +3398,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print(f"Total raw candidates in workspace: {new_cursor}")
         print()
 
-    def _generate_ga(self, meal_key, workspace, reco_workspace, template_name=None):
+    def _generate_ga(self, meal_key, workspace, reco_workspace, template_name=None,
+                     restart: bool = False):
         """
         Run the Genetic Algorithm to generate a population of candidates.
 
@@ -3230,9 +3455,16 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 {"meal_type": meal_key, "template_name": template_name}
             ]
 
+            # Handle restart flag
+            if restart:
+                ga_filepath = self.ctx.workspace_mgr.reco_filepath.parent / GeneticAlgorithm.GA_POPULATION_FILENAME
+                if ga_filepath.exists():
+                    print(f"\nRestarting GA: deleting {ga_filepath.name}")
+                    ga_filepath.unlink()
+
             try:
                 ga = GeneticAlgorithm(self.ctx)
-                result = ga.run()
+                result = ga.run(restart=restart)
             finally:
                 # Restore original meal_slots config
                 if original_slots is not None:
@@ -3257,6 +3489,69 @@ class RecommendCommand(Command, CommandHistoryMixin):
             import traceback
             traceback.print_exc()
             print()
+
+    def _load_ga_population(self):
+        """
+        Load GA population from ga_population.json.
+
+        Returns:
+            Population instance, or None if file not found or error
+        """
+        import json
+        from meal_planner.generators.ga_config import GAConfig
+        from meal_planner.generators.ga_population import Population
+        from meal_planner.generators.genetic import GeneticAlgorithm
+
+        ga_filepath = self.ctx.workspace_mgr.reco_filepath.parent / GeneticAlgorithm.GA_POPULATION_FILENAME
+
+        if not ga_filepath.exists():
+            print("\nNo GA population file found")
+            print("Run 'recommend generate <meal> --method ga' first")
+            print()
+            return None
+
+        try:
+            with open(ga_filepath, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+
+            config = GAConfig.from_config(state["population"]["config"])
+            population = Population.from_dict(state["population"], config)
+            return population
+
+        except Exception as e:
+            print(f"\nError loading GA population: {e}")
+            print()
+            return None
+
+    def _load_ga_member(self, member_id: str):
+        """
+        Load a specific member from the GA population by ID.
+
+        Args:
+            member_id: Member ID (e.g., "GA-5")
+
+        Returns:
+            Member instance, or None if not found
+        """
+        population = self._load_ga_population()
+        if population is None:
+            return None
+
+        member_id_upper = member_id.upper()
+
+        # Search both tiers
+        for member in population.all_members:
+            if member.member_id.upper() == member_id_upper:
+                return member
+
+        print(f"\nMember '{member_id}' not found in GA population")
+        # Show available IDs
+        all_ids = [m.member_id for m in population.general_members[:10]]
+        if all_ids:
+            print(f"Available (top 10): {', '.join(all_ids)}")
+        print()
+        return None
+
 
     def _reset(self, args: List[str]) -> None:
         """
@@ -4399,3 +4694,150 @@ class RecommendCommand(Command, CommandHistoryMixin):
                     return actual_value <= target_value
         
         return False
+    
+    def _ga_show_from_population(
+        self,
+        range_spec=None,
+        verbose: bool = False,
+        items_flag: bool = False,
+        gaps_flag: bool = False,
+        excesses_flag: bool = False,
+        nutrients_flag: bool = False,
+        limit=None,
+        skip: int = 0,
+    ) -> None:
+        """
+        Show GA population members with range and position support.
+
+        Handles:
+            reco show ga                    # compact summary of all
+            reco show ga 5                  # detailed view of rank #5
+            reco show ga 1-10               # compact list of top 10
+            reco show ga 3,7,12             # specific positions
+            reco show ga 1-20 --items       # compact with items flag
+
+        Args:
+            range_spec: Position specification (int, range, list, "all", or None)
+            verbose: Show detailed fitness breakdown
+            items_flag: Show items in compact view
+            gaps_flag: Show gaps in compact view
+            excesses_flag: Show excesses in compact view
+            nutrients_flag: Show nutrients in compact view
+            limit: Max members to display
+            skip: Number to skip from start
+        """
+        population = self._load_ga_population()
+        if population is None:
+            return
+
+        # Get ranked general population members
+        members = list(population.general_members)
+        if not members:
+            print("\nGA population is empty")
+            print()
+            return
+
+        # Apply range if specified
+        if range_spec is not None:
+            if range_spec == "all":
+                selected = members
+            elif isinstance(range_spec, int):
+                # Single position (1-based)
+                if range_spec < 1 or range_spec > len(members):
+                    print(f"\nPosition {range_spec} out of range "
+                          f"(1-{len(members)} available)")
+                    print()
+                    return
+                # Single member — show detailed view
+                member = members[range_spec - 1]
+                flag_args = []
+                if verbose:
+                    flag_args.append("--verbose")
+                self._ga_show_member([member.member_id] + flag_args)
+                return
+            elif isinstance(range_spec, range):
+                selected = [members[p - 1] for p in range_spec
+                            if 1 <= p <= len(members)]
+            elif isinstance(range_spec, list):
+                selected = [members[p - 1] for p in range_spec
+                            if 1 <= p <= len(members)]
+            else:
+                selected = members
+
+            if not selected:
+                print(f"\nNo members match range specification")
+                print()
+                return
+        else:
+            selected = members
+
+        # Apply skip and limit
+        total = len(selected)
+        start_idx = min(skip, total)
+        if limit:
+            end_idx = min(start_idx + limit, total)
+        else:
+            end_idx = total
+        display = selected[start_idx:end_idx]
+
+        if not display:
+            print(f"\nNo members to show (skip={skip} >= total={total})")
+            print()
+            return
+
+        # Header
+        print(f"\n=== GA POPULATION (GENERAL) ===")
+        imm_count = population.immigrant_size
+        imm_str = f", {imm_count} immigrants" if imm_count else ""
+        if limit or skip:
+            print(f"Showing {len(display)} of {total} members "
+                  f"(positions {start_idx+1}-{end_idx}){imm_str}")
+        else:
+            print(f"Total: {total} members{imm_str}")
+        print()
+
+        # Display each member as a compact line
+        # Rank  ID       Score    Len  Origin  Codes
+        print(f"{'Rank':>5}  {'ID':<8} {'Score':>9}  {'Len':>3}  "
+              f"{'Origin':<7}  Codes")
+        print("-" * 72)
+
+        for i, member in enumerate(display):
+            rank = start_idx + i + 1
+            score_str = (
+                f"{member.fitness.aggregate_score:.3f}"
+                if member.fitness else "  ---  "
+            )
+            codes = member._build_description()
+
+            print(
+                f"{rank:>5}  {member.member_id:<8} {score_str:>9}  "
+                f"{member.genome_length():>3}  "
+                f"{member.origin.value:<7}  {codes}"
+            )
+
+            # Optional items detail (show food names)
+            if items_flag:
+                for genome in member.genomes:
+                    for code in genome.codes:
+                        food = self.ctx.master.lookup_code(code)
+                        if food:
+                            col = self.ctx.master.cols.option
+                            name = food.get(col, "Unknown")
+                            print(f"         {code:<8} {name}")
+
+            # Optional nutrient scores
+            if nutrients_flag and member.fitness and member.fitness.nutrient_scores:
+                for nname, ndata in member.fitness.nutrient_scores.items():
+                    val = ndata.get('value', 0)
+                    raw = ndata.get('raw_score', 0)
+                    print(f"         {nname:<12} {val:>7.1f}  raw={raw:.3f}")
+
+        print()
+
+        # Pagination hint
+        if end_idx < total:
+            remaining = total - end_idx
+            print(f"  {remaining} more members. Use --skip {end_idx} or range "
+                  f"{end_idx+1}-{total} to see more.")
+            print()
