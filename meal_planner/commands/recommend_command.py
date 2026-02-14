@@ -876,14 +876,16 @@ class RecommendCommand(Command, CommandHistoryMixin):
         gen_state = reco_workspace.get("generation_state", {})
         existing_method = gen_state.get("method")
         existing_meal = gen_state.get("meal_type")
-        
+
         # Check for method/meal mismatch
-        if gen_state and (existing_method != method or existing_meal != meal_key):
+        # GA manages its own state via ga_population.json — skip this check
+        if gen_state and method != "ga" and existing_method != "ga" and \
+                (existing_method != method or existing_meal != meal_key):
             print(f"\nWarning: Active generation session exists:")
             print(f"  Current: {existing_method} for {existing_meal}")
             print(f"  Requested: {method} for {meal_key}")
             print()
-            print("Use --reset to clear and start new session")
+            print("Use 'recommend reset' to clear and start new session")
             print()
             return
         
@@ -3461,6 +3463,24 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 if ga_filepath.exists():
                     print(f"\nRestarting GA: deleting {ga_filepath.name}")
                     ga_filepath.unlink()
+
+            # Check if existing GA population is for a different meal
+            if not restart:
+                ga_filepath = self.ctx.workspace_mgr.reco_filepath.parent / GeneticAlgorithm.GA_POPULATION_FILENAME
+                if ga_filepath.exists():
+                    import json
+                    try:
+                        with open(ga_filepath, 'r', encoding='utf-8') as f:
+                            state = json.load(f)
+                        existing_meal = state.get("population", {}).get("config", {}).get("meal_slots", [{}])[0].get("meal_type", "")
+                        if existing_meal and existing_meal != meal_key:
+                            print(f"\nExisting GA population is for '{existing_meal}', "
+                                f"not '{meal_key}'")
+                            print("Use --restart to clear and start fresh for this meal")
+                            print()
+                            return
+                    except Exception:
+                        pass  # Corrupted file — GA init will handle it
 
             try:
                 ga = GeneticAlgorithm(self.ctx)
