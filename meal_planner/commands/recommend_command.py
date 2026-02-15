@@ -1273,6 +1273,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         gaps_flag = False
         excesses_flag = False
         nutrients_flag = False
+        verbose_flag = False
         
         i = 0
         while i < len(args):
@@ -1328,7 +1329,12 @@ class RecommendCommand(Command, CommandHistoryMixin):
                         print(f"\nError: Invalid skip value '{args[i + 1]}'")
                         print()
                         return
-            
+
+            if arg in ("--verbose", "-v"):
+                verbose_flag = True
+                i += 1
+                continue
+
             # Check if this is an array name, view name, or candidate ID
             # First, check for array names (built-in)
             if arg.lower() in ["scored", "filtered", "rejected", "raw", "ga"]:
@@ -1389,19 +1395,18 @@ class RecommendCommand(Command, CommandHistoryMixin):
         
         if array_or_view_name == "ga":
             # --- GA population routing ---
-            if array_or_view_name == "ga":
-                verbose = "--verbose" in args or "-v" in args
-                self._ga_show_from_population(
-                    range_spec=range_spec,
-                    verbose=verbose,
-                    items_flag=items_flag,
-                    gaps_flag=gaps_flag,
-                    excesses_flag=excesses_flag,
-                    nutrients_flag=nutrients_flag,
-                    limit=limit,
-                    skip=skip,
-                )
-                return
+            verbose = "--verbose" in args or "-v" in args
+            self._ga_show_from_population(
+                range_spec=range_spec,
+                verbose=verbose,
+                items_flag=items_flag,
+                gaps_flag=gaps_flag,
+                excesses_flag=excesses_flag,
+                nutrients_flag=nutrients_flag,
+                limit=limit,
+                skip=skip,
+            )
+            return
 
         # Load candidates
         gen_cands = self.ctx.workspace_mgr.get_generated_candidates()

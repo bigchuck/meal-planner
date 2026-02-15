@@ -542,10 +542,15 @@ class Population:
                 print(f"No members scored yet")
             print()
 
+        max_to_show = 5
+        showed_count = 0
         if verbose and self._general:
             print(f"{'Rank':<6}{'ID':<10}{'Score':<10}{'Len':<6}{'Origin':<8}{'Codes'}")
             print(f"{'-'*6}{'-'*10}{'-'*10}{'-'*6}{'-'*8}{'-'*50}")
             for rank, member in enumerate(self._general, 1):
+                showed_count += 1
+                if showed_count > max_to_show:
+                    break
                 score_str = (
                     f"{member.fitness.aggregate_score:.3f}"
                     if member.fitness else "---"
