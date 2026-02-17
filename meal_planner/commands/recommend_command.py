@@ -407,7 +407,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         # If totals not in meal, calculate them
         if not totals_dict:
             from meal_planner.reports import ReportBuilder
-            report_builder = ReportBuilder(self.ctx.master)
+            report_builder = ReportBuilder(self.ctx.master, self.ctx.report_columns)
             report = report_builder.build_from_items(items, title="Scoring")
             totals = report.totals
             
@@ -1910,7 +1910,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 print()
                 
                 # Build and print report using ReportBuilder
-                builder = ReportBuilder(self.ctx.master)
+                builder = ReportBuilder(self.ctx.master, self.ctx.report_columns)
                 items_list = candidate.get("meal", {}).get("items", [])
                 report = builder.build_from_items(items_list, title="")
                 
@@ -2154,7 +2154,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 print()
                 
                 # Build and print report using ReportBuilder
-                builder = ReportBuilder(self.ctx.master)
+                builder = ReportBuilder(self.ctx.master, self.ctx.report_columns)
                 items_list = candidate.get("meal", {}).get("items", [])
                 report = builder.build_from_items(items_list, title="")
                 
@@ -2243,7 +2243,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         items = member.to_items_list()
         if items:
             from meal_planner.reports.report_builder import ReportBuilder
-            report = ReportBuilder(self.ctx.master)
+            report = ReportBuilder(self.ctx.master, self.ctx.report_columns)
             built_report = report.build_from_items(items)
             built_report.print(verbose=verbose)
 
@@ -2287,7 +2287,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         # Calculate from items
         from meal_planner.reports import ReportBuilder
         
-        builder = ReportBuilder(self.ctx.master)
+        builder = ReportBuilder(self.ctx.master, self.ctx.report_columns)
         items = candidate.get("meal", {}).get("items", [])
         
         if not items:
@@ -2371,7 +2371,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
         # Build and print report using ReportBuilder (same as --items view)
         from meal_planner.reports import ReportBuilder
 
-        builder = ReportBuilder(self.ctx.master)
+        builder = ReportBuilder(self.ctx.master, self.ctx.report_columns)
         items_list = candidate.get("meal", {}).get("items", [])
         report = builder.build_from_items(items_list, title="")
 
@@ -3186,7 +3186,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
             enriched_candidate["items"] = enriched_items
             
             # Calculate macros and micros using ReportBuilder
-            builder = ReportBuilder(self.ctx.master)
+            builder = ReportBuilder(self.ctx.master, self.ctx.report_columns)
             report = builder.build_from_items(items, title="")
             
             totals = report.totals

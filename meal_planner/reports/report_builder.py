@@ -10,6 +10,7 @@ from meal_planner.models import DailyTotals, NutrientRow
 from meal_planner.data import MasterLoader
 from meal_planner.utils import ColumnResolver
 from meal_planner.utils.time_utils import categorize_time, normalize_meal_name, MEAL_NAMES
+from meal_planner.reports.report_columns import ReportColumnConfig
 
 class ReportBuilder:
     """
@@ -18,7 +19,7 @@ class ReportBuilder:
     Shows breakdown of each code with its multiplier and nutrient contributions.
     """
     
-    def __init__(self, master: MasterLoader):
+    def __init__(self, master: MasterLoader, report_columns=None):
         """
         Initialize report builder.
         
@@ -26,6 +27,7 @@ class ReportBuilder:
             master: MasterLoader instance for lookups
         """
         self.master = master
+        self.report_columns = report_columns or ReportColumnConfig.default()
     
     def build_from_items(self, items: List[Dict[str, Any]], 
                         title: str = "Report") -> 'Report':
@@ -86,14 +88,21 @@ class ReportBuilder:
                 item_totals.vitC_mg = self._safe_float(micro_data.get('vitC_mg', 0)) * mult
                 item_totals.iron_mg = self._safe_float(micro_data.get('iron_mg', 0)) * mult
         
-            
+            # Populate non-aggregated item values from master
+            item_values = {}
+            for na_col in self.report_columns.non_aggregated_columns():
+                col_name = getattr(cols, na_col.master_col, None) if na_col.master_col else None
+                if col_name:
+                    item_values[na_col.name] = self._safe_float(row_data.get(col_name, 0))
+
             # Create row
             row = NutrientRow(
                 code=code,
                 option=str(row_data.get(cols.option, "")),
                 section=str(row_data.get(cols.section, "")),
                 multiplier=mult,
-                totals=item_totals
+                totals=item_totals,
+                item_values=item_values
             )
             
             # Track in display order
@@ -104,7 +113,7 @@ class ReportBuilder:
             # Accumulate totals
             totals = totals + item_totals
         
-        return Report(rows, totals, missing, display, title)
+        return Report(rows, totals, missing, display, title, self.report_columns)
     
     def _safe_float(self, value, default: float = 0.0) -> float:
         """Safely convert to float."""
@@ -130,13 +139,14 @@ class Report:
     
     def __init__(self, rows: List[NutrientRow], totals: DailyTotals,
                  missing: List[str], display: List[Tuple[str, Any]], 
-                 title: str = "Report"):
+                 title: str = "Report", report_columns=None):
         """Initialize report."""
         self.rows = rows
         self.totals = totals
         self.missing = missing
         self.display = display
         self.title = title
+        self.report_columns = report_columns or ReportColumnConfig.default()
     
     def print(self, verbose: bool = False) -> None:
         """Print formatted report to console."""
@@ -147,15 +157,19 @@ class Report:
             print()
             return
     
+        rc = self.report_columns
         opt_width = 41 if verbose else 21
-        line_width = 98 if verbose else 78
+        prefix_width = 8 + 1 + 8 + 1 + 4 + 1 + opt_width + 1
+        line_width = prefix_width + rc.grid_width()
 
         # Header
+        grid_header = rc.build_grid_header()
         print(f"{'CODE':>8} {'Section':<8} {'x':>4} {'Option':<{opt_width}} "
-            f"{'Cal':>6} {'P':>5} {'C':>5} {'F':>5} {'Sug':>6} {'GL':>4}")
+              f"{grid_header}")
         print("-" * line_width)
         
         # Display rows in order (with time markers)
+        grid_blanks = rc.build_grid_blanks()
         for kind, val in self.display:
             if kind == "time":
                 # Time marker row - val is the full item dict
@@ -165,7 +179,7 @@ class Report:
                 if meal_override:
                     display_str += f" ({meal_override})"
                 print(f"{'':>8} {'':<8} {'':>4} {'time: '+display_str:<{opt_width}} "
-                    f"{'':>6} {'':>5} {'':>5} {'':>5} {'':>6} {'':>4}")
+                      f"{grid_blanks}")
             else:
                 # Nutrient row
                 row = self.rows[val]
@@ -173,17 +187,10 @@ class Report:
         
         # Totals
         print("-" * line_width)
-        rounded = self.totals.rounded()
-        print(f"Totals = Cal: {int(rounded.calories)} | "
-              f"P: {int(rounded.protein_g)} g | "
-              f"C: {int(rounded.carbs_g)} g | "
-              f"F: {int(rounded.fat_g)} g | "
-              f"Sugars: {int(rounded.sugar_g)} g | "
-              f"GL: {int(rounded.glycemic_load)}")
-        # Add nutrient totals if available
-        nutrient_line = self.format_nutrient_totals()
-        if nutrient_line:
-            print(f"Micros = {nutrient_line}")
+        print(rc.format_totals_line(self.totals))
+        micros_line = rc.format_micros_line(self.totals)
+        if micros_line:
+            print(micros_line)
         
         if self.missing:
             print(f"Missing (not counted): {', '.join(self.missing)}")
@@ -209,13 +216,13 @@ class Report:
         # Section truncated to 8 chars
         sect = row.section[:8]
         
-        # Rounded totals
-        t = row.totals.rounded()
+        # Grid values from config (pass item_values for non-aggregated columns)
+        grid_values = self.report_columns.format_grid_values(
+            row.totals, item_values=row.item_values
+        )
         
         print(f"{row.code:>8} {sect:<8} {mult_str:>4} {opt_display:<{opt_width}} "
-              f"{int(t.calories):>6} {int(t.protein_g):>5} "
-              f"{int(t.carbs_g):>5} {int(t.fat_g):>5} "
-              f"{int(t.sugar_g):>6} {int(t.glycemic_load):>4}")
+              f"{grid_values}")
     
     def _format_mult(self, mult: float) -> str:
         """
@@ -377,15 +384,8 @@ class Report:
                 lines.append(self._format_abbreviated_row(row))
         
         # Totals (without "TOTAL" prefix)
-        rounded = self.totals.rounded()
-        totals_line = (f"{int(rounded.calories)} cal | "
-                    f"{int(rounded.protein_g)}g P | "
-                    f"{int(rounded.carbs_g)}g C | "
-                    f"{int(rounded.fat_g)}g F | "
-                    f"{int(rounded.sugar_g)}g Sugars | "
-                    f"GL: {int(rounded.glycemic_load)}")
         lines.append("")
-        lines.append(totals_line)
+        lines.append(self.report_columns.format_abbreviated_totals(self.totals))
         
         if self.missing:
             lines.append(f"Missing (not counted): {', '.join(self.missing)}")
@@ -414,30 +414,15 @@ class Report:
     
     def format_nutrient_totals(self) -> str:
         """
-        Format nutrient totals line similar to macros.
+        Format nutrient totals line (without 'Micros = ' prefix).
+        
+        Kept for backward compatibility. Delegates to report_columns config.
         
         Returns:
-            Formatted string like: "Fiber: 25g | Na: 2300mg | K: 3500mg | VitA: 900mcg | VitC: 90mg | Fe: 18mg"
+            Formatted string like: "Fiber: 25g | Na: 2300mg | ..."
         """
-        t = self.totals.rounded()
-        
-        parts = []
-        
-        # Only include non-zero values
-        if t.fiber_g > 0:
-            parts.append(f"Fiber: {int(t.fiber_g)}g")
-        if t.sodium_mg > 0:
-            parts.append(f"Na: {int(t.sodium_mg)}mg")
-        if t.potassium_mg > 0:
-            parts.append(f"K: {int(t.potassium_mg)}mg")
-        if t.vitA_mcg > 0:
-            parts.append(f"VitA: {int(t.vitA_mcg)}mcg")
-        if t.vitC_mg > 0:
-            parts.append(f"VitC: {int(t.vitC_mg)}mg")
-        if t.iron_mg > 0:
-            parts.append(f"Fe: {int(t.iron_mg)}mg")
-        
-        if not parts:
-            return ""
-        
-        return " | ".join(parts)
+        line = self.report_columns.format_micros_line(self.totals)
+        prefix = "Micros = "
+        if line.startswith(prefix):
+            return line[len(prefix):]
+        return ""

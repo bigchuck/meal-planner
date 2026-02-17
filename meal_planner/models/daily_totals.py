@@ -260,12 +260,14 @@ class NutrientRow:
         section: Meal section/category
         multiplier: Portion multiplier
         totals: Nutrient totals for this item
+        item_values: Per-item non-aggregated values (e.g., {"gi": 55})
     """
     code: str
     option: str
     section: str
     multiplier: float
     totals: DailyTotals
+    item_values: Dict[str, float] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format."""
@@ -276,8 +278,10 @@ class NutrientRow:
             "mult": self.multiplier
         }
         result.update(self.totals.to_dict())
+        if self.item_values:
+            result["item_values"] = self.item_values.copy()
         return result
-    
+        
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'NutrientRow':
         """Create from dictionary format."""
@@ -287,5 +291,6 @@ class NutrientRow:
             option=data.get("option", ""),
             section=data.get("section", ""),
             multiplier=float(data.get("mult", 1.0)),
-            totals=totals
+            totals=totals,
+            item_values=data.get("item_values", {})
         )

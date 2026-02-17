@@ -149,7 +149,7 @@ class NutrientsCommand(Command):
         Args:
             date_arg: Optional date (YYYY-MM-DD) for log lookup
         """
-        builder = ReportBuilder(self.ctx.master)
+        builder = ReportBuilder(self.ctx.master, self.ctx.report_columns)
         
         if date_arg:
             # Get from log
@@ -206,7 +206,7 @@ class NutrientsCommand(Command):
             meal_name: Meal name (BREAKFAST, LUNCH, etc.)
             date_arg: Optional date (YYYY-MM-DD) for log lookup
         """
-        builder = ReportBuilder(self.ctx.master)
+        builder = ReportBuilder(self.ctx.master, self.ctx.report_columns)
         
         if date_arg:
             # Get from log

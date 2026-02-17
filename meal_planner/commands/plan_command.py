@@ -221,7 +221,7 @@ Subcommands:
             return
         
         # Search through log entries
-        builder = ReportBuilder(self.ctx.master)
+        builder = ReportBuilder(self.ctx.master, self.ctx.report_columns)
         found_meals = []
 
         for _, row in log_df.iterrows():
@@ -1568,7 +1568,7 @@ Subcommands:
             return
         
         # Build report
-        builder = ReportBuilder(self.ctx.master)
+        builder = ReportBuilder(self.ctx.master, self.ctx.report_columns)
         
         # Create title
         meal_label = candidate.get('meal_name', 'meal')

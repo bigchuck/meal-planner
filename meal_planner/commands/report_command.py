@@ -73,7 +73,7 @@ class ReportCommand(Command):
                 continue
             date_parts.append(p)
         
-        builder = ReportBuilder(self.ctx.master)
+        builder = ReportBuilder(self.ctx.master, self.ctx.report_columns)
         
         # Get items first
         if not date_parts:
@@ -236,46 +236,39 @@ class ReportCommand(Command):
         if breakdown is None:
             print("\n(No time markers present - meal breakdown not available)\n")
             return
-        
+
         print("=== Meal Breakdown ===")
         
         # Header
+        rc = self.ctx.report_columns
+        grid_header = rc.build_grid_header()
         if not show_risk:
-            print(f"{'':30} {'Cal':>6} {'P':>5} {'C':>5} {'F':>5} {'Sug':>6} {'GL':>4}")
+            print(f"{'':30} {grid_header}")
         else:
-            print(f"{'':30} {'Cal':>6} {'P':>5} {'C':>5} {'F':>5} {'Sug':>6} {'GL':>4} {'Issues':>40}")
-        
+            print(f"{'':30} {grid_header} {'Issues':>40}")
+
         # Meal rows
         meal_count = sum(1 for name, time, totals in breakdown if "SNACK" not in name)
         for meal_name, first_time, meal_totals in breakdown:
-            t = meal_totals.rounded()
             label = f"{meal_name} ({first_time})"
+            grid_values = rc.format_grid_values(meal_totals)
             if not show_risk or "SNACK" in meal_name:
-                print(f"{label:30} {int(t.calories):>6} {int(t.protein_g):>5} "
-                      f"{int(t.carbs_g):>5} {int(t.fat_g):>5} "
-                      f"{int(t.sugar_g):>6} {int(t.glycemic_load):>4}")
+                print(f"{label:30} {grid_values}")
             else:
                 risk_summary = self._get_risk_summary(meal_totals, meal_count)
-                print(f"{label:30} {int(t.calories):>6} {int(t.protein_g):>5} "
-                      f"{int(t.carbs_g):>5} {int(t.fat_g):>5} "
-                      f"{int(t.sugar_g):>6} {int(t.glycemic_load):>4}    "
-                      f"{risk_summary}")
+                print(f"{label:30} {grid_values}    {risk_summary}")
         
         # Separator
-        print("-" * 78)
+        line_width = 30 + 1 + rc.grid_width()
+        print("-" * line_width)
         
         # Daily total
-        t = report.totals.rounded()
+        grid_values = rc.format_grid_values(report.totals)
         if not show_risk:
-            print(f"{'Daily Total':30} {int(t.calories):>6} {int(t.protein_g):>5} "
-                f"{int(t.carbs_g):>5} {int(t.fat_g):>5} "
-                f"{int(t.sugar_g):>6} {int(t.glycemic_load):>4}")
+            print(f"{'Daily Total':30} {grid_values}")
         else:
-            risk_summary = self._get_risk_summary(t, 1)
-            print(f"{'Daily Total':30} {int(t.calories):>6} {int(t.protein_g):>5} "
-                f"{int(t.carbs_g):>5} {int(t.fat_g):>5} "
-                f"{int(t.sugar_g):>6} {int(t.glycemic_load):>4}    "
-                f"{risk_summary}")
+            risk_summary = self._get_risk_summary(report.totals, 1)
+            print(f"{'Daily Total':30} {grid_values}    {risk_summary}")
         print()
 
     def _show_nutrients(self, report):

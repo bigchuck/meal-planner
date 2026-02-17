@@ -65,6 +65,15 @@ class CommandContext:
             sys.exit(1)
         self.thresholds = thresholds
 
+        # Load report column configuration
+        from meal_planner.reports.report_columns import ReportColumnConfig
+        if self.thresholds and self.thresholds.is_valid:
+            self.report_columns = ReportColumnConfig.from_config(
+                self.thresholds.thresholds
+            )
+        else:
+            self.report_columns = ReportColumnConfig.default()
+
         self.user_prefs = None
         self.user_prefs_error = None
         if user_prefs_file:
@@ -160,7 +169,13 @@ class CommandContext:
                 print("Warning: Config validation failed")
                 for error in self.thresholds.validation_errors:
                     print(f"  - {error}")
-
+            else:
+                # Refresh report columns from reloaded config
+                from meal_planner.reports.report_columns import ReportColumnConfig
+                self.report_columns = ReportColumnConfig.from_config(
+                    self.thresholds.thresholds
+                )
+                
     def reload_user_prefs(self):
         """Reload user preferences from disk."""
         if self.user_prefs:
