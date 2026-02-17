@@ -190,6 +190,14 @@ class GeneticAlgorithm:
         self.ga_filters = self._build_ga_filters()
         self.filter_stats = FilterStats()
 
+        # Convergence detection state
+        self._convergence_counters = {
+            "elite_turnover": 0,
+            "acceptance_rate": 0,
+            "duplicate_rate": 0,
+        }
+        self._convergence_reason = ""
+
         # Parse component count constraints from meal_generation config
         self._resolve_component_constraints()
         if self.component_constraints:
@@ -280,10 +288,22 @@ class GeneticAlgorithm:
                 f"{self.population.immigrant_size:>6}"
             )
 
-            # TODO: convergence detection
-            # if self._check_convergence(summary):
-            #     print(f"\nConvergence detected at epoch {epoch}")
-            #     break
+            # Convergence detection
+            diversity = self.population.compute_diversity_metrics(epoch)
+            self.population.snapshot_elite()
+            summary.diversity = diversity
+            if self._check_convergence(diversity):
+                label_map = {
+                    "elite_turnover": f"elite turnover below {self.config.convergence_elite_turnover_min:.0%}",
+                    "acceptance_rate": f"acceptance rate below {self.config.convergence_acceptance_rate_min:.0%}",
+                    "duplicate_rate": f"duplicate rate above {self.config.convergence_duplicate_rate_max:.0%}",
+                }
+                reason = label_map.get(self._convergence_reason, self._convergence_reason)
+                print(
+                    f"\nConvergence detected at epoch {epoch}: "
+                    f"{reason} for {self.config.convergence_patience} consecutive epochs"
+                )
+                break
 
         print()
 
@@ -824,17 +844,21 @@ class GeneticAlgorithm:
         self.population.display_summary(verbose=True)
 
     # =========================================================================
-    # Convergence detection (stub for future)
+    # Convergence detection
     # =========================================================================
 
     def _check_convergence(self, metrics: DiversityMetrics) -> bool:
         """
         Determine if the GA should stop early.
 
-        Stub for future implementation. Will check:
-        - Elite turnover below threshold for N consecutive epochs
-        - Acceptance rate below threshold
-        - Generation repeat rate above threshold
+        Uses OR logic: any single condition sustained for
+        convergence_patience consecutive epochs triggers early stop.
+        Counters reset independently when their condition clears.
+
+        Conditions checked:
+        - Elite turnover below convergence_elite_turnover_min
+        - Acceptance rate below convergence_acceptance_rate_min
+        - Duplicate rate above convergence_duplicate_rate_max
 
         Args:
             metrics: Current epoch's diversity metrics
@@ -842,7 +866,33 @@ class GeneticAlgorithm:
         Returns:
             True if convergence detected
         """
-        # TODO: Implement convergence detection
+        patience = self.config.convergence_patience
+        if patience <= 0:
+            return False
+
+        # Evaluate each condition, increment or reset counter
+        checks = {
+            "elite_turnover": (
+                metrics.elite_turnover < self.config.convergence_elite_turnover_min
+            ),
+            "acceptance_rate": (
+                metrics.acceptance_rate < self.config.convergence_acceptance_rate_min
+            ),
+            "duplicate_rate": (
+                metrics.duplicate_rate > self.config.convergence_duplicate_rate_max
+            ),
+        }
+
+        for key, is_stagnant in checks.items():
+            if is_stagnant:
+                self._convergence_counters[key] += 1
+            else:
+                self._convergence_counters[key] = 0
+
+            if self._convergence_counters[key] >= patience:
+                self._convergence_reason = key
+                return True
+
         return False
 
     # =========================================================================

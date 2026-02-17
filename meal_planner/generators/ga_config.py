@@ -130,6 +130,13 @@ class GAConfig:
     # Scoring weights per nutrient
     scoring_weights: Dict[str, float] = field(default_factory=dict)
 
+    # Convergence detection
+    # Set convergence_patience to 0 to disable early stopping
+    convergence_patience: int = 5
+    convergence_elite_turnover_min: float = 0.05
+    convergence_acceptance_rate_min: float = 0.05
+    convergence_duplicate_rate_max: float = 0.90
+
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> 'GAConfig':
         """
@@ -180,6 +187,10 @@ class GAConfig:
             meal_slots=meal_slots,
             selection_pressure=ga_block.get("selection_pressure", 1.5),
             scoring_weights=ga_block.get("scoring_weights", {}),
+            convergence_patience=ga_block.get("convergence_patience", 5),
+            convergence_elite_turnover_min=ga_block.get("convergence_elite_turnover_min", 0.05),
+            convergence_acceptance_rate_min=ga_block.get("convergence_acceptance_rate_min", 0.05),
+            convergence_duplicate_rate_max=ga_block.get("convergence_duplicate_rate_max", 0.90),            
         )
 
         # Validate
@@ -280,6 +291,18 @@ class GAConfig:
                     errors.append(f"scoring_weights key must be string, got {type(key).__name__}")
                 if not isinstance(val, (int, float)):
                     errors.append(f"scoring_weights['{key}'] must be numeric, got {type(val).__name__}")
+        
+        # Convergence detection
+        if not isinstance(self.convergence_patience, int) or self.convergence_patience < 0:
+            errors.append(f"convergence_patience must be integer >= 0, got {self.convergence_patience}")
+
+        for name, val in [
+            ("convergence_elite_turnover_min", self.convergence_elite_turnover_min),
+            ("convergence_acceptance_rate_min", self.convergence_acceptance_rate_min),
+            ("convergence_duplicate_rate_max", self.convergence_duplicate_rate_max),
+        ]:
+            if not isinstance(val, (int, float)) or val < 0.0 or val > 1.0:
+                errors.append(f"{name} must be 0.0-1.0, got {val}")
 
         return errors
 
@@ -353,6 +376,15 @@ class GAConfig:
             weight_strs = [f"{k}={v}" for k, v in self.scoring_weights.items()]
             lines.append(f"Scoring weights:      {', '.join(weight_strs)}")
 
+        if self.convergence_patience > 0:
+            lines.append(
+                f"Convergence:          patience={self.convergence_patience}, "
+                f"elite<{self.convergence_elite_turnover_min:.0%}, "
+                f"accept<{self.convergence_acceptance_rate_min:.0%}, "
+                f"dup>{self.convergence_duplicate_rate_max:.0%}"
+            )
+        else:
+            lines.append(f"Convergence:          disabled")
         return "\n".join(lines)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -379,4 +411,8 @@ class GAConfig:
             ],
             "selection_pressure": self.selection_pressure,
             "scoring_weights": self.scoring_weights,
+            "convergence_patience": self.convergence_patience,
+            "convergence_elite_turnover_min": self.convergence_elite_turnover_min,
+            "convergence_acceptance_rate_min": self.convergence_acceptance_rate_min,
+            "convergence_duplicate_rate_max": self.convergence_duplicate_rate_max,
         }
