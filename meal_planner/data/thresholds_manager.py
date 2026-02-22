@@ -276,6 +276,10 @@ class ThresholdsManager:
         if 'meal_generation' in self._thresholds:
             self._validate_meal_generation()
 
+        # Validate diversity_scoring (optional, warn only)
+        if 'diversity_scoring' in self._thresholds:
+            self._validate_diversity_scoring()
+
     
     def _validate_daily_targets(self) -> None:
         """Validate daily_targets section."""
@@ -1000,8 +1004,195 @@ class ThresholdsManager:
                     f"{path}.soft_max_tolerance must be >= 1.0"
                 )
 
+    # Minimal valid skeleton printed when daily_count config is invalid
+    _DAILY_COUNT_SKELETON = """\
+  "diversity_scoring": {
+    "scorers": {
+      "daily_count": {
+        "enabled": true,
+        "weight": 1.0,
+        "sources": ["pending"],
+        "groups": [
+          {
+            "group_id": "EGG",
+            "label": "Eggs (servings per day)",
+            "unit": "servings",
+            "codes": { "EG.1": 1.0, "EG.1A": 2.0 },
+            "max_total": 2.0,
+            "penalty_slope": 1.0
+          }
+        ]
+      }
+    }
+  }"""
 
-    # Add these getter methods to the ThresholdsManager class:
+    def _validate_diversity_scoring(self) -> None:
+        """
+        Validate diversity_scoring section.
+
+        Section is optional — absence is not an error.
+        Errors here are warnings: the scorer is disabled but the
+        application continues.  A copy-pasteable skeleton is printed
+        alongside any structural error so the user can self-correct.
+        """
+        root = self._thresholds.get('diversity_scoring', {})
+        path = 'diversity_scoring'
+
+        if not isinstance(root, dict):
+            self._warn_diversity(f"{path} must be an object")
+            return
+
+        scorers = root.get('scorers')
+        if scorers is None:
+            self._warn_diversity(f"{path} missing: 'scorers'")
+            return
+        if not isinstance(scorers, dict):
+            self._warn_diversity(f"{path}.scorers must be an object")
+            return
+
+        # Validate each known scorer; unknown keys are silently ignored
+        if 'daily_count' in scorers:
+            self._validate_daily_count(scorers['daily_count'],
+                                       f"{path}.scorers.daily_count")
+
+    def _validate_daily_count(self, dc: Any, path: str) -> None:
+        """Validate the daily_count scorer block."""
+        if not isinstance(dc, dict):
+            self._warn_diversity(f"{path} must be an object")
+            return
+
+        errors_before = len(self._validation_errors)
+
+        # --- enabled ---
+        if 'enabled' not in dc:
+            self._validation_errors.append(f"{path} missing: 'enabled'")
+        elif not isinstance(dc['enabled'], bool):
+            self._validation_errors.append(f"{path}.enabled must be a boolean")
+
+        # --- weight ---
+        if 'weight' not in dc:
+            self._validation_errors.append(f"{path} missing: 'weight'")
+        elif not isinstance(dc['weight'], (int, float)) or dc['weight'] < 0:
+            self._validation_errors.append(
+                f"{path}.weight must be a non-negative number")
+
+        # --- sources ---
+        if 'sources' not in dc:
+            self._validation_errors.append(f"{path} missing: 'sources'")
+        else:
+            sources = dc['sources']
+            if not isinstance(sources, list):
+                self._validation_errors.append(f"{path}.sources must be an array")
+            else:
+                seen_sources: set = set()
+                for i, src in enumerate(sources):
+                    if not isinstance(src, str):
+                        self._validation_errors.append(
+                            f"{path}.sources[{i}] must be a string")
+                        continue
+                    token = src.strip().lower()
+                    if token == 'pending':
+                        pass  # valid
+                    elif token.startswith('planning:'):
+                        plan_id = token[len('planning:'):]
+                        if not plan_id:
+                            self._validation_errors.append(
+                                f"{path}.sources[{i}] planning reference "
+                                f"missing id (expected 'planning:<id>')")
+                    else:
+                        self._validation_errors.append(
+                            f"{path}.sources[{i}] unrecognised source '{src}' "
+                            f"(expected 'pending' or 'planning:<id>')")
+                        continue
+                    if token in seen_sources:
+                        self._validation_errors.append(
+                            f"{path}.sources[{i}] duplicate source '{src}'")
+                    seen_sources.add(token)
+
+        # --- groups ---
+        if 'groups' not in dc:
+            self._validation_errors.append(f"{path} missing: 'groups'")
+        else:
+            groups = dc['groups']
+            if not isinstance(groups, list):
+                self._validation_errors.append(f"{path}.groups must be an array")
+            else:
+                real_groups = [g for g in groups
+                               if isinstance(g, dict) and not g.get('_sample', False)]
+                if not real_groups:
+                    self._validation_errors.append(
+                        f"{path}.groups contains no non-sample entries")
+                seen_ids: set = set()
+                for i, group in enumerate(groups):
+                    if not isinstance(group, dict):
+                        self._validation_errors.append(
+                            f"{path}.groups[{i}] must be an object")
+                        continue
+                    if group.get('_sample', False):
+                        continue  # silently skip sample entries
+                    self._validate_daily_count_group(
+                        group, f"{path}.groups[{i}]", seen_ids)
+
+        # If any new errors were added, print the skeleton once
+        if len(self._validation_errors) > errors_before:
+            print(f"Warning: diversity_scoring.daily_count has configuration "
+                  f"errors — scorer will be disabled.")
+            print(f"Valid structure to copy:\n{self._DAILY_COUNT_SKELETON}")
+
+    def _validate_daily_count_group(
+        self, group: dict, path: str, seen_ids: set
+    ) -> None:
+        """Validate a single daily_count group entry."""
+
+        # --- group_id ---
+        if 'group_id' not in group:
+            self._validation_errors.append(f"{path} missing: 'group_id'")
+        else:
+            gid = group['group_id']
+            if not isinstance(gid, str) or not gid.strip():
+                self._validation_errors.append(
+                    f"{path}.group_id must be a non-empty string")
+            else:
+                gid_upper = gid.strip().upper()
+                if gid_upper in seen_ids:
+                    self._validation_errors.append(
+                        f"{path}.group_id '{gid}' is not unique")
+                seen_ids.add(gid_upper)
+
+        # --- codes ---
+        if 'codes' not in group:
+            self._validation_errors.append(f"{path} missing: 'codes'")
+        else:
+            codes = group['codes']
+            if not isinstance(codes, dict):
+                self._validation_errors.append(f"{path}.codes must be an object")
+            elif not codes:
+                self._validation_errors.append(f"{path}.codes cannot be empty")
+            else:
+                for code_key, code_val in codes.items():
+                    if not isinstance(code_val, (int, float)) or code_val <= 0:
+                        self._validation_errors.append(
+                            f"{path}.codes['{code_key}'] must be a positive number")
+
+        # --- max_total ---
+        if 'max_total' not in group:
+            self._validation_errors.append(f"{path} missing: 'max_total'")
+        elif not isinstance(group['max_total'], (int, float)) or group['max_total'] < 0:
+            self._validation_errors.append(
+                f"{path}.max_total must be a non-negative number")
+
+        # --- penalty_slope ---
+        if 'penalty_slope' not in group:
+            self._validation_errors.append(f"{path} missing: 'penalty_slope'")
+        elif not isinstance(group['penalty_slope'], (int, float)) or group['penalty_slope'] <= 0:
+            self._validation_errors.append(
+                f"{path}.penalty_slope must be a positive number")
+
+    def _warn_diversity(self, message: str) -> None:
+        """Append a validation error and print an immediate warning."""
+        self._validation_errors.append(message)
+        print(f"Warning: {message}")
+        print(f"Valid structure to copy:\n{self._DAILY_COUNT_SKELETON}")
 
     def get_component_pools(self) -> Optional[Dict[str, List[str]]]:
         """
@@ -1047,7 +1238,62 @@ class ThresholdsManager:
         
         return meal_gen[meal_type].get(template_name)
 
+    def get_daily_count_config(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the resolved daily_count scorer configuration.
 
+        Sample entries (_sample: true) are stripped.  Codes are
+        normalised to uppercase ASCII.  Returns None if the section
+        is absent, disabled, or failed validation.
+
+        Returns:
+            Dict with keys: enabled, weight, sources, groups
+            where groups contain only real (non-sample) entries and
+            all code keys are uppercase.
+        """
+        if not self.is_valid:
+            return None
+
+        dc = (self._thresholds
+              .get('diversity_scoring', {})
+              .get('scorers', {})
+              .get('daily_count'))
+
+        if dc is None:
+            return None
+
+        if not dc.get('enabled', False):
+            return None
+
+        # Normalise sources to lowercase for consistent comparison
+        raw_sources = dc.get('sources', [])
+        sources = [s.strip().lower() for s in raw_sources if isinstance(s, str)]
+
+        # Strip sample groups and normalise code keys to uppercase
+        clean_groups = []
+        for group in dc.get('groups', []):
+            if not isinstance(group, dict) or group.get('_sample', False):
+                continue
+            normalised_codes = {
+                k.strip().upper(): v
+                for k, v in group.get('codes', {}).items()
+            }
+            clean_groups.append({
+                'group_id':     group['group_id'].strip().upper(),
+                'label':        group.get('label', ''),
+                'unit':         group.get('unit', ''),
+                'codes':        normalised_codes,
+                'max_total':    group['max_total'],
+                'penalty_slope': group['penalty_slope'],
+            })
+
+        return {
+            'enabled':  True,
+            'weight':   dc['weight'],
+            'sources':  sources,
+            'groups':   clean_groups,
+        }
+    
     def expand_pool(self, pool_name: str) -> List[str]:
         """
         Expand a component pool, resolving @references recursively.

@@ -154,7 +154,8 @@ class FitnessEngine:
     filter pass/fail before calling score().
     """
 
-    def __init__(self, targets: List[NutrientTarget], master_loader, config: GAConfig):
+    def __init__(self, targets: List[NutrientTarget], master_loader, config: GAConfig,
+             diversity_context=None):
         """
         Args:
             targets: Nutrient scoring targets
@@ -164,6 +165,7 @@ class FitnessEngine:
         self.targets = targets
         self.master = master_loader
         self.config = config
+        self.diversity_context = diversity_context
 
         # Build csv_key mapping for totals calculation
         self._csv_mapping = get_filter_totals_mapping()
@@ -176,6 +178,7 @@ class FitnessEngine:
         template_name: str,
         master_loader,
         config: GAConfig,
+        diversity_context=None
     ) -> 'FitnessEngine':
         """
         Build FitnessEngine from a meal_templates entry in config.json.
@@ -361,10 +364,23 @@ class FitnessEngine:
 
                 nutrient_scores[target.name] = detail
 
+        # ------------------------------------------------------------------
+        # Daily count diversity penalty
+        # ------------------------------------------------------------------
+        diversity_penalty = 0.0
+        if self.diversity_context is not None and self.diversity_context.daily_count is not None:
+            diversity_penalty = self._score_daily_count_penalty(member)
+
+        final_aggregate = round(aggregate - diversity_penalty, 4)
+
+        penalties = {}
+        if diversity_penalty > 0.0:
+            penalties["diversity_daily_count"] = round(diversity_penalty, 4)
+
         return FitnessResult(
-            aggregate_score=round(aggregate, 4),
+            aggregate_score=final_aggregate,
             nutrient_scores=nutrient_scores,
-            penalties={},
+            penalties=penalties,
             metadata={
                 "genome_count": len(member.genomes),
                 "target_count": len(self.targets),
@@ -460,6 +476,72 @@ class FitnessEngine:
 
         return totals
     
+    def _score_daily_count_penalty(self, member: Member) -> float:
+            """
+            Compute daily count penalty for a GA member.
+
+            Extracts food codes from all genomes (mult=1.0 for all GA codes),
+            computes per-group contributions, and returns the total penalty to
+            subtract from the aggregate fitness score.
+
+            Args:
+                member: GA member being scored.
+
+            Returns:
+                Total penalty (>= 0.0). Zero if no groups are violated.
+            """
+            from meal_planner.scorers.diversity_context import DailyCountTally
+
+            tally: DailyCountTally = self.diversity_context.daily_count
+            dc_config = None
+
+            # Safely retrieve the config — may not be available if thresholds reloaded
+            try:
+                # Access thresholds via master (they share the same ctx in practice)
+                # We stored config on self at construction time as a fallback
+                dc_config = self._dc_config_cache
+            except AttributeError:
+                pass
+
+            if dc_config is None:
+                return 0.0
+
+            groups = dc_config.get("groups", [])
+            if not groups:
+                return 0.0
+
+            # Build code index: uppercase_code -> [(group_id, code_value), ...]
+            index = {}
+            for group in groups:
+                gid = group["group_id"]
+                for code, code_value in group.get("codes", {}).items():
+                    cu = code.upper()
+                    if cu not in index:
+                        index[cu] = []
+                    index[cu].append((gid, float(code_value)))
+
+            # Extract codes from all genomes — GA members always have mult=1.0
+            contributions = {}
+            for genome in member.genomes:
+                for code in genome.codes:
+                    matches = index.get(code.upper())
+                    if matches:
+                        for gid, code_value in matches:
+                            contributions[gid] = contributions.get(gid, 0.0) + code_value
+
+            # Sum penalties across groups
+            total_penalty = 0.0
+            for group in groups:
+                gid           = group["group_id"]
+                max_total     = group["max_total"]
+                penalty_slope = group["penalty_slope"]
+                existing      = tally.get(gid)
+                candidate     = contributions.get(gid, 0.0)
+                excess        = max(0.0, existing + candidate - max_total)
+                total_penalty += excess * penalty_slope
+
+            return total_penalty
+
     # =========================================================================
     # Display
     # =========================================================================

@@ -8,14 +8,17 @@ aspect and returns a 0-1 normalized score.
 """
 from .base_scorer import Scorer
 from .nutrient_gap_scorer import NutrientGapScorer
+from .diversity_context import DiversityContext, DailyCountTally
+from .daily_count_scorer import DailyCountScorer
 
 # Scorer registry - maps scorer names to classes
 SCORER_REGISTRY = {
     "nutrient_gap": NutrientGapScorer,
+    "daily_count":  DailyCountScorer,
 }
 
 
-def create_scorer(scorer_name: str, config, master, thresholds, user_prefs):
+def create_scorer(scorer_name: str, config, master, thresholds, user_prefs, diversity_context):
     """
     Factory function to create scorer instances.
     
@@ -39,8 +42,13 @@ def create_scorer(scorer_name: str, config, master, thresholds, user_prefs):
         )
     
     scorer_class = SCORER_REGISTRY[scorer_name]
-    return scorer_class(config, master, thresholds, user_prefs)
 
+    # DailyCountScorer takes an extra diversity_context argument
+    if scorer_name == "daily_count":
+        return scorer_class(config, master, thresholds, user_prefs,
+                            diversity_context=diversity_context)
+
+    return scorer_class(config, master, thresholds, user_prefs)
 
 def get_available_scorers():
     """
@@ -59,4 +67,7 @@ __all__ = [
     'SCORER_REGISTRY',
     'create_scorer',
     'get_available_scorers',
+    'DiversityContext',
+    'DailyCountTally',
+    'DailyCountScorer',
 ]

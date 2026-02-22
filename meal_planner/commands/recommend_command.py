@@ -327,6 +327,14 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print(f"Warning: No template for '{meal_type}' - using best guess")
         print()
         
+        if "daily_count" in self.ctx.scorers:
+            from meal_planner.scorers.diversity_context import DiversityContext
+            self.ctx.scorers["daily_count"]._diversity_context = DiversityContext.build(
+                thresholds=self.ctx.thresholds,
+                pending_mgr=self.ctx.pending_mgr,
+                workspace_mgr=self.ctx.workspace_mgr,
+            )
+
         # Score each candidate
         failed_count = 0
         
@@ -645,6 +653,8 @@ class RecommendCommand(Command, CommandHistoryMixin):
         """Display scorer-specific details."""
         if scorer_name == "nutrient_gap":
             self._display_nutrient_gap_details(details)
+        elif scorer_name == "daily_count":
+            self._display_daily_count_details(details)
 
     def _display_nutrient_gap_details(self, details: Dict[str, Any]) -> None:
         """Display nutrient gap scorer details."""
@@ -707,6 +717,51 @@ class RecommendCommand(Command, CommandHistoryMixin):
         print(f"  ")
         print(f"  Base Score: {details.get('base_score', 1.0):.2f}")
         print(f"  Final Score: {details.get('final_score', 0.0):.2f}")
+
+    def _display_daily_count_details(self, details: Dict[str, Any]) -> None:
+        """Display daily count scorer details."""
+        reason = details.get("reason")
+        if reason:
+            print(f"  Status: {reason}")
+            return
+
+        groups = details.get("groups", [])
+        total_penalty = details.get("total_penalty", 0.0)
+        resolved = details.get("resolved_sources", [])
+        skipped = details.get("skipped_sources", [])
+
+        # Sources consulted
+        if resolved:
+            print(f"  Sources: {', '.join(resolved)}")
+        if skipped:
+            print(f"  Skipped: {', '.join(skipped)}")
+        print()
+
+        # Per-group breakdown — only show groups with activity or a penalty
+        active_groups = [g for g in groups
+                        if g.get("combined", 0.0) > 0 or g.get("penalty", 0.0) > 0]
+
+        if active_groups:
+            print(f"  {'Group':<16} {'Existing':>8} {'Cand':>6} {'Total':>6} "
+                f"{'Max':>6} {'Excess':>6} {'Penalty':>7}")
+            print(f"  {'-'*16} {'-'*8} {'-'*6} {'-'*6} {'-'*6} {'-'*6} {'-'*7}")
+            for g in active_groups:
+                flag = " !" if g.get("penalty", 0.0) > 0 else ""
+                print(
+                    f"  {g['group_id']:<16} "
+                    f"{g['existing']:>8.2f} "
+                    f"{g['candidate']:>6.2f} "
+                    f"{g['combined']:>6.2f} "
+                    f"{g['max_total']:>6.2f} "
+                    f"{g['excess']:>6.2f} "
+                    f"{g['penalty']:>7.3f}{flag}"
+                )
+            print()
+        else:
+            print("  No tracked codes found in this candidate")
+            print()
+
+        print(f"  Total Penalty: {total_penalty:.3f}")
 
     def _get_template_for_meal(self, meal_category: str, template_override: Optional[str] = None) -> Optional[str]:
         """
@@ -2407,8 +2462,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
                 
                 # Show scorer-specific details
                 details = scorer_data.get("details", {})
-                if scorer_name == "nutrient_gap":
-                    self._display_nutrient_gap_details(details)
+                self._display_scorer_details(scorer_name, details)
                 # Future scorers can add their display logic here
             
             # Show gaps/excesses summary from scoring details (not analysis object)

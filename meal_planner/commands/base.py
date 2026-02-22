@@ -191,9 +191,17 @@ class CommandContext:
     def _initialize_scorers(self):
         """Initialize available scorers."""
         from meal_planner.scorers import create_scorer, get_available_scorers
-        
+        from meal_planner.scorers.diversity_context import DiversityContext
+
         weights = self.thresholds.get_recommendation_weights()
-        
+
+        # Build DiversityContext once — shared by all diversity scorers
+        diversity_context = DiversityContext.build(
+            thresholds=self.thresholds,
+            pending_mgr=self.pending_mgr,
+            workspace_mgr=self.workspace_mgr,
+        )
+
         for scorer_name in get_available_scorers():
             # Only initialize scorers with non-zero weights
             if weights.get(scorer_name, 0.0) > 0:
@@ -204,7 +212,8 @@ class CommandContext:
                         config,
                         self.master,
                         self.thresholds,
-                        self.user_prefs
+                        self.user_prefs,
+                        diversity_context=diversity_context, 
                     )
                     self.scorers[scorer_name] = scorer
                 except Exception as e:

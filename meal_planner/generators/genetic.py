@@ -179,6 +179,20 @@ class GeneticAlgorithm:
             config=self.config,
         )
 
+        # Inject diversity context into fitness engine
+        from meal_planner.scorers.diversity_context import DiversityContext
+        diversity_ctx = DiversityContext.build(
+            thresholds=ctx.thresholds,
+            pending_mgr=ctx.pending_mgr,
+            workspace_mgr=ctx.workspace_mgr,
+        )
+        self.fitness_engine.diversity_context = diversity_ctx
+
+        # Cache the resolved daily_count config on the engine 
+        # (avoids re-fetching thresholds inside the hot scoring loop)
+        dc_config = ctx.thresholds.get_daily_count_config()
+        self.fitness_engine._dc_config_cache = dc_config 
+
         # Initialize empty population
         self.population = Population(self.config)
 
