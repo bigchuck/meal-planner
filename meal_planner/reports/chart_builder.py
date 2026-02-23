@@ -36,7 +36,8 @@ class ChartBuilder:
         self.output_file = output_file
     
     def build_from_dataframe(self, df: pd.DataFrame, window: int = 7,
-                            title: Optional[str] = None) -> None:
+                            title: Optional[str] = None,
+                            mode: str = "macro") -> None:
         """
         Build chart from DataFrame with date and nutrient columns.
         
@@ -63,7 +64,7 @@ class ChartBuilder:
         roll_df = full_df.rolling(window=window, min_periods=1).mean()
         
         # Create the chart
-        self._create_chart(full_df, roll_df, window, title)
+        self._create_chart(full_df, roll_df, window, title, mode)
         
         # Open in browser
         webbrowser.open(os.path.abspath(self.output_file))
@@ -81,7 +82,8 @@ class ChartBuilder:
             return df
         
         # Ensure numeric columns
-        for col in ["cal", "prot_g", "carbs_g", "fat_g", "sugar_g", "gl"]:
+        for col in ["cal", "prot_g", "carbs_g", "fat_g", "sugar_g", "gl",
+                    "fiber_g", "sodium_mg", "potassium_mg", "vitA_mcg", "vitC_mg", "iron_mg"]:
             if col not in df.columns:
                 df[col] = 0
             else:
@@ -110,17 +112,27 @@ class ChartBuilder:
         return df
     
     def _create_chart(self, daily_df: pd.DataFrame, ma_df: pd.DataFrame,
-                     window: int, title: Optional[str]) -> None:
+                    window: int, title: Optional[str], mode: str = "macro") -> None:
         """Create and save the multi-panel chart."""
         # Metrics to plot
-        metrics = [
-            ("cal", "Calories"),
-            ("prot_g", "Protein (g)"),
-            ("carbs_g", "Carbs (g)"),
-            ("fat_g", "Fat (g)"),
-            ("sugar_g", "Sugars (g)"),
-            ("gl", "Glycemic Load"),
-        ]
+        if mode == "micro":
+            metrics = [
+                ("fiber_g", "Fiber (g)"),
+                ("sodium_mg", "Sodium (mg)"),
+                ("potassium_mg", "Potassium (mg)"),
+                ("vitA_mcg", "Vitamin A (mcg)"),
+                ("vitC_mg", "Vitamin C (mg)"),
+                ("iron_mg", "Iron (mg)"),
+            ]
+        else:
+            metrics = [
+                ("cal", "Calories"),
+                ("prot_g", "Protein (g)"),
+                ("carbs_g", "Carbs (g)"),
+                ("fat_g", "Fat (g)"),
+                ("sugar_g", "Sugars (g)"),
+                ("gl", "Glycemic Load"),
+            ]
         
         # Create figure with 6 subplots
         fig, axes = plt.subplots(6, 1, figsize=(10, 14), sharex=True, 
