@@ -371,11 +371,20 @@ class FitnessEngine:
         if self.diversity_context is not None and self.diversity_context.daily_count is not None:
             diversity_penalty = self._score_daily_count_penalty(member)
 
-        final_aggregate = round(aggregate - diversity_penalty, 4)
+        # ------------------------------------------------------------------
+        # Intraday diversity penalty
+        # ------------------------------------------------------------------
+        intraday_penalty = 0.0
+        if self.diversity_context is not None and self.diversity_context.intraday is not None:
+            intraday_penalty = self._score_intraday_penalty(member)
+
+        final_aggregate = round(aggregate - diversity_penalty - intraday_penalty, 4)
 
         penalties = {}
         if diversity_penalty > 0.0:
             penalties["diversity_daily_count"] = round(diversity_penalty, 4)
+        if intraday_penalty > 0.0:
+            penalties["diversity_intraday"] = round(intraday_penalty, 4)
 
         return FitnessResult(
             aggregate_score=final_aggregate,
@@ -541,6 +550,64 @@ class FitnessEngine:
                 total_penalty += excess * penalty_slope
 
             return total_penalty
+
+    def _score_intraday_penalty(self, member: Member) -> float:
+        """
+        Compute intraday diversity penalty for a GA member.
+
+        For each intraday group the member's genomes contribute to,
+        counts occurrences in other source meals and accumulates an
+        unbounded additive penalty.
+
+        Args:
+            member: GA member being scored.
+
+        Returns:
+            Total penalty (>= 0.0). Zero if no groups are repeated.
+        """
+        from meal_planner.scorers.diversity_context import IntradayMealPresence
+
+        presence: IntradayMealPresence = self.diversity_context.intraday
+
+        try:
+            intraday_cfg = self._intraday_config_cache
+        except AttributeError:
+            return 0.0
+
+        if intraday_cfg is None:
+            return 0.0
+
+        groups = intraday_cfg.get("groups", {})
+        if not groups:
+            return 0.0
+
+        penalty_per_occurrence: float = intraday_cfg["penalty_per_occurrence"]
+        penalty_slope: float          = intraday_cfg["penalty_slope"]
+
+        # Build code -> [group_name, ...] index
+        index: Dict[str, list] = {}
+        for group_name, group_def in groups.items():
+            for code in group_def.get("codes", []):
+                cu = code.upper()
+                if cu not in index:
+                    index[cu] = []
+                index[cu].append(group_name)
+
+        # Determine which groups the member's genomes touch (mult=1.0 for GA)
+        hit_groups: set = set()
+        for genome in member.genomes:
+            for code in genome.codes:
+                for group_name in index.get(code.upper(), []):
+                    hit_groups.add(group_name)
+
+        # Accumulate penalty per hit group
+        total_penalty = 0.0
+        for group_name in hit_groups:
+            occurrences = presence.occurrence_count(group_name)
+            if occurrences > 0:
+                total_penalty += occurrences * penalty_per_occurrence * penalty_slope
+
+        return total_penalty
 
     # =========================================================================
     # Display

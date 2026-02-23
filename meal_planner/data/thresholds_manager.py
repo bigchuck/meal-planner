@@ -1054,6 +1054,16 @@ class ThresholdsManager:
         if 'daily_count' in scorers:
             self._validate_daily_count(scorers['daily_count'],
                                        f"{path}.scorers.daily_count")
+            
+        # Validate intraday diversity scorer (optional)
+        intraday_cfg = (
+            self._thresholds
+            .get("diversity_scoring", {})
+            .get("scorers", {})
+            .get("intraday")
+        )
+        if intraday_cfg is not None:
+            self._validate_intraday_diversity(intraday_cfg)
 
     def _validate_daily_count(self, dc: Any, path: str) -> None:
         """Validate the daily_count scorer block."""
@@ -1193,6 +1203,90 @@ class ThresholdsManager:
         self._validation_errors.append(message)
         print(f"Warning: {message}")
         print(f"Valid structure to copy:\n{self._DAILY_COUNT_SKELETON}")
+
+    def _validate_intraday_diversity(self, cfg: Dict[str, Any]) -> None:
+        """Validate diversity_scoring.scorers.intraday section."""
+        path = "diversity_scoring.scorers.intraday"
+
+        if not isinstance(cfg, dict):
+            self._validation_errors.append(f"{path} must be an object")
+            return
+
+        # enabled
+        if "enabled" in cfg and not isinstance(cfg["enabled"], bool):
+            self._validation_errors.append(f"{path}.enabled must be a boolean")
+
+        # penalty_per_occurrence
+        if "penalty_per_occurrence" not in cfg:
+            self._validation_errors.append(
+                f"{path} missing required field: 'penalty_per_occurrence'"
+            )
+        elif not isinstance(cfg["penalty_per_occurrence"], (int, float)) or cfg["penalty_per_occurrence"] <= 0:
+            self._validation_errors.append(
+                f"{path}.penalty_per_occurrence must be a positive number"
+            )
+
+        # penalty_slope
+        if "penalty_slope" not in cfg:
+            self._validation_errors.append(
+                f"{path} missing required field: 'penalty_slope'"
+            )
+        elif not isinstance(cfg["penalty_slope"], (int, float)) or cfg["penalty_slope"] <= 0:
+            self._validation_errors.append(
+                f"{path}.penalty_slope must be a positive number"
+            )
+
+        # sources
+        if "sources" not in cfg:
+            self._validation_errors.append(f"{path} missing required field: 'sources'")
+        elif not isinstance(cfg["sources"], list) or len(cfg["sources"]) == 0:
+            self._validation_errors.append(f"{path}.sources must be a non-empty array")
+        else:
+            for i, src in enumerate(cfg["sources"]):
+                if not isinstance(src, str):
+                    self._validation_errors.append(
+                        f"{path}.sources[{i}] must be a string"
+                    )
+                elif src != "pending" and not src.startswith("planning:"):
+                    self._validation_errors.append(
+                        f"{path}.sources[{i}] invalid format '{src}': "
+                        f"must be 'pending' or 'planning:<id>'"
+                    )
+
+        # groups
+        if "groups" not in cfg:
+            self._validation_errors.append(f"{path} missing required field: 'groups'")
+            return
+
+        groups = cfg["groups"]
+        if not isinstance(groups, dict) or len(groups) == 0:
+            self._validation_errors.append(f"{path}.groups must be a non-empty object")
+            return
+
+        for group_name, group_def in groups.items():
+            # Skip documentation/sample entries
+            if group_name.startswith("_"):
+                continue
+            gpath = f"{path}.groups.{group_name}"
+
+            if not isinstance(group_def, dict):
+                self._validation_errors.append(f"{gpath} must be an object")
+                continue
+
+            if "codes" not in group_def:
+                self._validation_errors.append(f"{gpath} missing required field: 'codes'")
+            elif not isinstance(group_def["codes"], list) or len(group_def["codes"]) == 0:
+                self._validation_errors.append(f"{gpath}.codes must be a non-empty array")
+            else:
+                for i, code in enumerate(group_def["codes"]):
+                    if not isinstance(code, str) or not code.strip():
+                        self._validation_errors.append(
+                            f"{gpath}.codes[{i}] must be a non-empty string"
+                        )
+
+            # description is optional, but if present must be string
+            if "description" in group_def and not isinstance(group_def["description"], str):
+                self._validation_errors.append(f"{gpath}.description must be a string")
 
     def get_component_pools(self) -> Optional[Dict[str, List[str]]]:
         """
@@ -1389,3 +1483,61 @@ class ThresholdsManager:
                     )
         
         return errors
+
+    def get_intraday_diversity_config(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the resolved intraday diversity scorer configuration.
+
+        Sample entries (group keys starting with '_') are stripped.
+        Code lists are normalised to uppercase.  Sources are normalised
+        to lowercase for consistent comparison.  Returns None if the
+        section is absent, disabled, or failed validation.
+
+        Returns:
+            Dict with keys: enabled, penalty_per_occurrence, penalty_slope,
+            sources, groups — where groups maps group_name (uppercase) to
+            {codes: [uppercase, ...], description: str}.
+            Returns None if absent or disabled.
+        """
+        if not self.is_valid:
+            return None
+
+        cfg = (self._thresholds
+               .get("diversity_scoring", {})
+               .get("scorers", {})
+               .get("intraday"))
+
+        if cfg is None:
+            return None
+
+        if not cfg.get("enabled", False):
+            return None
+
+        # Normalise sources to lowercase
+        raw_sources = cfg.get("sources", [])
+        sources = [s.strip().lower() for s in raw_sources if isinstance(s, str)]
+
+        # Strip _sample groups and normalise code lists to uppercase
+        clean_groups: Dict[str, Any] = {}
+        for group_name, group_def in cfg.get("groups", {}).items():
+            if group_name.startswith("_"):
+                continue
+            if not isinstance(group_def, dict):
+                continue
+            normalised_codes = [
+                c.strip().upper()
+                for c in group_def.get("codes", [])
+                if isinstance(c, str) and c.strip()
+            ]
+            clean_groups[group_name.strip().upper()] = {
+                "codes":       normalised_codes,
+                "description": group_def.get("description", ""),
+            }
+
+        return {
+            "enabled":               True,
+            "penalty_per_occurrence": cfg["penalty_per_occurrence"],
+            "penalty_slope":          cfg["penalty_slope"],
+            "sources":               sources,
+            "groups":                clean_groups,
+        }

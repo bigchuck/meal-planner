@@ -7,8 +7,9 @@ group tallies that diversity scorers consume.  Built once per scoring
 session, passed to every candidate scorer call.
 
 Classes:
-    DailyCountTally   - Resolved totals per group for daily_count scorer
-    DiversityContext  - Container for all resolved diversity data
+    DailyCountTally      - Resolved totals per group for daily_count scorer
+    IntradayMealPresence - Per-meal group presence map for intraday scorer
+    DiversityContext     - Container for all resolved diversity data
 """
 from __future__ import annotations
 
@@ -49,6 +50,63 @@ class DailyCountTally:
 
 
 # =============================================================================
+# IntradayMealPresence
+# =============================================================================
+
+@dataclass
+class IntradayMealPresence:
+    """
+    Per-meal group contribution map for the intraday diversity scorer.
+
+    Tracks, for each resolved source meal, which groups had any
+    contribution and how much.  The scorer counts how many meals
+    contain a group (occurrences > 0) to compute the additive penalty.
+
+    Structure:
+        meal_groups: Dict[source_label, Dict[group_name, float]]
+            source_label  - e.g. "pending", "planning:N1"
+            group_name    - uppercase group key from config
+            float         - sum of (item_mult) for all matching codes
+                            in that meal.  > 0.0 means group is present.
+
+    Example after build with pending=turkey+eggs, planning:N1=turkey:
+        {
+            "pending":     {"PROTEIN": 1.0, "EGG": 2.0},
+            "planning:N1": {"PROTEIN": 1.0},
+        }
+
+    Attributes:
+        meal_groups:      The per-meal, per-group presence map.
+        resolved_sources: Source tokens successfully resolved.
+        skipped_sources:  Source tokens requested but not found.
+    """
+    meal_groups:      Dict[str, Dict[str, float]] = field(default_factory=dict)
+    resolved_sources: List[str]                   = field(default_factory=list)
+    skipped_sources:  List[str]                   = field(default_factory=list)
+
+    def get_meal(self, source_label: str) -> Dict[str, float]:
+        """Return the group map for one source meal (empty dict if absent)."""
+        return self.meal_groups.get(source_label, {})
+
+    def occurrence_count(self, group_id: str) -> int:
+        """
+        Count how many source meals contain this group (contribution > 0).
+
+        Args:
+            group_id: Uppercase group name.
+
+        Returns:
+            Number of source meals where the group is present.
+        """
+        gid = group_id.upper()
+        return sum(
+            1
+            for meal_tally in self.meal_groups.values()
+            if meal_tally.get(gid, 0.0) > 0.0
+        )
+
+
+# =============================================================================
 # DiversityContext
 # =============================================================================
 
@@ -57,14 +115,18 @@ class DiversityContext:
     """
     Container for all resolved diversity scoring data.
 
-    Holds one DailyCountTally (and placeholders for future scorers).
-    Built once per scoring session via DiversityContext.build().
+    Holds one DailyCountTally and one IntradayMealPresence (and
+    placeholders for future scorers).  Built once per scoring session
+    via DiversityContext.build().
 
     Attributes:
         daily_count: Resolved group tallies for the daily_count scorer.
                      None if the scorer is disabled or config is absent.
+        intraday:    Per-meal group presence map for the intraday scorer.
+                     None if the scorer is disabled or config is absent.
     """
-    daily_count: Optional[DailyCountTally] = None
+    daily_count: Optional[DailyCountTally]     = None
+    intraday:    Optional[IntradayMealPresence] = None
 
     # ------------------------------------------------------------------
     # Factory
@@ -81,7 +143,7 @@ class DiversityContext:
         Build a DiversityContext by resolving all configured sources.
 
         Args:
-            thresholds:    ThresholdsManager (provides get_daily_count_config)
+            thresholds:    ThresholdsManager (provides scorer configs)
             pending_mgr:   PendingManager    (provides pending items)
             workspace_mgr: WorkspaceManager  (provides planning meals by ID)
 
@@ -90,16 +152,24 @@ class DiversityContext:
         """
         ctx = cls()
 
+        # --- daily_count ---
         dc_config = thresholds.get_daily_count_config()
-        if dc_config is None:
-            # Scorer disabled or absent — leave daily_count as None
-            return ctx
+        if dc_config is not None:
+            ctx.daily_count = _resolve_daily_count(
+                config=dc_config,
+                pending_mgr=pending_mgr,
+                workspace_mgr=workspace_mgr,
+            )
 
-        ctx.daily_count = _resolve_daily_count(
-            config=dc_config,
-            pending_mgr=pending_mgr,
-            workspace_mgr=workspace_mgr,
-        )
+        # --- intraday ---
+        intraday_config = thresholds.get_intraday_diversity_config()
+        if intraday_config is not None:
+            ctx.intraday = _resolve_intraday(
+                config=intraday_config,
+                pending_mgr=pending_mgr,
+                workspace_mgr=workspace_mgr,
+            )
+
         return ctx
 
 
@@ -297,3 +367,125 @@ def _accumulate(
         if matches is not None:
             for group_id, code_value in matches:
                 tally.add(group_id, code_value * mult)
+
+
+# =============================================================================
+# Intraday resolution
+# =============================================================================
+
+def _resolve_intraday(
+    config: Dict[str, Any],
+    pending_mgr,
+    workspace_mgr,
+) -> IntradayMealPresence:
+    """
+    Resolve all sources listed in intraday config into per-meal group maps.
+
+    Each source becomes one entry in IntradayMealPresence.meal_groups.
+    The value is a dict of group_name -> total contribution for that meal.
+    A missing planning source emits a warning and is recorded as an empty
+    entry (warn-and-continue, same policy as daily_count).
+
+    Args:
+        config:        Normalised intraday config from get_intraday_diversity_config().
+        pending_mgr:   PendingManager instance.
+        workspace_mgr: WorkspaceManager instance.
+
+    Returns:
+        IntradayMealPresence with one entry per resolved source.
+    """
+    presence = IntradayMealPresence()
+    groups   = config.get("groups", {})
+
+    # Build code -> [group_name, ...] index (codes are a list, weight = 1.0 implicit)
+    code_index = _build_intraday_code_index(groups)
+
+    for source_token in config.get("sources", []):
+        token = source_token.strip().lower()
+
+        if token == "pending":
+            items = _extract_pending_items(pending_mgr)
+            if items is not None:
+                meal_tally = _tally_for_intraday(items, code_index)
+                presence.meal_groups["pending"] = meal_tally
+                presence.resolved_sources.append("pending")
+            else:
+                # No pending is valid — record empty, not an error
+                presence.meal_groups["pending"] = {}
+                presence.resolved_sources.append("pending (empty)")
+
+        elif token.startswith("planning:"):
+            plan_id = source_token.strip()[len("planning:"):]   # preserve original case
+            items   = _extract_planning_items(plan_id, workspace_mgr)
+            label   = f"planning:{plan_id}"
+            if items is not None:
+                meal_tally = _tally_for_intraday(items, code_index)
+                presence.meal_groups[label] = meal_tally
+                presence.resolved_sources.append(label)
+            else:
+                print(
+                    f"Warning: intraday: planning source "
+                    f"'{label}' not found in workspace -- source skipped"
+                )
+                presence.meal_groups[label] = {}
+                presence.skipped_sources.append(label)
+
+        # Unknown token types caught by validation; skip silently here.
+
+    return presence
+
+
+def _build_intraday_code_index(
+    groups: Dict[str, Any],
+) -> Dict[str, List[str]]:
+    """
+    Build a flat code -> [group_name, ...] lookup from intraday group definitions.
+
+    Intraday group codes are a plain list (no per-code weights).
+    A code may appear in multiple groups; all matches are retained.
+
+    Args:
+        groups: Dict of group_name (uppercase) -> {codes: [...], ...}
+                as returned by get_intraday_diversity_config().
+
+    Returns:
+        Dict mapping uppercase code string to list of group names.
+    """
+    index: Dict[str, List[str]] = {}
+    for group_name, group_def in groups.items():
+        for code in group_def.get("codes", []):
+            code_upper = code.upper()
+            if code_upper not in index:
+                index[code_upper] = []
+            index[code_upper].append(group_name)
+    return index
+
+
+def _tally_for_intraday(
+    code_mults: List[tuple],
+    code_index: Dict[str, List[str]],
+) -> Dict[str, float]:
+    """
+    Compute per-group contribution totals for a single meal's items.
+
+    Contribution per item = item_multiplier (codes have no individual weight
+    in intraday groups).  A group's total > 0.0 means it is present in the
+    meal.  A code may contribute to multiple groups simultaneously.
+
+    Args:
+        code_mults: List of (uppercase_code, mult) tuples from one source.
+        code_index: Flat lookup from _build_intraday_code_index().
+
+    Returns:
+        Dict mapping group_name to total contribution for this meal.
+        Groups with zero contribution are omitted.
+    """
+    meal_tally: Dict[str, float] = {}
+    for code, mult in code_mults:
+        if mult <= 0.0:
+            continue
+        matches = code_index.get(code)
+        if matches:
+            for group_name in matches:
+                meal_tally[group_name] = meal_tally.get(group_name, 0.0) + mult
+    return meal_tally

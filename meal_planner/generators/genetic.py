@@ -188,10 +188,12 @@ class GeneticAlgorithm:
         )
         self.fitness_engine.diversity_context = diversity_ctx
 
-        # Cache the resolved daily_count config on the engine 
+        # Cache resolved diversity configs on the engine
         # (avoids re-fetching thresholds inside the hot scoring loop)
         dc_config = ctx.thresholds.get_daily_count_config()
-        self.fitness_engine._dc_config_cache = dc_config 
+        self.fitness_engine._dc_config_cache = dc_config
+        intraday_config = ctx.thresholds.get_intraday_diversity_config()
+        self.fitness_engine._intraday_config_cache = intraday_config
 
         # Initialize empty population
         self.population = Population(self.config)

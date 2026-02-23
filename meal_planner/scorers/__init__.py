@@ -8,13 +8,15 @@ aspect and returns a 0-1 normalized score.
 """
 from .base_scorer import Scorer
 from .nutrient_gap_scorer import NutrientGapScorer
-from .diversity_context import DiversityContext, DailyCountTally
+from .diversity_context import DiversityContext, DailyCountTally, IntradayMealPresence
 from .daily_count_scorer import DailyCountScorer
+from .intraday_scorer import IntradayScorer
 
 # Scorer registry - maps scorer names to classes
 SCORER_REGISTRY = {
     "nutrient_gap": NutrientGapScorer,
     "daily_count":  DailyCountScorer,
+    "intraday":     IntradayScorer,
 }
 
 
@@ -69,5 +71,7 @@ __all__ = [
     'get_available_scorers',
     'DiversityContext',
     'DailyCountTally',
+    'IntradayMealPresence',
     'DailyCountScorer',
+    'IntradayScorer',
 ]

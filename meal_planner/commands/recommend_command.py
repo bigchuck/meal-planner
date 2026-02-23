@@ -327,13 +327,17 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print(f"Warning: No template for '{meal_type}' - using best guess")
         print()
         
-        if "daily_count" in self.ctx.scorers:
+        if "daily_count" in self.ctx.scorers or "intraday" in self.ctx.scorers:
             from meal_planner.scorers.diversity_context import DiversityContext
-            self.ctx.scorers["daily_count"]._diversity_context = DiversityContext.build(
+            diversity_ctx = DiversityContext.build(
                 thresholds=self.ctx.thresholds,
                 pending_mgr=self.ctx.pending_mgr,
                 workspace_mgr=self.ctx.workspace_mgr,
             )
+            if "daily_count" in self.ctx.scorers:
+                self.ctx.scorers["daily_count"]._diversity_context = diversity_ctx
+            if "intraday" in self.ctx.scorers:
+                self.ctx.scorers["intraday"]._diversity_context = diversity_ctx
 
         # Score each candidate
         failed_count = 0
