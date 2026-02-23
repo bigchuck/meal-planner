@@ -327,17 +327,17 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print(f"Warning: No template for '{meal_type}' - using best guess")
         print()
         
-        if "daily_count" in self.ctx.scorers or "intraday" in self.ctx.scorers:
+        if any(s in self.ctx.scorers for s in ("daily_count", "intraday", "interday")):
             from meal_planner.scorers.diversity_context import DiversityContext
             diversity_ctx = DiversityContext.build(
                 thresholds=self.ctx.thresholds,
                 pending_mgr=self.ctx.pending_mgr,
                 workspace_mgr=self.ctx.workspace_mgr,
+                log_mgr=self.ctx.log,
             )
-            if "daily_count" in self.ctx.scorers:
-                self.ctx.scorers["daily_count"]._diversity_context = diversity_ctx
-            if "intraday" in self.ctx.scorers:
-                self.ctx.scorers["intraday"]._diversity_context = diversity_ctx
+            for scorer_name in ("daily_count", "intraday", "interday"):
+                if scorer_name in self.ctx.scorers:
+                    self.ctx.scorers[scorer_name]._diversity_context = diversity_ctx
 
         # Score each candidate
         failed_count = 0
@@ -452,6 +452,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
             location=MealLocation.CANDIDATE,
             meal_id=candidate_id,
             meal_category=meal_type,
+            meal_slot=meal_type.upper() if meal_type else None,
             template_path=template_path,
             items=items,
             totals=totals_dict,
@@ -645,6 +646,7 @@ class RecommendCommand(Command, CommandHistoryMixin):
             location=location,
             meal_id=meal_id_str,
             meal_category=meal_category,
+            meal_slot=meal_category.upper() if meal_category else None,
             template_path=template_path,
             items=items,
             totals=totals_dict,
@@ -659,6 +661,10 @@ class RecommendCommand(Command, CommandHistoryMixin):
             self._display_nutrient_gap_details(details)
         elif scorer_name == "daily_count":
             self._display_daily_count_details(details)
+        elif scorer_name == "intraday":
+            self._display_intraday_details(details)
+        elif scorer_name == "interday":
+            self._display_interday_details(details)
 
     def _display_nutrient_gap_details(self, details: Dict[str, Any]) -> None:
         """Display nutrient gap scorer details."""
@@ -766,6 +772,46 @@ class RecommendCommand(Command, CommandHistoryMixin):
             print()
 
         print(f"  Total Penalty: {total_penalty:.3f}")
+
+    def _display_intraday_details(self, details: Dict[str, Any]) -> None:
+        """Display intraday diversity scorer details."""
+        reason = details.get("reason")
+        if reason:
+            print(f"  ({reason})")
+            return
+        groups = details.get("groups", [])
+        if not groups:
+            print("  No intraday repetitions detected")
+        else:
+            for g in groups:
+                print(f"  {g['group']}: {g['occurrences']} occurrence(s)"
+                      f" — penalty {g['penalty']:.4f}")
+        print(f"  Total penalty: {details.get('total_penalty', 0.0):.4f}")
+        skipped = details.get("skipped_sources", [])
+        if skipped:
+            print(f"  Skipped sources: {', '.join(skipped)}")
+
+    def _display_interday_details(self, details: Dict[str, Any]) -> None:
+        """Display interday diversity scorer details."""
+        reason = details.get("reason")
+        if reason:
+            print(f"  ({reason})")
+            return
+        print(f"  Meal slot: {details.get('meal_slot', '?')}")
+        group_details = details.get("group_details", [])
+        if not group_details:
+            print("  No interday repetitions detected")
+        else:
+            for g in group_details:
+                match_label = "same slot" if g["match"] == "same_slot" else f"cross-slot [{g['slot']}]"
+                print(f"  Day -{g['day_offset']} {match_label}: {g['group']}"
+                      f" (wt {g['history_weight']:.2f}"
+                      f" × decay {g['recency_factor']:.2f}"
+                      f") — penalty {g['penalty']:.4f}")
+        print(f"  Total penalty: {details.get('total_penalty', 0.0):.4f}")
+        resolved = details.get("resolved_days", [])
+        skipped  = details.get("skipped_days", [])
+        print(f"  History days resolved: {resolved}  skipped: {skipped}")
 
     def _get_template_for_meal(self, meal_category: str, template_override: Optional[str] = None) -> Optional[str]:
         """

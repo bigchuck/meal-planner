@@ -200,6 +200,7 @@ class CommandContext:
             thresholds=self.thresholds,
             pending_mgr=self.pending_mgr,
             workspace_mgr=self.workspace_mgr,
+            log_mgr=self.log,
         )
 
         for scorer_name in get_available_scorers():

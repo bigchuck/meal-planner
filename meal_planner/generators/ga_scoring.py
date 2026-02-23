@@ -378,13 +378,19 @@ class FitnessEngine:
         if self.diversity_context is not None and self.diversity_context.intraday is not None:
             intraday_penalty = self._score_intraday_penalty(member)
 
-        final_aggregate = round(aggregate - diversity_penalty - intraday_penalty, 4)
+        interday_penalty = 0.0
+        if self.diversity_context is not None and self.diversity_context.interday is not None:
+            interday_penalty = self._score_interday_penalty(member)
 
+        final_aggregate = round(aggregate - diversity_penalty - intraday_penalty - interday_penalty, 4)
+        
         penalties = {}
         if diversity_penalty > 0.0:
             penalties["diversity_daily_count"] = round(diversity_penalty, 4)
         if intraday_penalty > 0.0:
             penalties["diversity_intraday"] = round(intraday_penalty, 4)
+        if interday_penalty > 0.0:
+            penalties["diversity_interday"] = round(interday_penalty, 4)
 
         return FitnessResult(
             aggregate_score=final_aggregate,
@@ -606,6 +612,88 @@ class FitnessEngine:
             occurrences = presence.occurrence_count(group_name)
             if occurrences > 0:
                 total_penalty += occurrences * penalty_per_occurrence * penalty_slope
+
+        return total_penalty
+
+    def _score_interday_penalty(self, member: Member) -> float:
+        """
+        Compute interday diversity penalty for a GA member.
+
+        For each interday group the member's genomes contribute to,
+        inspects the same meal slot across recent history days and
+        accumulates a recency-weighted unbounded penalty.
+
+        Args:
+            member: GA member being scored.
+
+        Returns:
+            Total penalty (>= 0.0). Zero if no groups are repeated.
+        """
+        from meal_planner.scorers.diversity_context import InterdayGroupPresence
+
+        presence: InterdayGroupPresence = self.diversity_context.interday
+
+        try:
+            interday_cfg = self._interday_config_cache
+        except AttributeError:
+            return 0.0
+        if interday_cfg is None:
+            return 0.0
+
+        groups = interday_cfg.get("groups", {})
+        if not groups:
+            return 0.0
+
+        lookback_days:     int   = interday_cfg["lookback_days"]
+        recency_decay:     float = interday_cfg["recency_decay"]
+        cross_slot_weight: float = interday_cfg.get("cross_slot_weight", 0.0)
+        penalty_slope:     float = interday_cfg["penalty_slope"]
+
+        # The meal slot for this GA session (set at init time)
+        meal_slot: str = getattr(self, "_ga_meal_slot", "")
+
+        # Build code -> [group_name, ...] index
+        index: Dict[str, list] = {}
+        for group_name, group_def in groups.items():
+            for code in group_def.get("codes", []):
+                cu = code.upper()
+                if cu not in index:
+                    index[cu] = []
+                index[cu].append(group_name)
+
+        # Determine which groups the member's genomes touch
+        hit_groups: set = set()
+        for genome in member.genomes:
+            for code in genome.codes:
+                for group_name in index.get(code.upper(), []):
+                    hit_groups.add(group_name)
+
+        if not hit_groups:
+            return 0.0
+
+        total_penalty = 0.0
+        for offset in range(1, lookback_days + 1):
+            if offset not in presence.resolved_days:
+                continue
+            recency_factor = recency_decay ** (offset - 1)
+            for group_name in hit_groups:
+                # Same-slot
+                if meal_slot:
+                    same_weight = presence.get_slot(offset, meal_slot).get(group_name, 0.0)
+                    if same_weight > 0.0:
+                        total_penalty += same_weight * penalty_slope * recency_factor
+                # Cross-slot (fast-path skip)
+                if cross_slot_weight > 0.0:
+                    day_data = presence.day_slots.get(offset, {})
+                    for slot_key, slot_tally in day_data.items():
+                        if slot_key == meal_slot:
+                            continue
+                        cross_weight = slot_tally.get(group_name, 0.0)
+                        if cross_weight > 0.0:
+                            total_penalty += (
+                                cross_weight * penalty_slope
+                                * recency_factor * cross_slot_weight
+                            )
 
         return total_penalty
 

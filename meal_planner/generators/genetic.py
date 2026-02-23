@@ -185,6 +185,7 @@ class GeneticAlgorithm:
             thresholds=ctx.thresholds,
             pending_mgr=ctx.pending_mgr,
             workspace_mgr=ctx.workspace_mgr,
+            log_mgr=ctx.log,
         )
         self.fitness_engine.diversity_context = diversity_ctx
 
@@ -194,6 +195,9 @@ class GeneticAlgorithm:
         self.fitness_engine._dc_config_cache = dc_config
         intraday_config = ctx.thresholds.get_intraday_diversity_config()
         self.fitness_engine._intraday_config_cache = intraday_config
+        interday_config = ctx.thresholds.get_interday_config()
+        self.fitness_engine._interday_config_cache = interday_config
+        self.fitness_engine._ga_meal_slot = slot.meal_type.upper()
 
         # Initialize empty population
         self.population = Population(self.config)

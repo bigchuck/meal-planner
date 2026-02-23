@@ -9,11 +9,13 @@ session, passed to every candidate scorer call.
 Classes:
     DailyCountTally      - Resolved totals per group for daily_count scorer
     IntradayMealPresence - Per-meal group presence map for intraday scorer
+    InterdayGroupPresence  - Per-slot group presence across recent history days
     DiversityContext     - Container for all resolved diversity data
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import Dict, List, Optional, Any
 
 
@@ -105,6 +107,35 @@ class IntradayMealPresence:
             if meal_tally.get(gid, 0.0) > 0.0
         )
 
+@dataclass
+class InterdayGroupPresence:
+    """
+    Per-day, per-slot group presence map for the interday diversity scorer.
+    Built from closed log history for the configured lookback window.
+    Structure:
+        day_slots: Dict[day_offset, Dict[meal_slot, Dict[group_name, float]]]
+            day_offset  - int, 1 = yesterday, 2 = two days ago, etc.
+            meal_slot   - uppercase canonical meal name e.g. "LUNCH"
+            group_name  - uppercase group key from config
+            float       - sum of item_mult for all matching codes in that slot
+
+    Example:
+        {1: {"LUNCH": {"POULTRY": 1.5}}, 2: {"LUNCH": {"POULTRY": 1.0}}}
+    """
+    day_slots: Dict[int, Dict[str, Dict[str, float]]] = field(default_factory=dict)
+    resolved_days: List[int] = field(default_factory=list)
+    skipped_days:  List[int] = field(default_factory=list)
+
+    def get_slot(self, day_offset: int, meal_slot: str) -> Dict[str, float]:
+        """Return group->weight map for a specific day/slot (empty dict if absent)."""
+        return self.day_slots.get(day_offset, {}).get(meal_slot.upper(), {})
+
+    def set_slot(self, day_offset: int, meal_slot: str, tally: Dict[str, float]) -> None:
+        """Store group tally for a specific day/slot."""
+        if day_offset not in self.day_slots:
+            self.day_slots[day_offset] = {}
+        self.day_slots[day_offset][meal_slot.upper()] = tally
+
 
 # =============================================================================
 # DiversityContext
@@ -124,9 +155,12 @@ class DiversityContext:
                      None if the scorer is disabled or config is absent.
         intraday:    Per-meal group presence map for the intraday scorer.
                      None if the scorer is disabled or config is absent.
+        interday:    Per-day/slot group presence from recent history.
+                     None if the scorer is disabled or config is absent.
     """
     daily_count: Optional[DailyCountTally]     = None
     intraday:    Optional[IntradayMealPresence] = None
+    interday:    Optional[InterdayGroupPresence] = None
 
     # ------------------------------------------------------------------
     # Factory
@@ -134,21 +168,22 @@ class DiversityContext:
 
     @classmethod
     def build(
-        cls,
-        thresholds,          # ThresholdsManager
-        pending_mgr,         # PendingManager
-        workspace_mgr,       # WorkspaceManager
+    cls,
+    thresholds,          # ThresholdsManager
+    pending_mgr,         # PendingManager
+    workspace_mgr,       # WorkspaceManager
+    log_mgr=None,        # LogManager (optional; required for interday scorer)
     ) -> "DiversityContext":
         """
         Build a DiversityContext by resolving all configured sources.
+            Args:
+                thresholds:    ThresholdsManager (provides scorer configs)
+                pending_mgr:   PendingManager    (provides pending items)
+                workspace_mgr: WorkspaceManager  (provides planning meals by ID)
+                log_mgr:       LogManager        (provides closed history for interday)
 
-        Args:
-            thresholds:    ThresholdsManager (provides scorer configs)
-            pending_mgr:   PendingManager    (provides pending items)
-            workspace_mgr: WorkspaceManager  (provides planning meals by ID)
-
-        Returns:
-            Populated DiversityContext ready for the scoring pass.
+            Returns:
+                Populated DiversityContext ready for the scoring pass.
         """
         ctx = cls()
 
@@ -168,6 +203,14 @@ class DiversityContext:
                 config=intraday_config,
                 pending_mgr=pending_mgr,
                 workspace_mgr=workspace_mgr,
+            )
+
+        # --- interday ---
+        interday_config = thresholds.get_interday_config()
+        if interday_config is not None and log_mgr is not None:
+            ctx.interday = _resolve_interday(
+                config=interday_config,
+                log_mgr=log_mgr,
             )
 
         return ctx
@@ -489,3 +532,93 @@ def _tally_for_intraday(
             for group_name in matches:
                 meal_tally[group_name] = meal_tally.get(group_name, 0.0) + mult
     return meal_tally
+
+def _resolve_interday(
+    config: Dict[str, Any],
+    log_mgr,
+    ) -> InterdayGroupPresence:
+    """
+    Build per-day, per-slot group presence from closed log history.
+    Reads the configured lookback window of closed daily logs, parses each
+    row's codes string (which may contain time markers) using
+    parse_selection_to_items(), assigns items to meal slots via
+    categorize_time(), then tallies group contributions per slot.
+
+    Args:
+        config:  Normalised interday config from get_interday_config().
+                Expected keys: lookback_days (int), groups (dict,
+                same structure as intraday groups).
+        log_mgr: LogManager instance.
+
+    Returns:
+        InterdayGroupPresence keyed by day_offset (1 = yesterday).
+    """
+    from datetime import date, timedelta
+    from meal_planner.parsers.code_parser import parse_selection_to_items
+    from meal_planner.utils.time_utils import categorize_time
+
+    presence    = InterdayGroupPresence()
+    groups      = config.get("groups", {})
+    lookback    = int(config.get("lookback_days", 3))
+    today       = date.today()
+
+    # Build code -> [group_name, ...] index (same structure as intraday)
+    code_index = _build_intraday_code_index(groups)
+
+    for offset in range(1, lookback + 1):
+        target_date = str(today - timedelta(days=offset))
+
+        try:
+            rows = log_mgr.get_entries_for_date(target_date)
+        except Exception as exc:
+            print(f"Warning: interday: could not read log for {target_date} -- {exc}")
+            presence.skipped_days.append(offset)
+            continue
+
+        if rows.empty:
+            # No log for that day — not an error, just no data
+            presence.skipped_days.append(offset)
+            continue
+
+        # Accumulate slot tallies across all rows for this date.
+        # Each row's 'codes' string is parsed to recover time markers and
+        # food codes; categorize_time() maps times to canonical meal slots.
+        slot_tallies: Dict[str, Dict[str, float]] = {}
+
+        codes_col = log_mgr.cols.codes  # resolves actual column name
+
+        for _, row in rows.iterrows():
+            codes_str = str(row.get(codes_col, "") or "")
+            if not codes_str.strip():
+                continue
+
+            items = parse_selection_to_items(codes_str)
+
+            current_slot: Optional[str] = None
+            for item in items:
+                if "time" in item and "code" not in item:
+                    current_slot = categorize_time(
+                        item["time"], item.get("meal_override")
+                    )
+                elif "code" in item and current_slot:
+                    slot_key = current_slot.upper()
+                    code     = str(item["code"]).strip().upper()
+                    mult     = float(item.get("mult", 1.0))
+                    if not code or mult <= 0.0:
+                        continue
+                    matches = code_index.get(code)
+                    if matches:
+                        if slot_key not in slot_tallies:
+                            slot_tallies[slot_key] = {}
+                        for group_name in matches:
+                            slot_tallies[slot_key][group_name] = (
+                                slot_tallies[slot_key].get(group_name, 0.0) + mult
+                            )
+
+        # Store resolved slot tallies and record success
+        for slot_key, tally in slot_tallies.items():
+            presence.set_slot(offset, slot_key, tally)
+
+        presence.resolved_days.append(offset)
+
+    return presence

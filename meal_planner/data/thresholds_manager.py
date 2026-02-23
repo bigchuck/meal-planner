@@ -1064,6 +1064,16 @@ class ThresholdsManager:
         )
         if intraday_cfg is not None:
             self._validate_intraday_diversity(intraday_cfg)
+        
+        # Validate interday diversity scorer (optional)
+        interday_cfg = (
+            self._thresholds
+            .get("diversity_scoring", {})
+            .get("scorers", {})
+            .get("interday")
+        )
+        if interday_cfg is not None:
+            self._validate_interday(interday_cfg)
 
     def _validate_daily_count(self, dc: Any, path: str) -> None:
         """Validate the daily_count scorer block."""
@@ -1287,6 +1297,76 @@ class ThresholdsManager:
             # description is optional, but if present must be string
             if "description" in group_def and not isinstance(group_def["description"], str):
                 self._validation_errors.append(f"{gpath}.description must be a string")
+
+    def _validate_interday(self, cfg: Dict[str, Any]) -> None:
+        """Validate diversity_scoring.scorers.interday section."""
+        path = "diversity_scoring.scorers.interday"
+
+        if not isinstance(cfg, dict):
+            self._validation_errors.append(f"{path} must be an object")
+            return
+
+        # enabled
+        if "enabled" in cfg and not isinstance(cfg["enabled"], bool):
+            self._validation_errors.append(f"{path}.enabled must be a boolean")
+
+        # weight
+        if "weight" not in cfg:
+            self._validation_errors.append(f"{path} missing required field: 'weight'")
+        elif not isinstance(cfg["weight"], (int, float)) or cfg["weight"] < 0:
+            self._validation_errors.append(f"{path}.weight must be a non-negative number")
+
+        # lookback_days
+        if "lookback_days" not in cfg:
+            self._validation_errors.append(f"{path} missing required field: 'lookback_days'")
+        elif not isinstance(cfg["lookback_days"], int) or cfg["lookback_days"] < 1:
+            self._validation_errors.append(f"{path}.lookback_days must be a positive integer")
+
+        # recency_decay
+        if "recency_decay" not in cfg:
+            self._validation_errors.append(f"{path} missing required field: 'recency_decay'")
+        elif not isinstance(cfg["recency_decay"], (int, float)) or not (0.0 <= cfg["recency_decay"] <= 1.0):
+            self._validation_errors.append(f"{path}.recency_decay must be a number between 0.0 and 1.0")
+
+        # cross_slot_weight (optional, defaults to 0.0)
+        if "cross_slot_weight" in cfg:
+            if not isinstance(cfg["cross_slot_weight"], (int, float)) or not (0.0 <= cfg["cross_slot_weight"] <= 1.0):
+                self._validation_errors.append(
+                    f"{path}.cross_slot_weight must be a number between 0.0 and 1.0"
+                )
+
+        # penalty_slope
+        if "penalty_slope" not in cfg:
+            self._validation_errors.append(f"{path} missing required field: 'penalty_slope'")
+        elif not isinstance(cfg["penalty_slope"], (int, float)) or cfg["penalty_slope"] <= 0:
+            self._validation_errors.append(f"{path}.penalty_slope must be a positive number")
+
+        # groups
+        if "groups" not in cfg:
+            self._validation_errors.append(f"{path} missing required field: 'groups'")
+            return
+
+        groups = cfg["groups"]
+        if not isinstance(groups, dict) or len(groups) == 0:
+            self._validation_errors.append(f"{path}.groups must be a non-empty object")
+            return
+
+        for group_name, group_def in groups.items():
+            if group_name.startswith("_"):
+                continue
+            gpath = f"{path}.groups.{group_name}"
+            if not isinstance(group_def, dict):
+                self._validation_errors.append(f"{gpath} must be an object")
+                continue
+            codes = group_def.get("codes", [])
+            if not isinstance(codes, list) or len(codes) == 0:
+                self._validation_errors.append(f"{gpath}.codes must be a non-empty array")
+            else:
+                for i, c in enumerate(codes):
+                    if not isinstance(c, str) or not c.strip():
+                        self._validation_errors.append(
+                            f"{gpath}.codes[{i}] must be a non-empty string"
+                        )
 
     def get_component_pools(self) -> Optional[Dict[str, List[str]]]:
         """
@@ -1540,4 +1620,61 @@ class ThresholdsManager:
             "penalty_slope":          cfg["penalty_slope"],
             "sources":               sources,
             "groups":                clean_groups,
+        }
+    
+    def get_interday_config(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the resolved interday diversity scorer configuration.
+
+        Sample entries (group keys starting with '_') are stripped.
+        Code lists are normalised to uppercase.  Returns None if the
+        section is absent, disabled, or failed validation.
+
+        Returns:
+            Dict with keys: enabled, weight, lookback_days, recency_decay,
+            cross_slot_weight, penalty_slope, groups — where groups maps
+            group_name (uppercase) to {codes: [uppercase, ...], description: str}.
+            Returns None if absent or disabled.
+        """
+        if not self.is_valid:
+            return None
+
+        cfg = (
+            self._thresholds
+            .get("diversity_scoring", {})
+            .get("scorers", {})
+            .get("interday")
+        )
+
+        if cfg is None:
+            return None
+
+        if not cfg.get("enabled", False):
+            return None
+
+        # Strip _sample groups and normalise code lists to uppercase
+        clean_groups: Dict[str, Any] = {}
+        for group_name, group_def in cfg.get("groups", {}).items():
+            if group_name.startswith("_"):
+                continue
+            if not isinstance(group_def, dict):
+                continue
+            normalised_codes = [
+                c.strip().upper()
+                for c in group_def.get("codes", [])
+                if isinstance(c, str) and c.strip()
+            ]
+            clean_groups[group_name.strip().upper()] = {
+                "codes":       normalised_codes,
+                "description": group_def.get("description", ""),
+            }
+
+        return {
+            "enabled":          True,
+            "weight":           float(cfg["weight"]),
+            "lookback_days":    int(cfg["lookback_days"]),
+            "recency_decay":    float(cfg["recency_decay"]),
+            "cross_slot_weight": float(cfg.get("cross_slot_weight", 0.0)),
+            "penalty_slope":    float(cfg["penalty_slope"]),
+            "groups":           clean_groups,
         }

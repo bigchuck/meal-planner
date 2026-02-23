@@ -36,6 +36,8 @@ class ScoringContext:
     location: MealLocation
     meal_id: Optional[str]  # None for PENDING, ID string for WORKSPACE/CANDIDATE
     meal_category: str  # "breakfast", "lunch", "dinner", "morning snack", etc.
+    meal_slot: Optional[str] = None  # Uppercase canonical slot e.g. "LUNCH"; used by interday scorer
+
     
     # Template context
     template_path: Optional[str] = None  # e.g., "breakfast.protein_low_carb"
