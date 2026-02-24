@@ -166,7 +166,12 @@ class GeneticAlgorithm:
                 )
 
         # Build breeding pipeline
-        self.breeding = BreedingPipeline(self.config, self.pool_codes)
+        workspace = self.ctx.workspace_mgr.load()
+        locks = workspace.get("locks", {})
+        meal_type = self.config.meal_slots[0].meal_type
+        meal_locks = locks.get("include", {}).get(meal_type, {})
+        locked_codes = [c.upper() for c in meal_locks.keys() if not c.endswith(".*")]
+        self.breeding = BreedingPipeline(self.config, self.pool_codes, locked_codes=locked_codes)
 
         # Build fitness engine from meal template
         from meal_planner.generators.ga_scoring import FitnessEngine

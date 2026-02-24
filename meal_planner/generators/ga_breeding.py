@@ -63,7 +63,7 @@ class BreedingPipeline:
     filtering, and scoring before entering the population.
     """
 
-    def __init__(self, config: GAConfig, pool_codes: Dict[str, List[str]]):
+    def __init__(self, config: GAConfig, pool_codes: Dict[str, List[str]], locked_codes):
         """
         Initialize breeding pipeline.
 
@@ -75,6 +75,7 @@ class BreedingPipeline:
         """
         self.config = config
         self.pool_codes = pool_codes
+        self.locked_codes = locked_codes
 
         # Validate that we have codes for each meal slot
         for slot in config.meal_slots:
@@ -150,21 +151,23 @@ class BreedingPipeline:
             is too small for min_genome_size
         """
         codes = self.pool_codes.get(slot.meal_type, [])
-
-        if len(codes) < self.config.min_genome_size:
-            print(
-                f"Error: Pool for '{slot.meal_type}' has {len(codes)} codes, "
-                f"need at least {self.config.min_genome_size}"
-            )
-            return None
-
-        # Determine genome size: random within config range, capped by pool
+    
+        # Start with required locked codes (must be in the pool)
+        locked = [c for c in self.locked_codes if c in codes]
+        remaining_pool = [c for c in codes if c not in locked]
+        
         max_possible = min(self.config.max_genome_size, len(codes))
-        genome_size = random.randint(self.config.min_genome_size, max_possible)
-
-        # Sample without replacement
-        selected = random.sample(codes, genome_size)
-
+        genome_size = random.randint(
+            max(self.config.min_genome_size, len(locked)), 
+            max_possible
+        )
+        
+        fill_count = genome_size - len(locked)
+        if fill_count > len(remaining_pool):
+            fill_count = len(remaining_pool)
+        
+        selected = locked + random.sample(remaining_pool, fill_count)
+        random.shuffle(selected)  # don't always put locks first
         return Genome(codes=selected, meal_slot=slot.meal_type)
 
     # =========================================================================
@@ -323,7 +326,14 @@ class BreedingPipeline:
         meal_type = self.config.meal_slots[slot_idx].meal_type
 
         # 2. Pick a random code position within the genome
-        pos = random.randrange(len(genome.codes))
+        # When picking position to mutate, exclude locked code positions
+        locked_set = set(self.locked_codes)
+        mutable_positions = [i for i, c in enumerate(genome.codes) 
+                            if c.upper() not in locked_set]
+        if not mutable_positions:
+            return BreedingResult(offspring=[], operator="mutation", 
+                                parents=(parent.member_id, ""), discarded=True)
+        pos = random.choice(mutable_positions)
         old_code = genome.codes[pos]
 
         # 3. Build candidates: codes in the unified pool that are NOT
