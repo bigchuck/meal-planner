@@ -75,14 +75,18 @@ class ChartCommand(Command):
         
         # Ensure required columns
         if include_micro:
-            required = ["date", "fiber_g", "sodium_mg", "potassium_mg", "vitA_mcg", "vitC_mg", "iron_mg"]
+            chart_df = self._build_micro_dataframe(log_df)
         else:
             required = ["date", "cal", "prot_g", "carbs_g", "fat_g", "sugar_g", "gl"]
+            for col in required:
+                if col not in log_df.columns:
+                    log_df[col] = 0
+            chart_df = log_df[required]
 
-        for col in required:
-            if col not in log_df.columns:
-                log_df[col] = 0
-        
+            if chart_df.empty:
+                print("\nNo data to chart.\n")
+                return
+            
         # Build chart
         if include_micro:
             output_file = Path(str(CHART_OUTPUT_FILE).replace(".jpg", "_micro.jpg"))
@@ -105,7 +109,7 @@ class ChartCommand(Command):
         
         title = " - ".join(title_parts)
         
-        builder.build_from_dataframe(log_df[required], window=window, title=title,
+        builder.build_from_dataframe(chart_df, window=window, title=title,
                                      mode="micro" if include_micro else "macro")
     
     def _build_today_dataframe(self):
@@ -135,3 +139,37 @@ class ChartCommand(Command):
             "sugar_g": int(round(totals["sugar_g"])),
             "gl": int(round(totals["gl"])),
         }])
+    
+    def _build_micro_dataframe(self, log_df):
+        """Build per-date micro totals by running codes through ReportBuilder."""
+        import pandas as pd
+        from meal_planner.reports.report_builder import ReportBuilder
+        from meal_planner.parsers.code_parser import CodeParser
+
+        builder = ReportBuilder(self.ctx.master, self.ctx.report_columns)
+        codes_col = self.ctx.log.cols.codes
+        date_col = self.ctx.log.cols.date
+
+        rows = []
+        for _, row in log_df.iterrows():
+            entry_date = str(row[date_col])
+            codes_str = str(row.get(codes_col, ""))
+            if not codes_str or codes_str == "nan":
+                continue
+            try:
+                items = CodeParser.parse(codes_str)
+                report = builder.build_from_items(items, title="")
+                t = report.totals
+                rows.append({
+                    "date": entry_date,
+                    "fiber_g":       t.fiber_g,
+                    "sodium_mg":     t.sodium_mg,
+                    "potassium_mg":  t.potassium_mg,
+                    "vitA_mcg":      t.vitA_mcg,
+                    "vitC_mg":       t.vitC_mg,
+                    "iron_mg":       t.iron_mg,
+                })
+            except Exception:
+                continue
+
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
