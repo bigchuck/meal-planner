@@ -36,6 +36,7 @@ class ChartCommand(Command):
         end_date = None
         include_today = False
         include_micro = False
+        include_dots = False        
         
         # Extract tokens
         date_tokens = []
@@ -46,6 +47,8 @@ class ChartCommand(Command):
                 include_today = True
             elif token.lower() in ("--micro", "--micros"):
                 include_micro = True
+            elif token.lower() in ("--dots", "--dot"):
+                include_dots = True
             else:
                 # Try to parse as window
                 try:
@@ -110,7 +113,8 @@ class ChartCommand(Command):
         title = " - ".join(title_parts)
         
         builder.build_from_dataframe(chart_df, window=window, title=title,
-                                     mode="micro" if include_micro else "macro")
+                                     mode="micro" if include_micro else "macro",
+                                     dots=include_dots)
     
     def _build_today_dataframe(self):
         """Build DataFrame row from pending data."""

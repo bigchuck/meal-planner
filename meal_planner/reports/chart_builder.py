@@ -37,7 +37,7 @@ class ChartBuilder:
     
     def build_from_dataframe(self, df: pd.DataFrame, window: int = 7,
                             title: Optional[str] = None,
-                            mode: str = "macro") -> None:
+                            mode: str = "macro", dots=False) -> None:
         """
         Build chart from DataFrame with date and nutrient columns.
         
@@ -64,7 +64,7 @@ class ChartBuilder:
         roll_df = full_df.rolling(window=window, min_periods=1).mean()
         
         # Create the chart
-        self._create_chart(full_df, roll_df, window, title, mode)
+        self._create_chart(full_df, roll_df, window, title, mode, dots)
         
         # Open in browser
         webbrowser.open(os.path.abspath(self.output_file))
@@ -112,7 +112,7 @@ class ChartBuilder:
         return df
     
     def _create_chart(self, daily_df: pd.DataFrame, ma_df: pd.DataFrame,
-                    window: int, title: Optional[str], mode: str = "macro") -> None:
+                    window: int, title: Optional[str], mode: str = "macro", dots=False) -> None:
         """Create and save the multi-panel chart."""
         # Metrics to plot
         if mode == "micro":
@@ -149,11 +149,15 @@ class ChartBuilder:
             y_ma_masked = np.where(np.isnan(y_daily), np.nan, y_ma)
             
             # Plot with gap handling
-            self._plot_with_gaps(
-                ax, dates, y_daily,
-                color="black", linestyle="-", linewidth=1.5,
-                label="Daily", singleton_marker="+", singleton_label="Daily (+1)"
-            )
+            if dots:
+                ax.plot(dates, y_daily, marker="+", color="black",
+                        linewidth=0, markersize=6, label="Daily")
+            else:
+                self._plot_with_gaps(
+                    ax, dates, y_daily,
+                    color="black", linestyle="-", linewidth=1.5,
+                    label="Daily", singleton_marker="+", singleton_label="Daily (+1)"
+                )
             
             self._plot_with_gaps(
                 ax, dates, y_ma_masked,
