@@ -13,7 +13,7 @@ class ChartCommand(Command):
     """Generate trend chart with moving averages."""
     
     name = "chart"
-    help_text = "Generate trend chart (chart [window] [start] [end] [today] [--micros])"
+    help_text = "Generate trend chart (chart [window] [start] [end] [today] [--micros] [--dots])"
     
     def execute(self, args: str) -> None:
         """
