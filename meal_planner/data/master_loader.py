@@ -876,3 +876,61 @@ class MasterLoader:
         standard_order = ['fiber_g', 'sodium_mg', 'potassium_mg', 
                         'vitA_mcg', 'vitC_mg', 'iron_mg']
         return [k for k in standard_order if k in nutrient_keys]
+    
+    def filter_by_recipe(self, df: pd.DataFrame, recipe_query: str) -> pd.DataFrame:
+        """
+        Post-filter a results DataFrame to only rows whose recipe text
+        matches the given boolean query.
+
+        Args:
+            df:            A subset of the master DataFrame (e.g. from search())
+            recipe_query:  Boolean query string using same syntax as find
+                        e.g. "dill or tahini", "tahini NOT garlic"
+
+        Returns:
+            Filtered DataFrame (preserves original ordering)
+        """
+        if df.empty or not recipe_query.strip():
+            return df
+
+        from meal_planner.utils.search import parse_search_query
+
+        clauses = parse_search_query(recipe_query.strip())
+        if not clauses:
+            return df
+
+        cols = self.cols
+        matching_codes = []
+
+        for code in df[cols.code]:
+            entry = self._master_dict.get(code.upper(), {})
+            recipe_text = entry.get('recipe', '') or ''
+            recipe_lower = recipe_text.lower()
+            # Remove punctuation for normalized matching
+            import string
+            recipe_norm = recipe_lower.translate(str.maketrans("", "", string.punctuation))
+
+            # OR between clauses, AND within clause
+            row_matches = False
+            for clause in clauses:
+                clause_ok = True
+                for term in clause['pos']:
+                    t = term.lower().translate(str.maketrans("", "", string.punctuation))
+                    if t not in recipe_norm:
+                        clause_ok = False
+                        break
+                if clause_ok:
+                    for term in clause['neg']:
+                        t = term.lower().translate(str.maketrans("", "", string.punctuation))
+                        if t in recipe_norm:
+                            clause_ok = False
+                            break
+                if clause_ok:
+                    row_matches = True
+                    break
+
+            if row_matches:
+                matching_codes.append(code.upper())
+
+        mask = df[cols.code].str.upper().isin(matching_codes)
+        return df[mask].copy()

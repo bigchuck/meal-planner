@@ -12,7 +12,7 @@ class FindCommand(Command):
     """Search the master database."""
     
     name = ("find", "f")
-    help_text = "Search master database (e.g., find chicken [--limit N] [--skip N] [--available])"
+    help_text = "Search master database (e.g., find chicken [--recipe 'dill or tahini'] [--limit N] [--skip N] [--available])"
     
     def execute(self, args: str) -> None:
         """
@@ -20,12 +20,18 @@ class FindCommand(Command):
         
         Args:
             args: Search term with optional flags:
+                --recipe <ingredient query>
                 --limit N: Show only N results
                 --skip N: Skip first N results  
                 --available: Filter to items in inventory (batch items only)
+        Examples:
+            f sa.                              All SA-section items
+            f sa. --recipe "dill or tahini"   SA items whose recipe contains dill or tahini
+            f so. --recipe "lemon NOT cream"  SO items with lemon but not cream
+            f --recipe cumin                  Any item whose recipe contains cumin
         """
         if not args.strip():
-            print("Usage: find <search term> [--limit N] [--skip N] [--available]")
+            print("Usage: find <search term> [--recipe <ingredient query>] [--limit N] [--skip N] [--available]")
             return
         
         # Parse flags
@@ -38,6 +44,7 @@ class FindCommand(Command):
         limit = None
         skip = 0
         available_only = False
+        recipe_query = None
         query_parts = []
         
         i = 0
@@ -65,17 +72,42 @@ class FindCommand(Command):
             elif parts[i] == "--available":
                 available_only = True
                 i += 1
+            elif parts[i] == "--recipe":
+                # Collect all following tokens until the next '--' flag
+                i += 1
+                recipe_parts = []
+                while i < len(parts) and not parts[i].startswith("--"):
+                    recipe_parts.append(parts[i])
+                    i += 1
+                if not recipe_parts:
+                    print("Error: --recipe requires a search term")
+                    print("  Example: f sa. --recipe \"dill or tahini\"")
+                    return
+                recipe_query = " ".join(recipe_parts)
             else:
                 query_parts.append(parts[i])
                 i += 1
-        
-        if not query_parts:
-            print("Usage: find <search term> [--limit N] [--skip N] [--available]")
-            return
-        
-        query = self._transform_code_list(query_parts)
-        results = self.ctx.master.search(query)
 
+        if not query_parts and not recipe_query:
+            print("Usage: find <search term> [--recipe <ingredient query>] [--limit N] [--skip N] [--available]")
+            return
+
+        if query_parts:
+            query = self._transform_code_list(query_parts)
+            results = self.ctx.master.search(query)
+        else:
+            # --recipe with no primary term: scan the whole database
+            query = ""
+            results = self.ctx.master.df.copy()
+
+        # Apply recipe ingredient filter if requested
+        if recipe_query and not results.empty:
+            results = self.ctx.master.filter_by_recipe(results, recipe_query)
+        
+        # Apply recipe filter if requested
+        if recipe_query and not results.empty:
+            results = self.ctx.master.filter_by_recipe(results, recipe_query)
+        
         # Also search aliases if available
         alias_results = []
         if self.ctx.aliases:
@@ -87,9 +119,12 @@ class FindCommand(Command):
             # Don't filter aliases - they're just shortcuts
         
         if results.empty and not alias_results:
-            print(f"\nNo matches found for '{query}'.\n")
+            no_match_msg = f"\nNo matches found for '{query}'" if query else "\nNo matches found"
+            if recipe_query:
+                no_match_msg += f" with recipe containing '{recipe_query}'"
+            print(no_match_msg + ".\n")
             return
-        
+                
         # Count total before pagination
         total_results = len(results) + len(alias_results)
         
@@ -121,8 +156,11 @@ class FindCommand(Command):
         end_idx = skip + len(results) + len(alias_results)
         
         # Format results
-        print(f"\nSearch results for '{query}':")
-        
+        _header = f"\nSearch results for '{query}'" if query else "\nRecipe search"
+        if recipe_query:
+            _header += f"  [recipe: {recipe_query}]"
+        print(_header + ":")       
+
         # Show pagination info
         if total_results > 0:
             if limit is not None or skip > 0:
