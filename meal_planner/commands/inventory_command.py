@@ -182,16 +182,17 @@ class InventoryCommand(Command):
         
         # Add type-specific fields
         if inv_type == "rotating":
-            # Check if already exists
             if item_exists:
                 existing = workspace["inventory"]["rotating"][code]
                 item_data["status"] = existing.get("status", "available")
-                # Preserve original added date
-                item_data["added"] = existing.get("added", timestamp)
-                if existing.get("status") == "depleted":
-                    item_data["depleted_date"] = existing.get("depleted_date")
+                # Preserve existing action date/label on update
+                item_data["action_date"] = existing.get("action_date", timestamp)
+                item_data["action_label"] = existing.get("action_label", "added")
             else:
                 item_data["status"] = "available"
+                item_data["action_date"] = timestamp
+                item_data["action_label"] = "added"
+            item_data.pop("added", None)
         
         force_option = "--force" in args
         if not self._validate_inventory_against_locks(code, multiplier, force_option):
@@ -300,7 +301,9 @@ class InventoryCommand(Command):
         # Mark as depleted
         item = workspace["inventory"]["rotating"][code]
         item["status"] = "depleted"
-        item["depleted_date"] = datetime.now().isoformat()
+        item["action_date"] = datetime.now().isoformat()
+        item["action_label"] = "depleted"
+        item.pop("depleted_date", None)
         
         # Save workspace
         self._save_workspace(workspace)
@@ -356,14 +359,14 @@ class InventoryCommand(Command):
         # Restore item
         item = workspace["inventory"]["rotating"][code]
         item["status"] = "available"
-        
+        item["action_date"] = datetime.now().isoformat()
+        item["action_label"] = "restored"
+
         # Update multiplier if provided
         if multiplier is not None:
             item["multiplier"] = multiplier
-        
-        # Remove depleted_date if present
-        if "depleted_date" in item:
-            del item["depleted_date"]
+
+        item.pop("depleted_date", None)
         
         # Save workspace
         self._save_workspace(workspace)
@@ -424,21 +427,21 @@ class InventoryCommand(Command):
                 food_name = self._get_food_name(code)
                 mult = item["multiplier"]
                 status = item["status"]
-                added = item["added"][:10]
                 note = item.get("note", "")
                 
-                if status == "available":
-                    status_str = "AVAILABLE"
-                    depleted_str = ""
-                    if status == "depleted" and "depleted_date" in item:
-                        depleted = item["depleted_date"][:10]
-                        depleted_str = f", depleted {depleted}"
-                    note_str = f' - "{note}"' if note else ""
-                else:
+                if status != "available":
                     going_to_need_depleted = True
                     continue
-                
-                print(f"  {code} ({food_name}): {status_str}, {mult:g}x, added {added}{depleted_str}{note_str}")
+
+                date_str = ""
+                if "action_date" in item:
+                    label = item.get("action_label", "added")
+                    date_str = f", {label} {item['action_date'][:10]}"
+                elif "added" in item:  # backward compat
+                    date_str = f", added {item['added'][:10]}"
+                note_str = f' - "{note}"' if note else ""
+
+                print(f"  {code} ({food_name}): AVAILABLE, {mult:g}x{date_str}{note_str}")
 
             if going_to_need_depleted:
                 print("\nRotating items (depleted):")
@@ -446,19 +449,19 @@ class InventoryCommand(Command):
                     food_name = self._get_food_name(code)
                     mult = item["multiplier"]
                     status = item["status"]
-                    added = item["added"][:10]
                     note = item.get("note", "")
                     
                     if status == "available":
                         continue
-                    status_str = "DEPLETED"
-                    depleted_str = ""
-                    if status == "depleted" and "depleted_date" in item:
-                        depleted = item["depleted_date"][:10]
-                        depleted_str = f", depleted {depleted}"
+                    date_str = ""
+                    if "action_date" in item:
+                        label = item.get("action_label", "depleted")
+                        date_str = f", {label} {item['action_date'][:10]}"
+                    elif "depleted_date" in item:  # backward compat
+                        date_str = f", depleted {item['depleted_date'][:10]}"
                     note_str = f' - "{note}"' if note else ""
-                    
-                    print(f"  {code} ({food_name}): {status_str}, {mult:g}x, added {added}{depleted_str}{note_str}")
+
+                    print(f"  {code} ({food_name}): DEPLETED, {mult:g}x{date_str}{note_str}")
         
         print()
 
