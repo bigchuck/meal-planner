@@ -12,7 +12,7 @@ class FindCommand(Command):
     """Search the master database."""
     
     name = ("find", "f")
-    help_text = "Search master database (e.g., find chicken [--recipe 'dill or tahini'] [--limit N] [--skip N] [--available])"
+    help_text = "Search master database (e.g., find chicken [--recipe 'dill'] [--pair beef] [--best-with broccoli] [--avoid fish] [--profile 'med*'] [--limit N] [--skip N] [--available])"
     
     def execute(self, args: str) -> None:
         """
@@ -45,6 +45,11 @@ class FindCommand(Command):
         skip = 0
         available_only = False
         recipe_query = None
+        pair_query = None
+        best_with_query = None
+        avoid_query = None
+        profile_query = None
+        list_affinity = None
         query_parts = []
         
         i = 0
@@ -84,12 +89,39 @@ class FindCommand(Command):
                     print("  Example: f sa. --recipe \"dill or tahini\"")
                     return
                 recipe_query = " ".join(recipe_parts)
+            elif parts[i] in ("--pair", "--best-with", "--avoid", "--profile"):
+                flag = parts[i]
+                i += 1
+                if i >= len(parts) or parts[i].startswith("--"):
+                    print(f"Error: {flag} requires a value")
+                    return
+                value = parts[i]
+                i += 1
+                if flag == "--pair":
+                    pair_query = value
+                elif flag == "--best-with":
+                    best_with_query = value
+                elif flag == "--avoid":
+                    avoid_query = value
+                elif flag == "--profile":
+                    profile_query = value
+            elif parts[i] == "--list-affinity":
+                if i + 1 >= len(parts):
+                    print("Error: --list-affinity requires a tag name: pair, best-with, avoid, profile")
+                    return
+                list_affinity = parts[i + 1].lower()
+                if list_affinity not in ('pair', 'best-with', 'avoid', 'profile'):
+                    print(f"Error: --list-affinity must be one of: pair, best-with, avoid, profile")
+                    return
+                i += 2
             else:
                 query_parts.append(parts[i])
                 i += 1
 
-        if not query_parts and not recipe_query:
-            print("Usage: find <search term> [--recipe <ingredient query>] [--limit N] [--skip N] [--available]")
+        if not query_parts and not any([recipe_query, pair_query, best_with_query, avoid_query, profile_query]):
+            print("Usage: find <search term> [--recipe <query>] [--pair <item>] "
+                  "[--best-with <item>] [--avoid <item>] [--profile <tag>] "
+                  "[--limit N] [--skip N] [--available]")
             return
 
         if query_parts:
@@ -100,13 +132,45 @@ class FindCommand(Command):
             query = ""
             results = self.ctx.master.df.copy()
 
-        # Apply recipe ingredient filter if requested
-        if recipe_query and not results.empty:
-            results = self.ctx.master.filter_by_recipe(results, recipe_query)
+        # --list-affinity: collect and display unique values for a tag, then exit
+        if list_affinity is not None:
+            from meal_planner.utils.affinity import parse_affinities
+            cols = self.ctx.master.cols
+            unique_values = set()
+            for code in results[cols.code]:
+                entry = self.ctx.master._master_dict.get(code.upper(), {})
+                recipe_raw = entry.get('recipe', '') or ''
+                values = parse_affinities(recipe_raw).get(list_affinity, [])
+                unique_values.update(v.lower() for v in values)
+            header = f"\nUnique '{list_affinity}' values"
+            if query:
+                header += f" for '{query}'"
+            print(header + ":")
+            if unique_values:
+                for v in sorted(unique_values):
+                    print(f"  {v}")
+            else:
+                print("  (none found)")
+            print()
+            return
         
-        # Apply recipe filter if requested
+        # Apply recipe ingredient filter (strips affinity tags before matching)
         if recipe_query and not results.empty:
             results = self.ctx.master.filter_by_recipe(results, recipe_query)
+
+        # Apply affinity filters
+        if pair_query and not results.empty:
+            results = self.ctx.master.filter_by_affinity(results, 'pair', pair_query)
+        if best_with_query and not results.empty:
+            results = self.ctx.master.filter_by_affinity(results, 'best-with', best_with_query)
+        if avoid_query and not results.empty:
+            results = self.ctx.master.filter_by_affinity(results, 'avoid', avoid_query)
+        if profile_query and not results.empty:
+            # Profile supports glob patterns (e.g. med*)
+            is_pattern = '*' in profile_query or '?' in profile_query
+            results = self.ctx.master.filter_by_affinity(
+                results, 'profile', profile_query, pattern=is_pattern
+            )
         
         # Also search aliases if available
         alias_results = []
@@ -122,6 +186,14 @@ class FindCommand(Command):
             no_match_msg = f"\nNo matches found for '{query}'" if query else "\nNo matches found"
             if recipe_query:
                 no_match_msg += f" with recipe containing '{recipe_query}'"
+            if pair_query:
+                no_match_msg += f" paired with '{pair_query}'"
+            if best_with_query:
+                no_match_msg += f" best-with '{best_with_query}'"
+            if avoid_query:
+                no_match_msg += f" avoiding '{avoid_query}'"
+            if profile_query:
+                no_match_msg += f" profile '{profile_query}'"
             print(no_match_msg + ".\n")
             return
                 
@@ -156,9 +228,17 @@ class FindCommand(Command):
         end_idx = skip + len(results) + len(alias_results)
         
         # Format results
-        _header = f"\nSearch results for '{query}'" if query else "\nRecipe search"
+        _header = f"\nSearch results for '{query}'" if query else "\nAffinity search"
         if recipe_query:
             _header += f"  [recipe: {recipe_query}]"
+        if pair_query:
+            _header += f"  [pair: {pair_query}]"
+        if best_with_query:
+            _header += f"  [best-with: {best_with_query}]"
+        if avoid_query:
+            _header += f"  [avoid: {avoid_query}]"
+        if profile_query:
+            _header += f"  [profile: {profile_query}]"
         print(_header + ":")       
 
         # Show pagination info

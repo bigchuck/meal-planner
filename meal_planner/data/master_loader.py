@@ -902,9 +902,13 @@ class MasterLoader:
         cols = self.cols
         matching_codes = []
 
+        from meal_planner.utils.affinity import strip_affinities
+
         for code in df[cols.code]:
             entry = self._master_dict.get(code.upper(), {})
-            recipe_text = entry.get('recipe', '') or ''
+            recipe_raw = entry.get('recipe', '') or ''
+            # Strip affinity tags so --recipe searches only ingredients
+            recipe_text = strip_affinities(recipe_raw)
             recipe_lower = recipe_text.lower()
             # Remove punctuation for normalized matching
             import string
@@ -930,6 +934,42 @@ class MasterLoader:
                     break
 
             if row_matches:
+                matching_codes.append(code.upper())
+
+        mask = df[cols.code].str.upper().isin(matching_codes)
+        return df[mask].copy()
+    
+    def filter_by_affinity(
+        self,
+        df: 'pd.DataFrame',
+        tag: str,
+        term: str,
+        pattern: bool = False,
+    ) -> 'pd.DataFrame':
+        """
+        Filter a results DataFrame to only rows whose affinity tag contains term.
+
+        Args:
+            df:      A subset of the master DataFrame
+            tag:     Affinity tag name: 'pair', 'best-with', 'avoid', 'profile'
+            term:    Value to match (case-insensitive)
+            pattern: If True, use glob-style matching (e.g. 'med*')
+
+        Returns:
+            Filtered DataFrame (preserves original ordering)
+        """
+        if df.empty or not term.strip():
+            return df
+
+        from meal_planner.utils.affinity import affinity_matches
+
+        cols = self.cols
+        matching_codes = []
+
+        for code in df[cols.code]:
+            entry = self._master_dict.get(code.upper(), {})
+            recipe_raw = entry.get('recipe', '') or ''
+            if affinity_matches(recipe_raw, tag, term.strip(), pattern=pattern):
                 matching_codes.append(code.upper())
 
         mask = df[cols.code].str.upper().isin(matching_codes)

@@ -11,7 +11,7 @@ class RecipeCommand(Command):
     """Show recipe/ingredients for a code."""
     
     name = "recipe"
-    help_text = "Show recipe for code (recipe SO.11 [--stage])"
+    help_text = "Show recipe for code (recipe SO.11 [--affinity] [--stage])"
     
     def execute(self, args: str) -> None:
         """
@@ -32,7 +32,8 @@ class RecipeCommand(Command):
             parts = args.strip().split()
 
         stage = "--stage" in parts
-        tokens = [p for p in parts if p != "--stage"]
+        show_affinities = "--affinities" in parts or "--affinity" in parts
+        tokens = [p for p in parts if p not in ("--stage", "--affinities", "--affinity")]
 
         if not tokens:
             print("Usage: recipe <code> [--stage]")
@@ -53,11 +54,35 @@ class RecipeCommand(Command):
         recipe = entry.get('recipe', '')
 
         if recipe:
+            from meal_planner.utils.affinity import (
+                parse_affinities, strip_affinities, has_affinities, AFFINITY_TAGS
+            )
+
             lines.append("")
             lines.append(f"Recipe for {code} ({entry.get('option', '')}):")
             lines.append("")
-            for ingredient in recipe.split(','):
-                lines.append(f"  • {ingredient.strip()}")
+
+            # Show affinity block if requested and tags are present
+            if show_affinities and has_affinities(recipe):
+                affinities = parse_affinities(recipe)
+                label_map = {
+                    'pair':      'Pair with',
+                    'best-with': 'Best with',
+                    'avoid':     'Avoid',
+                    'profile':   'Profile',
+                }
+                for tag in AFFINITY_TAGS:
+                    values = affinities.get(tag, [])
+                    if values:
+                        lines.append(f"  {label_map[tag]:10}: {', '.join(values)}")
+                lines.append("")
+
+            # Ingredients (always stripped of tags)
+            ingredients_str = strip_affinities(recipe)
+            for ingredient in ingredients_str.split(','):
+                ing = ingredient.strip()
+                if ing:
+                    lines.append(f"  • {ing}")
             lines.append("")
         else:
             option = entry.get('option', '')

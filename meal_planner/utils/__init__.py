@@ -11,6 +11,7 @@ from .columns import (
 from .search import hybrid_search, parse_search_query
 from .usage_tracker import UsageTracker
 from .docs_renderer import render_explanation, list_available_topics
+from .affinity import parse_affinities, strip_affinities, has_affinities, affinity_matches
 
 __all__ = [
     'get_column',
@@ -31,4 +32,8 @@ __all__ = [
     'get_all_template_keys',
     'get_display_name',
     'get_unit',
+    'parse_affinities',
+    'strip_affinities',
+    'has_affinities',
+    'affinity_matches',
 ]
