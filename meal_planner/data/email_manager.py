@@ -77,7 +77,8 @@ class EmailManager:
         """Get formatted error message."""
         return "\n".join(self._validation_errors)
     
-    def send(self, subject: str, body_lines: List[str]) -> Tuple[bool, str]:
+    def send(self, subject: str, body_lines: List[str],
+             recipient: Optional[str] = None) -> Tuple[bool, str]:
         """
         Send email with staged content.
         
@@ -97,10 +98,11 @@ class EmailManager:
             return False, reason
         
         # Build email
+        to_address = recipient if recipient else self._config['email_address']
         msg = MIMEText('\n'.join(body_lines), 'plain', 'utf-8')
         msg['Subject'] = subject
         msg['From'] = self._config['email_address']
-        msg['To'] = self._config['email_address']
+        msg['To'] = to_address
         
         # Send via SMTP
         try:
@@ -112,21 +114,21 @@ class EmailManager:
                 server.send_message(msg)
             
             # Log successful send
-            self._log_send(subject, len(body_lines), success=True)
+            self._log_send(subject, len(body_lines), success=True, recipient=to_address)
             
             return True, "Email sent successfully"
             
         except smtplib.SMTPAuthenticationError:
             error = "SMTP authentication failed. Check app password."
-            self._log_send(subject, len(body_lines), success=False, error=error)
+            self._log_send(subject, len(body_lines), success=False, error=error, recipient=to_address)
             return False, error
         except smtplib.SMTPException as e:
             error = f"SMTP error: {e}"
-            self._log_send(subject, len(body_lines), success=False, error=error)
+            self._log_send(subject, len(body_lines), success=False, error=error, recipient=to_address)
             return False, error
         except Exception as e:
             error = f"Unexpected error: {e}"
-            self._log_send(subject, len(body_lines), success=False, error=error)
+            self._log_send(subject, len(body_lines), success=False, error=error, recipient=to_address)
             return False, error
     
     def _check_rate_limit(self) -> Tuple[bool, str]:
@@ -188,7 +190,7 @@ class EmailManager:
         return recent
     
     def _log_send(self, subject: str, line_count: int, success: bool, 
-                  error: str = None) -> None:
+                  error: str = None, recipient: str = None) -> None:
         """
         Log send attempt to file.
         
@@ -203,7 +205,7 @@ class EmailManager:
             'subject': subject,
             'line_count': line_count,
             'success': success,
-            'recipient': self._config['email_address']
+            'recipient': recipient or self._config['email_address']
         }
         
         if error:
@@ -220,6 +222,12 @@ class EmailManager:
         """Get configured email address."""
         if self._config:
             return self._config.get('email_address')
+        return None
+    
+    def get_alternate_address(self) -> Optional[str]:
+        """Get alternate email address if configured."""
+        if self._config:
+            return self._config.get('alternate_address')
         return None
     
     def get_rate_limit_status(self) -> Tuple[int, int]:

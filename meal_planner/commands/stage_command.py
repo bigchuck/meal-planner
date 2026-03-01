@@ -68,7 +68,7 @@ SUBCOMMANDS:
   edit <pos> --desc "text" - Edit description at position
   remove <pos>          - Remove item at position
   clear                 - Clear entire buffer
-  send                  - Email buffer to your phone  
+  send [--alt]          - Email buffer (--alt sends to alternate address)
 
 EXAMPLES:
   stage show
@@ -227,10 +227,18 @@ NOTE: Use --stage flag on report/analyze/plan commands to add to buffer.
         print(f"\nTotal: {len(items)} items, {total_lines} lines")
         
         # Show recipient and rate limit status
-        recipient = email_mgr.get_configured_address()
+        use_alt = '--alt' in args
+        if use_alt:
+            recipient = email_mgr.get_alternate_address()
+            if not recipient:
+                print("\n No alternate_address configured in email_config.json.\n")
+                return
+        else:
+            recipient = email_mgr.get_configured_address()
+
         sent_count, limit = email_mgr.get_rate_limit_status()
-        
-        print(f"\nSend to: {recipient}")
+
+        print(f"\nSend to: {recipient}{' (alternate)' if use_alt else ''}")
         print(f"Rate limit: {sent_count}/{limit} sent in last hour")
         
         # Generate subject
@@ -249,7 +257,7 @@ NOTE: Use --stage flag on report/analyze/plan commands to add to buffer.
         body_lines = self._build_email_body(items)
         
         # Send
-        success, message = email_mgr.send(subject, body_lines)
+        success, message = email_mgr.send(subject, body_lines, recipient=recipient)
         
         if success:
             print(f"\n✓ {message}\n")
