@@ -12,8 +12,34 @@ class FindCommand(Command):
     """Search the master database."""
     
     name = ("find", "f")
-    help_text = "Search master database (e.g., find chicken [--recipe 'dill'] [--pair beef] [--best-with broccoli] [--avoid fish] [--profile 'med*'] [--limit N] [--skip N] [--available])"
-    
+    help_text = "Search master database (e.g., find <term> [options])"
+    detailed_help = (
+        "find / f  —  Search the master database\n"
+        "\n"
+        "Usage: find <term> [options]\n"
+        "\n"
+        "Options:\n"
+        "  --recipe <query>        Filter by ingredient content (supports: and, or, NOT)\n"
+        "  --pair <item>           Filter by [pair:] affinity tag\n"
+        "  --best-with <item>      Filter by [best-with:] affinity tag\n"
+        "  --avoid <item>          Filter by [avoid:] affinity tag\n"
+        "  --profile <tag>         Filter by [profile:] tag (glob patterns ok: med*)\n"
+        "  --list-affinity <tag>   List unique values for: pair, best-with, avoid, profile\n"
+        "  --limit N               Return only the first N results\n"
+        "  --skip N                Skip the first N results\n"
+        "  --available             Restrict to items currently in inventory\n"
+        "\n"
+        "Examples:\n"
+        "  f chicken                         Items matching 'chicken'\n"
+        "  f sa.                             All SA-section items\n"
+        "  f sa. --recipe \"dill or tahini\"   SA items with dill or tahini in recipe\n"
+        "  f so. --recipe \"lemon NOT cream\"  SO items with lemon but not cream\n"
+        "  f --recipe cumin                  Any item whose recipe contains cumin\n"
+        "  f salmon --pair broccoli          Salmon items tagged as pairing with broccoli\n"
+        "  f --profile \"med*\" --limit 10     Mediterranean-profile items, first 10\n"
+        "  f sa. --list-affinity pair        Show all unique pair values for SA items"
+    )    
+
     def execute(self, args: str) -> None:
         """
         Search master for term.

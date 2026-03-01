@@ -349,6 +349,7 @@ class Command(ABC):
     
     # Help text shown in help command
     help_text: str = ""
+    detailed_help: str = ""
     
     def __init__(self, context: CommandContext):
         """

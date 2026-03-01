@@ -15,6 +15,20 @@ class HelpCommand(Command):
         """Display help for all commands."""
         registry = get_registry()
         
+        # If a command name was given, show detailed help for that command
+        if args.strip():
+            cmd_name = args.strip().lower()
+            cmd_class = registry.get(cmd_name)
+            if cmd_class:
+                if cmd_class.detailed_help:
+                    print(f"\n{cmd_class.detailed_help}\n")
+                else:
+                    # Fall back to one-liner if no detailed help defined
+                    print(f"\n{cmd_class.help_text}\n")
+            else:
+                print(f"\nUnknown command: '{cmd_name}'\n")
+            return
+    
         # Show mode status if active
         if self.ctx.mode_mgr.is_active:
             mode = self.ctx.mode_mgr.active_mode

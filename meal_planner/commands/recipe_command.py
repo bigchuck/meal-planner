@@ -11,7 +11,21 @@ class RecipeCommand(Command):
     """Show recipe/ingredients for a code."""
     
     name = "recipe"
-    help_text = "Show recipe for code (recipe SO.11 [--affinity] [--stage])"
+    help_text = "Show recipe for code (recipe <code> [options])"
+    detailed_help = (
+        "recipe  —  Show recipe/ingredients for a food code\n"
+        "\n"
+        "Usage: recipe <code> [options]\n"
+        "\n"
+        "Options:\n"
+        "  --affinity    Show embedded affinity tags (pair, best-with, avoid, profile)\n"
+        "  --stage       Add recipe output to the staging buffer\n"
+        "\n"
+        "Examples:\n"
+        "  recipe SO.11                 Show ingredients for SO.11\n"
+        "  recipe SA.3 --affinity       Show ingredients plus affinity metadata\n"
+        "  recipe MT.7 --stage          Show recipe and add to staging buffer"
+    )
     
     def execute(self, args: str) -> None:
         """
