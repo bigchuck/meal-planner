@@ -78,7 +78,7 @@ class ModeCommand(Command):
                 print("  rm <indices>         - Remove items")
                 print("  setmult <idx> <mult> - Set multiplier")
                 print("  report               - Show report")
-                print("  promote <time>       - Promote to pending")
+                print("  promote <@HH:MM>     - Promote to pending")
                 print("  analyze              - Analyze meal")
                 print("  recommend            - Get recommendations")
                 print()

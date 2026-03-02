@@ -93,7 +93,7 @@ Subcommands:
   ins <id> <idx> <codes>
   invent <meal_name>
   move <id> <idx> <idx>
-  promote <id> <HH:MM> [meal]
+  promote <id> <@HH:MM> [meal]
   rename <from> <to>
   report <id> [--nutrients] [--verbose] [--stage]
   rm <id> <indices>
@@ -1445,18 +1445,25 @@ Subcommands:
         Promote candidate to pending file.
         
         Usage: plan promote <id> <HH:MM> [meal_name] [--force]
-        Example: plan promote 2a 12:30
-                plan promote 2a 11:00 lunch
-                plan promote 2a 11:00 "afternoon snack"
+        Example: plan promote 2a @12:30
+                plan promote 2a @11:00 lunch
+                plan promote 2a @11:00 "afternoon snack"
         """
         if len(args) < 2:
-            print("Usage: plan promote <id> <HH:MM> [meal_name] [--force]")
-            print("Example: plan promote 2a 12:30")
-            print("         plan promote 2a 11:00 lunch")
+            print("Usage: plan promote <id> <@HH:MM> [meal_name] [--force]")
+            print("Example: plan promote 2a @12:30")
+            print("         plan promote 2a @11:00 lunch")
             return
         
         candidate_id = args[0]
-        time_str = args[1]
+        raw_time = args[1]
+        
+        # Require @ prefix, consistent with system-wide time marker convention
+        if not raw_time.startswith('@'):
+            print(f"Invalid time format: {raw_time}")
+            print("Use @HH:MM format (e.g., @12:30)")
+            return
+        time_str = raw_time[1:]
         
         # Check for flags
         force = '--force' in args or '-f' in args
@@ -1473,10 +1480,10 @@ Subcommands:
                 print(f"Valid names: {', '.join(MEAL_NAMES)}")
                 return
         
-        # Validate time format
+        # Validate time format (after @ has been stripped)
         if not re.match(r'^\d{1,2}:\d{2}$', time_str):
-            print(f"Invalid time format: {time_str}")
-            print("Use HH:MM format (e.g., 12:30)")
+            print(f"Invalid time format: @{time_str}")
+            print("Use @HH:MM format (e.g., @12:30)")
             return
         
         # Find candidate
@@ -1488,7 +1495,15 @@ Subcommands:
         if not candidate['items']:
             print(f"Candidate #{candidate['id']} has no items to promote.")
             return
-        
+
+        # Auto-apply candidate's meal_name as override when time categorizes differently
+        if not meal_name_override:
+            candidate_meal = candidate.get('meal_name')
+            time_category = categorize_time(time_str)
+            if candidate_meal and time_category and time_category != candidate_meal:
+                meal_name_override = candidate_meal
+                print(f"Note: @{time_str} falls in {time_category} — applying meal override '{candidate_meal}' from candidate")
+
         # Load or create pending
         try:
             pending = self.ctx.pending_mgr.load()
