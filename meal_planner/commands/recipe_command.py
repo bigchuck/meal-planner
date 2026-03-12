@@ -97,7 +97,7 @@ class RecipeCommand(Command):
                 ing = ingredient.strip()
                 if ing:
                     lines.append(f"  • {ing}")
-            date_added = entry.get('date-added', '')
+            date_added = entry.get('date_added', '')
             if date_added:
                 lines.append(f"  Added: {date_added}")
             lines.append("")
