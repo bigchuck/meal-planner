@@ -192,6 +192,10 @@ def resolve_add_args(
     if ',' in criteria and not use_last and row_selector is None:
         return 'fallback'
 
+    # Time marker (e.g. @8:30) -> existing path
+    if criteria.startswith('@'):
+        return 'fallback'
+
     # Single token, no explicit search indicators -> try direct code lookup first
     if len(tokens) == 1 and not use_last and row_selector is None:
         direct = ctx.master.lookup_code(tokens[0])
