@@ -204,7 +204,10 @@ def resolve_add_args(
             if multiplier is not None:
                 item['mult'] = multiplier
             return [item]
-        # Not a known code -> fall through to search with that single token
+        # Could be an alias -> let existing path handle it
+        if ctx.aliases and ctx.aliases.lookup_alias(tokens[0]):
+            return 'fallback'
+        # Not a known code or alias -> fall through to search with that single token
 
     # -----------------------------------------------------------------------
     # Search mode
