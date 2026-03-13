@@ -305,9 +305,16 @@ class InsertCommand(Command):
         
         codes_str = parts[1].strip()
         
-        # Parse codes
-        new_items = CodeParser.parse(codes_str)
-        
+        # Resolve items: search mode, direct lookup, or fallback to code parser
+        from meal_planner.commands.add_resolver import resolve_add_args
+        resolved = resolve_add_args(codes_str, self.ctx)
+        if resolved is None:
+            return
+        if resolved == 'fallback':
+            new_items = CodeParser.parse(codes_str)
+        else:
+            new_items = resolved
+
         if not new_items:
             print("No valid codes found.")
             return

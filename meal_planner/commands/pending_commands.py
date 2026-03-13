@@ -77,10 +77,17 @@ class AddCommand(Command):
             }
             was_empty = True
         
-        # Parse new codes with alias expansion
+        # Resolve items: search mode, direct lookup, or fallback to code parser
+        from meal_planner.commands.add_resolver import resolve_add_args
         from meal_planner.parsers.alias_expander import expand_aliases
-        new_items = expand_aliases(args.strip(), self.ctx.aliases)
-           
+        resolved = resolve_add_args(args.strip(), self.ctx)
+        if resolved is None:
+            return
+        if resolved == 'fallback':
+            new_items = expand_aliases(args.strip(), self.ctx.aliases)
+        else:
+            new_items = resolved
+
         if not new_items:
             print("No valid codes found.")
             return
