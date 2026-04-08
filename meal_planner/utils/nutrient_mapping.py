@@ -93,6 +93,46 @@ NUTRIENT_SPECS = {
         display_name="GL",
         default_priority=1
     ),
+    "sodium": NutrientSpec(
+        template_key="sodium",
+        totals_attr="sodium_mg",
+        csv_key="sodium_mg",
+        unit="mg",
+        display_name="Sodium",
+        default_priority=3
+    ),
+    "potassium": NutrientSpec(
+        template_key="potassium",
+        totals_attr="potassium_mg",
+        csv_key="potassium_mg",
+        unit="mg",
+        display_name="Potassium",
+        default_priority=3
+    ),
+    "vitA": NutrientSpec(
+        template_key="vitA",
+        totals_attr="vitA_mcg",
+        csv_key="vitA_mcg",
+        unit="mcg",
+        display_name="Vit A",
+        default_priority=3
+    ),
+    "vitC": NutrientSpec(
+        template_key="vitC",
+        totals_attr="vitC_mg",
+        csv_key="vitC_mg",
+        unit="mg",
+        display_name="Vit C",
+        default_priority=3
+    ),
+    "iron": NutrientSpec(
+        template_key="iron",
+        totals_attr="iron_mg",
+        csv_key="iron_mg",
+        unit="mg",
+        display_name="Iron",
+        default_priority=3
+    ),
 }
 
 
