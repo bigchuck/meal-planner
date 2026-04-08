@@ -28,10 +28,11 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
         """
         Analyze meals against a nutritional template.
         
-        Supports three modes: 
+        Supports four modes: 
             1. Workspace meal: analyze <id> --template <template> --meal <meal> [--stage]
             2. Pending meal: analyze --template <template> --meal <meal> [--stage]
             3. Log date: analyze <date> --template <template> --meal <meal> [--stage]
+            4. Whole day totals: analyze [id|date|] --daily
         Args:
             args: Command arguments
         
@@ -54,6 +55,7 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
             print("Usage: analyze [date|workspace_id] --template <template_key> --meal <meal>")
             print("   or: analyze --history <n> --meal <meal>")
             print("   or: analyze --use <n> --meal <meal> [other options...]")
+            print("   or: analyze --daily")
             print("\nExamples:")
             print("  analyze 123a --template breakfast.protein_low_carb --meal breakfast")
             print("  analyze --template breakfast.protein_low_carb --meal breakfast")
@@ -68,7 +70,7 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
         history_limit = None
         use_index = None
         stage = False
-        
+        daily_flag = False
         i = 0
         while i < len(args_list):
             arg = args_list[i]
@@ -116,6 +118,10 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
                     print("Error: --use requires a number")
                     return
 
+            elif arg == "--daily":
+                daily_flag = True
+                i += 1
+
             else:
                 # First non-flag arg is the target
                 if target is None:
@@ -125,6 +131,11 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
                     print(f"Error: Unexpected argument '{arg}'")
                     return
    
+        # Handle --daily mode
+        if daily_flag:
+            self._handle_daily(target)
+            return
+
         # Handle --history mode
         if history_limit is not None:
             if use_index is not None:
@@ -161,6 +172,7 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
             if stage:
                 params = f"{params} --stage"
             return self.execute(params)
+
    
         if not template_key:
             print("Error: --template is required")
@@ -624,3 +636,149 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
             print(f"\n✓ Staged: {label}\n")
         else:
             print(f"\n✓ Replaced staged item: {label}\n")
+
+    def _handle_daily(self, target: Optional[str]) -> None:
+        """Run daily totals analysis against daily_targets config."""
+        from meal_planner.reports.report_builder import ReportBuilder
+
+        # Get daily_targets from config
+        daily_planning = self.ctx.thresholds.get_daily_planning()
+        if not daily_planning:
+            print("\nError: daily_planning section not found in config.\n")
+            return
+        daily_targets = daily_planning.get("daily_targets")
+        if not daily_targets:
+            print("\nError: daily_targets not found in daily_planning config.\n")
+            return
+
+        # Fetch items - all items (no meal filter), pending or log
+        if target is None:
+            date_label = "pending"
+            try:
+                pending = self.ctx.pending_mgr.load()
+            except Exception:
+                pending = None
+            if not pending or not pending.get("items"):
+                print("\nNo active pending items. Use 'start' and 'add' first.\n")
+                return
+            items = [it for it in pending["items"] if "code" in it]
+        elif self._is_date(target):
+            date_label = target
+            entries = self.ctx.log.get_entries_for_date(target)
+            if entries.empty:
+                print(f"\nNo log entries found for {target}.\n")
+                return
+            codes_col = self.ctx.log.cols.codes
+            all_codes = ", ".join([
+                str(v) for v in entries[codes_col].fillna("") if str(v).strip()
+            ])
+            if not all_codes.strip():
+                print(f"\nNo codes found for {target}.\n")
+                return
+            items = CodeParser.parse(all_codes)
+        else:
+            print(f"\nError: '{target}' is not a valid date (YYYY-MM-DD).\n")
+            return
+
+        # Build totals across all items
+        builder = ReportBuilder(self.ctx.master, self.ctx.report_columns)
+        report = builder.build_from_items(items, title="Daily Analysis")
+        totals = report.totals
+
+        # Run gap/excess analysis
+        analyzer = MealAnalyzer(self.ctx.master, self.ctx.thresholds)
+        gaps, excesses = analyzer.analyze_against_targets(totals, daily_targets)
+
+        # Display
+        lines = self._display_daily_analysis(totals, daily_targets, gaps, excesses, date_label)
+        self._print_lines(lines)
+
+    def _display_daily_analysis(
+        self,
+        totals,
+        daily_targets: Dict[str, Any],
+        gaps: list,
+        excesses: list,
+        date_label: str
+    ) -> List[str]:
+        """Format daily targets analysis report."""
+        from meal_planner.utils.nutrient_mapping import get_nutrient_spec
+
+        lines = []
+        lines.append(f"\n{'=' * 70}")
+        lines.append(f"Daily Analysis - {date_label}")
+        lines.append(f"{'=' * 70}\n")
+
+        # Targets section
+        lines.append("Targets:")
+        for nutrient, target_def in daily_targets.items():
+            display_name = "GL" if nutrient.lower() == "gl" else nutrient.capitalize()
+            unit = target_def.get("unit", "")
+            if "min" in target_def and "max" in target_def:
+                lines.append(
+                    f"  {display_name:12} {target_def['min']:.1f}-{target_def['max']:.1f}{unit}"
+                )
+            elif "min" in target_def:
+                lines.append(f"  {display_name:12} >= {target_def['min']:.1f}{unit}")
+            elif "max" in target_def:
+                lines.append(f"  {display_name:12} <= {target_def['max']:.1f}{unit}")
+        lines.append("")
+
+        # Consumed + remaining budget section
+        lines.append("Consumed:")
+        for nutrient, target_def in daily_targets.items():
+            display_name = "GL" if nutrient.lower() == "gl" else nutrient.capitalize()
+            unit = target_def.get("unit", "")
+            spec = get_nutrient_spec(nutrient)
+            if spec is None:
+                continue
+            current = getattr(totals, spec.totals_attr, 0.0)
+
+            # Build budget annotation
+            notes = []
+            if "max" in target_def:
+                remaining = target_def["max"] - current
+                if remaining >= 0:
+                    notes.append(f"{remaining:.1f}{unit} remaining of {target_def['max']:.1f}{unit}")
+                else:
+                    notes.append(f"{abs(remaining):.1f}{unit} over limit of {target_def['max']:.1f}{unit}")
+            if "min" in target_def and "max" not in target_def:
+                gap = current - target_def["min"]
+                if gap >= 0:
+                    notes.append(f"{gap:.1f}{unit} above min of {target_def['min']:.1f}{unit}")
+                else:
+                    notes.append(f"{abs(gap):.1f}{unit} below min of {target_def['min']:.1f}{unit}")
+
+            note_str = f"  ({', '.join(notes)})" if notes else ""
+            lines.append(f"  {display_name:12} {current:>7.1f}{unit}{note_str}")
+        lines.append("")
+
+        # Gaps
+        if gaps:
+            lines.append("Gaps (Below Minimum):")
+            for gap in gaps:
+                priority_mark = "***" if gap.priority == 1 else "**" if gap.priority == 2 else "*"
+                lines.append(f"  {priority_mark} {gap}")
+            lines.append("")
+
+        # Excesses
+        if excesses:
+            lines.append("Excesses (Above Maximum):")
+            for excess in excesses:
+                priority_mark = "***" if excess.priority == 1 else "**" if excess.priority == 2 else "*"
+                lines.append(f"  {priority_mark} {excess}")
+            lines.append("")
+
+        # Status
+        if not gaps and not excesses:
+            lines.append("Status: All daily targets met")
+        else:
+            issues = []
+            if gaps:
+                issues.append(f"{len(gaps)} gap{'s' if len(gaps) > 1 else ''}")
+            if excesses:
+                issues.append(f"{len(excesses)} excess{'es' if len(excesses) > 1 else ''}")
+            lines.append(f"Status: {' and '.join(issues)} found")
+        lines.append("")
+
+        return lines

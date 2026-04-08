@@ -201,3 +201,22 @@ class MealAnalyzer:
         # This is a placeholder - will be implemented when we handle pending analysis
         # For now, return empty context
         return DailyContext()
+    
+    def analyze_against_targets(
+        self,
+        totals: DailyTotals,
+        targets: Dict[str, Any]
+    ) -> Tuple[List, List]:
+        """
+        Analyze totals against a raw targets dict (not a template path).
+
+        Args:
+            totals: DailyTotals to evaluate
+            targets: Dict of nutrient -> {min, max, unit} entries
+
+        Returns:
+            Tuple of (gaps, excesses) lists
+        """
+        synthetic_template = {"targets": targets}
+        return self._find_gaps(totals, synthetic_template), \
+               self._find_excesses(totals, synthetic_template)
