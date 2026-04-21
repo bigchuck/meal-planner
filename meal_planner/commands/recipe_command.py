@@ -11,7 +11,7 @@ class RecipeCommand(Command):
     """Show recipe/ingredients for a code."""
     
     name = "recipe"
-    help_text = "Show recipe for code (recipe <code> [options])"
+    help_text = "Show recipe for code (recipe <code> [--affinity|--stage])"
     detailed_help = (
         "recipe  —  Show recipe/ingredients for a food code\n"
         "\n"
