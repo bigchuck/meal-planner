@@ -13,55 +13,84 @@ class ChartCommand(Command):
     """Generate trend chart with moving averages."""
     
     name = "chart"
-    help_text = "Generate trend chart (chart [window] [start] [end] [today] [--micros] [--dots])"
+    help_text = "Generate trend chart (chart [window] [--history N] [start] [end] [--line] [--micros|--nutrients] [today])"
     
     def execute(self, args: str) -> None:
         """
         Generate trend chart.
-        
+
+        Defaults: MA window=15, dot display, last 90 days.
+
         Args:
-            args: Optional: window size, date range, 'today' flag
+            args: Optional: window size, history window, date range, flags
                   Examples:
                     chart
                     chart 14
+                    chart --history 60
                     chart 7 2025-01-01
                     chart 7 2025-01-01 2025-01-31
                     chart 7 2025-01-01 2025-01-31 today
+                    chart --line
+                    chart --micros
+                    chart --nutrients
         """
         # Parse arguments
         tokens = args.strip().split() if args.strip() else []
         
-        window = 7  # default
+        window = 15  # default
+        history_days = None  # None = use default 90; set by --history
         start_date = None
         end_date = None
         include_today = False
         include_micro = False
-        include_dots = False        
+        include_dots = True  # dots is default; --line disables        
         
         # Extract tokens
+        from datetime import timedelta
         date_tokens = []
-        for token in tokens:
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
             if re.match(r"^\d{4}-\d{2}-\d{2}$", token):
                 date_tokens.append(token)
             elif token.lower() in ("today", "--today"):
                 include_today = True
-            elif token.lower() in ("--micro", "--micros"):
+            elif token.lower() in ("--micro", "--micros", "--nutrients"):
                 include_micro = True
-            elif token.lower() in ("--dots", "--dot"):
-                include_dots = True
+            elif token.lower() in ("--line", "--lines"):
+                include_dots = False
+            elif token.lower() == "--history":
+                if i + 1 < len(tokens):
+                    try:
+                        history_days = max(1, int(tokens[i + 1]))
+                        i += 1
+                    except ValueError:
+                        print(f"Error: --history requires an integer, got '{tokens[i + 1]}'")
+                        return
+                else:
+                    print("Error: --history requires a number of days")
+                    return
             else:
-                # Try to parse as window
                 try:
                     window = max(1, int(token))
                 except ValueError:
                     pass
-        
-        # Assign dates
-        if len(date_tokens) >= 1:
+            i += 1
+
+        # Validate: --history and explicit dates are mutually exclusive
+        if history_days is not None and date_tokens:
+            print("Error: --history cannot be combined with explicit dates")
+            return
+
+        # Resolve date range
+        if date_tokens:
             start_date = date_tokens[0]
-        if len(date_tokens) >= 2:
-            end_date = date_tokens[1]
-        
+            if len(date_tokens) >= 2:
+                end_date = date_tokens[1]
+        else:
+            lookback = history_days if history_days is not None else 90
+            start_date = str(date_type.today() - timedelta(days=lookback))
+
         # Get log data
         log_df = self.ctx.log.get_date_range(start_date, end_date)
         
@@ -100,12 +129,17 @@ class ChartCommand(Command):
         # Build title
         label = "Micro Trends" if include_micro else "Nutrient Trends"
         title_parts = [f"{label} (MA={window} days)"]
-        if start_date and end_date:
-            title_parts.append(f"{start_date} to {end_date}")
-        elif start_date:
-            title_parts.append(f"from {start_date}")
-        elif end_date:
-            title_parts.append(f"to {end_date}")
+        if history_days is not None:
+            title_parts.append(f"last {history_days} days")
+        elif date_tokens:
+            if start_date and end_date:
+                title_parts.append(f"{start_date} to {end_date}")
+            elif start_date:
+                title_parts.append(f"from {start_date}")
+            elif end_date:
+                title_parts.append(f"to {end_date}")
+        else:
+            title_parts.append("last 90 days")
         
         if include_today:
             title_parts.append("+ pending")

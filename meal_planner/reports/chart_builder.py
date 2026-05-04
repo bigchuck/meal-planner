@@ -61,7 +61,7 @@ class ChartBuilder:
         full_df = self._create_continuous_calendar(df)
         
         # Calculate rolling averages
-        roll_df = full_df.rolling(window=window, min_periods=1).mean()
+        roll_df = full_df.rolling(window=window, min_periods=window).mean()
         
         # Create the chart
         self._create_chart(full_df, roll_df, window, title, mode, dots)
