@@ -493,6 +493,8 @@ class MasterLoader:
                 'section': section,
                 'description': option,  # Store as 'description' in JSON
                 'macros': macros,
+                'verified': False,
+                'verified_date': '',
             }
         
         # Add optional fields if provided
