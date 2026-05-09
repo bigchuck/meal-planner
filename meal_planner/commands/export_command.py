@@ -26,6 +26,7 @@ from .base import Command, register_command
 from meal_planner.reports.report_builder import ReportBuilder
 from meal_planner.parsers.code_parser import CodeParser
 from meal_planner.utils.time_utils import MEAL_NAMES
+from config import CHART_OUTPUT_FILE  # output directory matches chart command
 
 
 # Ordered column list for all output CSVs
@@ -203,7 +204,7 @@ class ExportCommand(Command):
             records.append({"date": ds, **_round_row(nutrient_vals)})
 
         df_out = pd.DataFrame(records, columns=["date"] + _NUTRIENT_COLS)
-        out_path = Path("export_daily.csv")
+        out_path = CHART_OUTPUT_FILE.parent / "export_daily.csv"
         df_out.to_csv(out_path, index=False)
 
         logged = sum(1 for ds in full_date_strs if ds in date_rows)
@@ -255,7 +256,7 @@ class ExportCommand(Command):
 
             df_out = pd.DataFrame(records, columns=["date"] + _NUTRIENT_COLS)
             filename = f"export_meal_{_meal_filename(meal_name)}.csv"
-            df_out.to_csv(Path(filename), index=False)
+            df_out.to_csv(CHART_OUTPUT_FILE.parent / filename, index=False)
 
             present = sum(1 for ds in full_date_strs if ds in date_map)
             print(
