@@ -191,6 +191,11 @@ def resolve_add_args(
     # Comma in criteria -> multi-code string, use existing path
     if ',' in criteria and not use_last and row_selector is None:
         return 'fallback'
+    
+    # Hyphen in criteria -> subtraction syntax (e.g. "-CH.3", "SO.3-MT.11"),
+    # use existing path so CodeParser's subtraction handling can run
+    if '-' in criteria and not use_last and row_selector is None:
+        return 'fallback'
 
     # Time marker (e.g. @8:30) -> existing path
     if criteria.startswith('@'):

@@ -750,24 +750,10 @@ class ApplyLogCommand(Command):
         query_date = self.ctx.editing_date
         items = pending.get("items", [])
         
-        # Build codes string from items - FIXED to include meal_override
-        code_parts = []
-        for item in items:
-            if "time" in item and item.get("time"):
-                time_str = f"@{item['time']}"
-                meal_override = item.get("meal_override")
-                if meal_override:
-                    time_str += f" ({meal_override})"
-                code_parts.append(time_str)
-            elif "code" in item:
-                code = item["code"]
-                mult = item.get("mult", 1.0)
-                if abs(mult - 1.0) < 1e-9:
-                    code_parts.append(code)
-                else:
-                    code_parts.append(f"{code} x{mult:g}")
-        
-        codes_str = ", ".join(code_parts)
+        # Build codes string via the canonical formatter, so negative
+        # multipliers serialize the same way everywhere (-CODE / -CODE xN)
+        from meal_planner.parsers.code_parser import items_to_code_string
+        codes_str = items_to_code_string(items)
         
         # Calculate totals
         from .pending_commands import ShowCommand
