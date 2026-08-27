@@ -9,9 +9,14 @@ from .base import Command, register_command
 @register_command
 class StatsCommand(Command):
     """Show command usage statistics."""
-    
+
     name = "stats"
     help_text = "Show usage statistics (stats [YYYY-MM-DD|daily|weekly|alltime])"
+
+    # quit exits via SystemExit before main.py's post-execute usage.track()
+    # call runs, so it can never appear as used - exclude it from "never
+    # used" rather than misreport a command that's actually run constantly.
+    UNTRACKABLE_COMMANDS = {"quit"}
     
     def execute(self, args: str) -> None:
         """
@@ -143,7 +148,10 @@ class StatsCommand(Command):
                 print(f"{cmd:<15} {count:>6}  {last_used:<12}")
         
         # Show never-used commands
-        never_used = [cmd for cmd in sorted(canonical_commands) if stats.get(cmd, 0) == 0]
+        never_used = [
+            cmd for cmd in sorted(canonical_commands)
+            if stats.get(cmd, 0) == 0 and cmd not in self.UNTRACKABLE_COMMANDS
+        ]
         if never_used:
             print("\nNever used:")
             self._print_wrapped_list(never_used, indent=2, width=70)
