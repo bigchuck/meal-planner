@@ -21,8 +21,119 @@ class PlanCommand(Command):
     """Meal planning workspace."""
     
     name = "plan"
+    category = "Plan"
     help_text = "Meal planning workspace (plan help for subcommands)"
-    
+    overview_help = (
+        "plan  —  Explore and build candidate meals before committing them to pending\n"
+        "\n"
+        "Usage: plan <subcommand> [args]\n"
+        "\n"
+        "Subcommands: search, show, add, rm, move, ins, setmult, invent, copy,\n"
+        "describe, rename, report, promote, discard, history.\n"
+        "Use 'help plan <subcommand>' for details, or 'mode plan' to work in\n"
+        "this workspace without typing 'plan' before every command."
+    )
+    subcommand_help = {
+        "search": (
+            "plan search  —  Find historical meals and add them as candidates\n"
+            "\n"
+            "Usage: plan search <meal_name> [--history N] [--<nutrient> min=X max=Y] [--code/--codes <expr>]\n"
+            "\n"
+            "Examples:\n"
+            "  plan search lunch --history 10\n"
+            "  plan search lunch --carbs_g max=50 --gl max=15 --prot_g min=25\n"
+            "  plan search breakfast --codes \"bf.1 and bv.4\""
+        ),
+        "show": (
+            "plan show  —  Show workspace candidates\n"
+            "\n"
+            "Usage:\n"
+            "  plan show       Show all candidates\n"
+            "  plan show <id>  Show one candidate in detail"
+        ),
+        "add": (
+            "plan add  —  Add codes to a candidate\n"
+            "\n"
+            "Usage: plan add <id> <codes>\n"
+            "Example: plan add 2 VE.T1, FR.4 x0.5"
+        ),
+        "rm": (
+            "plan rm  —  Remove candidates, or items from a candidate\n"
+            "\n"
+            "Usage:\n"
+            "  plan rm <ids>           Remove candidates from the workspace\n"
+            "  plan rm <id> <indices>  Remove items from one candidate"
+        ),
+        "move": (
+            "plan move  —  Move an item within a candidate (creates a variant)\n"
+            "\n"
+            "Usage: plan move <id> <from> <to>\n"
+            "Example: plan move 2 3 1"
+        ),
+        "ins": (
+            "plan ins  —  Insert items into a candidate (creates a variant)\n"
+            "\n"
+            "Usage: plan ins <id> <position> <codes>\n"
+            "Example: plan ins 2 3 B.1 *1.5, S2.4"
+        ),
+        "setmult": (
+            "plan setmult  —  Change an item's multiplier in a candidate (creates a variant)\n"
+            "\n"
+            "Usage: plan setmult <id> <idx> <mult>\n"
+            "Example: plan setmult 2 3 1.5"
+        ),
+        "invent": (
+            "plan invent  —  Create a blank candidate for manual construction\n"
+            "\n"
+            "Usage: plan invent <meal_name>\n"
+            "Example: plan invent lunch"
+        ),
+        "copy": (
+            "plan copy  —  Copy a candidate to a new plan id (explicit fork)\n"
+            "\n"
+            "Usage: plan copy <source_id> [<dest_id>]\n"
+            "Example: plan copy 1a 1c"
+        ),
+        "describe": (
+            "plan describe  —  Set a candidate's description\n"
+            "\n"
+            "Usage: plan describe <id> \"description\"\n"
+            "Example: plan describe N1 \"Monday breakfast - high protein\""
+        ),
+        "rename": (
+            "plan rename  —  Change a candidate's id\n"
+            "\n"
+            "Usage: plan rename <from> <to>\n"
+            "Example: plan rename breakfast-old breakfast-new"
+        ),
+        "report": (
+            "plan report  —  Show a detailed report for a candidate\n"
+            "\n"
+            "Usage: plan report <id> [--recipes] [--nutrients] [--verbose] [--stage]\n"
+            "Example: plan report 2a --nutrients"
+        ),
+        "promote": (
+            "plan promote  —  Move a candidate into the pending day\n"
+            "\n"
+            "Usage: plan promote <id> <@HH:MM> [meal_name] [--force]\n"
+            "Examples:\n"
+            "  plan promote 2a @12:30\n"
+            "  plan promote 2a @11:00 \"afternoon snack\""
+        ),
+        "discard": (
+            "plan discard  —  Clear the entire planning workspace\n"
+            "\n"
+            "Usage: plan discard"
+        ),
+        "history": (
+            "plan history  —  Show the operation history for a candidate\n"
+            "\n"
+            "Usage: plan history <plan_id>\n"
+            "Example: plan history 1a"
+        ),
+    }
+
+
     def execute(self, args: str) -> None:
         """
         Route to appropriate subcommand.

@@ -127,8 +127,45 @@ class AddCodeCommand(Command):
     """Add or update master code entry."""
     
     name = "addcode"
+    category = "DB Update"
     help_text = "Add/update master entry (addcode CODE or CODE,section,... [--force])"
-    
+    overview_help = (
+        "addcode  —  Add or update a master-database entry's core macros\n"
+        "\n"
+        "Usage:\n"
+        "  addcode CODE                                     Look up CODE, print its current values as a CSV line\n"
+        "  addcode CODE,section,option,cal,prot_g,carbs_g,fat_g,GI,GL,sugar_g\n"
+        "                                                    Create CODE (fails if it already exists)\n"
+        "  addcode CODE,... --force                         Update CODE (required if it already exists)\n"
+        "\n"
+        "A backup of master.json is created automatically before any write."
+    )
+    detailed_help = (
+        "addcode  —  Add or update a master-database entry's core macros\n"
+        "\n"
+        "Two modes:\n"
+        "  Lookup (no commas):  addcode CODE\n"
+        "    Prints the existing entry's values already formatted as a CSV line,\n"
+        "    ready to copy, edit, and resubmit with --force.\n"
+        "\n"
+        "  Write (comma-separated):  addcode CODE,section,option,cal,prot_g,carbs_g,fat_g,GI,GL,sugar_g\n"
+        "    Creates a new entry. Add --force to overwrite an existing one.\n"
+        "\n"
+        "Columns:\n"
+        "  code      Food code, e.g. SO.99\n"
+        "  section   Category, e.g. Soup, Vegetable, Fish\n"
+        "  option    Description/name (quote it if it contains a comma)\n"
+        "  cal, prot_g, carbs_g, fat_g, GI, GL, sugar_g   Numeric macro fields\n"
+        "\n"
+        "Examples:\n"
+        "  addcode VE.38                                     Look up VE.38\n"
+        "  addcode SO.99,Soup,New soup,150,8,20,3,40,10,5     Create SO.99\n"
+        "  addcode SO.99,Soup,New soup,150,8,20,3,40,10,5 --force   Update SO.99\n"
+        "\n"
+        "See also: addnutrient (micronutrients), addrecipe (ingredients), delcode."
+    )
+
+
     def execute(self, args: str) -> None:
         """Add or update master code."""
         if not args.strip():
@@ -237,8 +274,40 @@ class AddNutrientCommand(Command):
     """Add or update nutrient entry."""
     
     name = "addnutrient"
+    category = "DB Update"
     help_text = "Add/update nutrients (addnutrient CODE or CODE,fiber_g,... [--force])"
-    
+    overview_help = (
+        "addnutrient  —  Add or update a master entry's micronutrients\n"
+        "\n"
+        "Usage:\n"
+        "  addnutrient CODE                                              Look up CODE's current nutrient values\n"
+        "  addnutrient CODE,fiber_g,sodium_mg,potassium_mg,vitA_mcg,vitC_mg,iron_mg\n"
+        "                                                                 Add nutrients (fails if already present)\n"
+        "  addnutrient CODE,... --force                                  Update existing nutrients\n"
+        "\n"
+        "CODE must already exist in master.json (add it first with addcode)."
+    )
+    detailed_help = (
+        "addnutrient  —  Add or update a master entry's micronutrients\n"
+        "\n"
+        "Two modes:\n"
+        "  Lookup (no commas):  addnutrient CODE\n"
+        "    Prints existing nutrient values as a CSV line, ready to edit and resubmit.\n"
+        "\n"
+        "  Write (comma-separated):  addnutrient CODE,fiber_g,sodium_mg,potassium_mg,vitA_mcg,vitC_mg,iron_mg\n"
+        "    Add --force to overwrite nutrients that already exist.\n"
+        "\n"
+        "CODE must already have a master.json entry (via addcode) before nutrients can be attached.\n"
+        "\n"
+        "Examples:\n"
+        "  addnutrient VE.38\n"
+        "  addnutrient VE.38,3.2,45,210,120,8,1.1\n"
+        "  addnutrient VE.38,3.2,45,210,120,8,1.1 --force\n"
+        "\n"
+        "See also: addcode, addrecipe."
+    )
+
+
     def execute(self, args: str) -> None:
         """Add or update nutrient data."""
         if not args.strip():
@@ -340,8 +409,39 @@ class AddRecipeCommand(Command):
     """Add or update recipe entry."""
     
     name = "addrecipe"
+    category = "DB Update"
     help_text = "Add/update recipe (addrecipe CODE or CODE,ingredients [--force])"
-    
+    overview_help = (
+        "addrecipe  —  Add or update a master entry's ingredient list\n"
+        "\n"
+        "Usage:\n"
+        "  addrecipe CODE                            Look up CODE's current recipe\n"
+        "  addrecipe CODE,\"ingredients list\"          Add a recipe (fails if one already exists)\n"
+        "  addrecipe CODE,\"ingredients list\" --force  Update an existing recipe\n"
+        "\n"
+        "CODE must already exist in master.json (add it first with addcode).\n"
+        "View a saved recipe with the 'recipe' command."
+    )
+    detailed_help = (
+        "addrecipe  —  Add or update a master entry's ingredient list\n"
+        "\n"
+        "Two modes:\n"
+        "  Lookup (no commas):  addrecipe CODE\n"
+        "    Prints the existing recipe as a CSV line, ready to edit and resubmit.\n"
+        "\n"
+        "  Write (comma-separated):  addrecipe CODE,\"ingredients list\"\n"
+        "    Quote the ingredients if the list itself contains commas.\n"
+        "    Add --force to overwrite a recipe that already exists.\n"
+        "\n"
+        "CODE must already have a master.json entry (via addcode).\n"
+        "\n"
+        "Example:\n"
+        "  addrecipe SO.11,\"16oz lean steak, 1 lb dry beans, 11oz okra\"\n"
+        "\n"
+        "See also: addcode, addnutrient, recipe (to view a saved recipe)."
+    )
+
+
     def execute(self, args: str) -> None:
         """Add or update recipe."""
         if not args.strip():
@@ -427,8 +527,20 @@ class ValidateCommand(Command):
     """Validate master data integrity."""
     
     name = "validate"
+    category = "DB Interrogation"
     help_text = "Check data integrity (validate or validate CODE)"
-    
+    overview_help = (
+        "validate  —  Check master-database integrity\n"
+        "\n"
+        "Usage:\n"
+        "  validate       Check the whole master database: entry/section counts, how many\n"
+        "                 entries have nutrients/recipes/portions, and any structural issues\n"
+        "  validate CODE  Check one entry for issues\n"
+        "\n"
+        "Read-only — this never modifies data."
+    )
+
+
     def execute(self, args: str) -> None:
         """Validate master data or specific code."""
         args = args.strip()
@@ -474,8 +586,19 @@ class DeleteCodeCommand(Command):
     """Delete a code from master."""
     
     name = "delcode"
+    category = "DB Update"
     help_text = "Delete code from master (delcode CODE [--force])"
-    
+    overview_help = (
+        "delcode  —  Permanently delete a code from master.json\n"
+        "\n"
+        "Usage:\n"
+        "  delcode CODE          Preview: show what would be deleted (no change made)\n"
+        "  delcode CODE --force  Actually delete it (a backup is created first)\n"
+        "\n"
+        "This cannot be undone except by restoring from the backup."
+    )
+
+
     def execute(self, args: str) -> None:
         """Delete a code from master."""
         if not args.strip():

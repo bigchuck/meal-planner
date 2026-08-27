@@ -76,9 +76,22 @@ class ExportCommand(Command):
     """Export nutrient data to CSV for spreadsheet analysis."""
 
     name = "export"
+    category = "Output"
     help_text = (
         "Export nutrient data to CSV "
         "(export --daily|--meals [--history N] [start] [end])"
+    )
+    overview_help = (
+        "export  —  Export nutrient data to CSV for spreadsheet analysis\n"
+        "\n"
+        "Usage:\n"
+        "  export --daily                        One row per date, all macros + micros summed\n"
+        "  export --meals                         Six CSVs, one per meal type, zero-filled where absent\n"
+        "  export --daily --history 60            Last 60 days instead of the default 90\n"
+        "  export --daily 2025-01-01 2025-03-31    Explicit date range\n"
+        "\n"
+        "All values are recomputed via the same code path as report/chart, not\n"
+        "the pre-summed log columns. Files are written next to the chart output."
     )
 
     def execute(self, args: str) -> None:

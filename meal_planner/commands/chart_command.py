@@ -13,8 +13,23 @@ class ChartCommand(Command):
     """Generate trend chart with moving averages."""
     
     name = "chart"
+    category = "Output"
     help_text = "Generate trend chart (chart [window] [--history N] [start] [end] [--line] [--micros|--nutrients] [today])"
-    
+    overview_help = (
+        "chart  —  Generate a trend chart (moving average) as a JPG\n"
+        "\n"
+        "Usage: chart [window] [--history N] [start] [end] [flags]\n"
+        "  window            Moving-average window in days (default 15)\n"
+        "  --history N       How many days of history to include (default 90)\n"
+        "  start [end]       Explicit date range (YYYY-MM-DD)\n"
+        "  today             Include today's pending day in the chart\n"
+        "  --line            Line chart instead of the default dot display\n"
+        "  --micros / --nutrients   Include micronutrient trends\n"
+        "\n"
+        "Examples: chart | chart 7 2025-01-01 2025-01-31 | chart --history 60 --line"
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Generate trend chart.

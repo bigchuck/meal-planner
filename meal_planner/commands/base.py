@@ -346,10 +346,24 @@ class Command(ABC):
     
     # Command name(s) - can be string or tuple of strings
     name: str | tuple = ""
-    
+
+    # Category this command belongs to, for grouped help output.
+    # Must match a key in meal_planner.commands.help_categories.CATEGORIES.
+    category: str = "System"
+
     # Help text shown in help command
     help_text: str = ""
+
+    # Medium-depth overview shown by `help <command>`: syntax + description,
+    # and (for commands with subcommands) the list of subcommands.
+    overview_help: str = ""
+
+    # Full deep-dive shown by `help <command> --detail`: every flag/example.
     detailed_help: str = ""
+
+    # For commands that route to subcommands: {subcommand: help text},
+    # shown by `help <command> <subcommand>`.
+    subcommand_help: dict = {}
     
     def __init__(self, context: CommandContext):
         """

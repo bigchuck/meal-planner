@@ -15,8 +15,21 @@ class ExplainCommand(Command):
     """Show explanation of a concept from documentation."""
     
     name = "explain"
+    category = "Reference"
     help_text = "Explain a concept from docs (explain gi, explain glycemic-load)"
-    
+    overview_help = (
+        "explain  —  Show reference documentation for a nutrition/planning concept\n"
+        "\n"
+        "Usage:\n"
+        "  explain                  List available topics\n"
+        "  explain <topic>          Show that topic (hyphenate multi-word topics)\n"
+        "\n"
+        "Examples: explain gi | explain glycemic-load | explain risk-scoring\n"
+        "\n"
+        "Reads from docs/templates/ (and your personal docs first, if present)."
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Show explanation from markdown documentation.

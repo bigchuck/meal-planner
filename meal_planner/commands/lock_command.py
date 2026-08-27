@@ -14,8 +14,49 @@ class LockCommand(Command):
     """Manage recommendation locks (include/exclude specific foods)."""
     
     name = "lock"
+    category = "Recommendation"
     help_text = "Manage recommendation locks (lock include/exclude/remove/list/clear)"
-    
+    overview_help = (
+        "lock  —  Force-include or force-exclude specific foods from recommendations\n"
+        "\n"
+        "Usage: lock <include|exclude|remove|list|clear> [args]\n"
+        "\n"
+        "Locks apply per meal type (or 'all') and are read by the recommend\n"
+        "pipeline's filters. Use 'help lock <subcommand>' for details."
+    )
+    subcommand_help = {
+        "include": (
+            "lock include  —  Force a food into recommendations for a meal\n"
+            "\n"
+            "Usage: lock include [meal_type|all] <code> [<multiplier>]\n"
+            "Examples:\n"
+            "  lock include lunch FI.8 0.5\n"
+            "  lock include all EG.1\n"
+            "  lock include dinner SO.13d 0.225"
+        ),
+        "exclude": (
+            "lock exclude  —  Block a food from recommendations for a meal\n"
+            "\n"
+            "Usage: lock exclude [meal_type|all] <code|pattern>"
+        ),
+        "remove": (
+            "lock remove  —  Remove an include or exclude lock\n"
+            "\n"
+            "Usage: lock remove <code|pattern>"
+        ),
+        "list": (
+            "lock list  —  Show all active locks\n"
+            "\n"
+            "Usage: lock list"
+        ),
+        "clear": (
+            "lock clear  —  Remove all locks\n"
+            "\n"
+            "Usage: lock clear"
+        ),
+    }
+
+
     def execute(self, args: str) -> None:
         """
         Execute lock command.

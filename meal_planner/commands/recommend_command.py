@@ -30,7 +30,122 @@ class RecommendCommand(Command, CommandHistoryMixin):
     """Generate recommendations for meal optimization."""
     
     name = ("recommend", "reco")
+    category = "Recommendation"
     help_text = "Get optimization suggestions (recommend <id|meal_name>)"
+    overview_help = (
+        "recommend / reco  —  Generate, filter, score, and accept optimized meal candidates\n"
+        "\n"
+        "Pipeline: generate -> status -> filter -> score -> show scored -> accept\n"
+        "\n"
+        "Subcommands: generate, status, show, filter, score, accept, subset, sort,\n"
+        "discard, reset, debugdump.\n"
+        "Use 'help recommend <subcommand>' for one, or 'help recommend --detail'\n"
+        "for the full pipeline reference with every flag and example."
+    )
+    subcommand_help = {
+        "generate": (
+            "recommend generate  —  Generate raw meal candidates\n"
+            "\n"
+            "Usage: recommend generate <meal_type> [--method <method>] [--count N] [--template <name>] [--restart]\n"
+            "  --method    history | exhaustive | ga  (default: exhaustive)\n"
+            "  --count     Number of candidates to generate (not valid with --method ga)\n"
+            "  --template  Template name to use for exhaustive generation\n"
+            "  --restart   GA only: delete existing GA file and start fresh\n"
+            "\n"
+            "Examples:\n"
+            "  recommend generate lunch --method exhaustive --count 200\n"
+            "  recommend generate breakfast --method ga"
+        ),
+        "status": (
+            "recommend status  —  Show recommendation pipeline state\n"
+            "\n"
+            "Usage: recommend status [--verbose]\n"
+            "  --verbose   Include rejection reason breakdown\n"
+            "\n"
+            "Shows raw / filtered / rejected / scored candidate counts."
+        ),
+        "show": (
+            "recommend show  —  Display candidates\n"
+            "\n"
+            "Usage: recommend show [<array>|<view>] [<range>|<id>] [--items] [--gaps] [--excesses] [--nutrients] [--verbose]\n"
+            "  <array>     raw | filtered | rejected | scored | ga\n"
+            "  <view>      A named subset created with 'subset'\n"
+            "  <range>     Single position (5), range (1-10), or list (1,3,7)\n"
+            "  <id>        Candidate ID (e.g. G3) or GA member (e.g. GA-1)\n"
+            "  --items     Show food codes and multipliers\n"
+            "  --gaps      Show nutrient deficiencies from filter violations\n"
+            "  --excesses  Show nutrient excesses from filter violations\n"
+            "  --nutrients Show macro and micro nutrient totals\n"
+            "  --verbose   Show detailed report (GA members)\n"
+            "\n"
+            "A single candidate always shows full detail; multiple candidates\n"
+            "default to a compact table unless a display flag is given.\n"
+            "\n"
+            "Examples:\n"
+            "  recommend show scored 1-10 --items\n"
+            "  recommend show GA-1 --verbose"
+        ),
+        "filter": (
+            "recommend filter  —  Apply pre-score filters to unfiltered candidates\n"
+            "\n"
+            "Usage: recommend filter [--verbose] [--refilter]\n"
+            "  --refilter  Clear existing filter/score results and reprocess all\n"
+            "  --verbose   Show detailed filter output"
+        ),
+        "score": (
+            "recommend score  —  Score filtered candidates and rank them\n"
+            "\n"
+            "Usage: recommend score [--verbose] [--rescore]\n"
+            "  --rescore   Clear existing scores and reprocess all filtered candidates\n"
+            "  --verbose   Show detailed scoring info"
+        ),
+        "accept": (
+            "recommend accept  —  Promote a candidate to the planning workspace\n"
+            "\n"
+            "Usage: recommend accept <G-ID|GA-N> [--as <workspace_id>] [--desc <text>]\n"
+            "  --as        Assign a specific workspace ID\n"
+            "  --desc      Set a description on the accepted meal\n"
+            "\n"
+            "Example: recommend accept G3 --desc \"Monday lunch\""
+        ),
+        "subset": (
+            "recommend subset  —  Create a named filtered view of scored candidates\n"
+            "\n"
+            "Usage: recommend subset scored --where <expr> --name <view_name>\n"
+            "  --where   Filter expression using field names and comparisons.\n"
+            "            Fields: score, cal, protein, carbs, fat, fiber, gl, sodium,\n"
+            "            potassium, sugar, vita, vitc, iron. Operators: > < >= <= = and or\n"
+            "  --name    Name for the view (used with 'show' and 'sort')\n"
+            "\n"
+            "Example: recommend subset scored --where \"score>85 and fiber>5\" --name finalists"
+        ),
+        "sort": (
+            "recommend sort  —  Sort a named view by one or more fields\n"
+            "\n"
+            "Usage: recommend sort <view_name> --keys \"field:dir[,field:dir,...]\"\n"
+            "  dir: asc | a | desc | d\n"
+            "\n"
+            "Example: recommend sort finalists --keys \"score:desc,fiber:desc\""
+        ),
+        "discard": (
+            "recommend discard  —  Discard candidates from the pipeline\n"
+            "\n"
+            "Usage:\n"
+            "  recommend discard [raw|filtered|scored]   Discard that array (or all if omitted)\n"
+            "  recommend discard view <n>|all             Remove a candidate from a view by position, or all"
+        ),
+        "reset": (
+            "recommend reset  —  Clear the entire recommendation session\n"
+            "\n"
+            "Usage: recommend reset [--force]\n"
+            "  --force     Skip confirmation prompt"
+        ),
+        "debugdump": (
+            "recommend debugdump  —  Write a candidate array to a JSON file for inspection\n"
+            "\n"
+            "Usage: recommend debugdump <raw|filtered|rejected|scored> <filename>"
+        ),
+    }
     detailed_help = (
         "recommend / reco  —  Meal recommendation pipeline\n"
         "\n"

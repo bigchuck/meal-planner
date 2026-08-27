@@ -13,8 +13,17 @@ class ItemsCommand(Command):
     """List current pending items with indices."""
     
     name = "items"
+    category = "Output"
     help_text = "List pending items with 1-based indices"
-    
+    overview_help = (
+        "items  —  List the current pending day's items with 1-based indices\n"
+        "\n"
+        "Usage: items\n"
+        "\n"
+        "The indices shown are what rm/move/setmult/ins take as arguments."
+    )
+
+
     def execute(self, args: str) -> None:
         """Display pending items with indices."""
         try:
@@ -67,8 +76,20 @@ class RemoveCommand(Command):
     """Remove items from pending."""
     
     name = "rm"
+    category = "Pending"
     help_text = "Remove items (rm 3 or rm 2,4 or rm 3-5)"
-    
+    overview_help = (
+        "rm  —  Remove item(s) from the pending day by index\n"
+        "\n"
+        "Usage: rm <index|indices>\n"
+        "  rm 3        Remove item 3\n"
+        "  rm 2,4      Remove items 2 and 4\n"
+        "  rm 3-5      Remove items 3 through 5\n"
+        "\n"
+        "Indices are 1-based, from 'items'. Prints the updated list afterward."
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Remove items by index.
@@ -147,8 +168,18 @@ class MoveCommand(Command):
     """Move an item to a different position."""
     
     name = "move"
+    category = "Pending"
     help_text = "Move item (move 3 1 moves item 3 to position 1)"
-    
+    overview_help = (
+        "move  —  Move a pending item to a different position\n"
+        "\n"
+        "Usage: move <from> <to>\n"
+        "  move 3 1     Move item 3 to position 1\n"
+        "\n"
+        "Indices are 1-based, from 'items'. Prints the updated list afterward."
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Move item from one position to another.
@@ -207,8 +238,19 @@ class SetMultCommand(Command):
     """Set multiplier for an item."""
     
     name = "setmult"
+    category = "Pending"
     help_text = "Set multiplier (setmult 3 1.5 or setmult 3 5.7/4)"
-    
+    overview_help = (
+        "setmult  —  Change a pending item's portion multiplier\n"
+        "\n"
+        "Usage: setmult <index> <multiplier>\n"
+        "  setmult 3 1.5     Set item 3's multiplier to 1.5\n"
+        "  setmult 3 5.7/4   Multiplier can be an arithmetic expression\n"
+        "\n"
+        "Index is 1-based, from 'items'. Cannot be used on a time marker."
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Set multiplier for item.
@@ -282,8 +324,19 @@ class InsertCommand(Command):
     """Insert items at a position."""
     
     name = "ins"
+    category = "Pending"
     help_text = "Insert items (ins 3 B.1 *1.5, S2.4)"
-    
+    overview_help = (
+        "ins  —  Insert food codes into the pending day at a specific position\n"
+        "\n"
+        "Usage: ins <position> <codes>\n"
+        "  ins 3 B.1 *1.5, S2.4     Insert B.1 x1.5 and S2.4 starting at position 3\n"
+        "\n"
+        "Position is 1-based, from 'items'. Codes use the same syntax as 'add'\n"
+        "(see 'help add --detail')."
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Insert items at position.

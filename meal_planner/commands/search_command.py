@@ -12,7 +12,21 @@ class FindCommand(Command):
     """Search the master database."""
     
     name = ("find", "f")
+    category = "DB Interrogation"
     help_text = "Search master database (e.g., find <term> [options])"
+    overview_help = (
+        "find / f  —  Search the master database\n"
+        "\n"
+        "Usage: find <term> [options]\n"
+        "\n"
+        "Matches by name, section prefix (e.g. 'sa.'), recipe content, or affinity tags\n"
+        "(--pair/--best-with/--avoid/--profile). See 'help find --detail' for every option.\n"
+        "\n"
+        "Examples:\n"
+        "  f chicken             Items matching 'chicken'\n"
+        "  f sa.                 All SA-section items\n"
+        "  f --recipe cumin      Any item whose recipe contains cumin"
+    )
     detailed_help = (
         "find / f  —  Search the master database\n"
         "\n"

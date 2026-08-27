@@ -11,7 +11,16 @@ class RecipeCommand(Command):
     """Show recipe/ingredients for a code."""
     
     name = "recipe"
+    category = "DB Interrogation"
     help_text = "Show recipe for code (recipe <code> [--affinity|--stage])"
+    overview_help = (
+        "recipe  —  Show recipe/ingredients for a food code\n"
+        "\n"
+        "Usage: recipe <code> [--affinity] [--stage]\n"
+        "\n"
+        "--affinity adds embedded pairing tags; --stage adds the output to the\n"
+        "staging buffer for later email delivery (see 'stage' and 'help recipe --detail')."
+    )
     detailed_help = (
         "recipe  —  Show recipe/ingredients for a food code\n"
         "\n"

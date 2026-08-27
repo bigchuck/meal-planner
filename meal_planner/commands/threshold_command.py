@@ -14,8 +14,22 @@ class ThresholdCommand(Command, CommandHistoryMixin):
     """Display meal planning threshold configuration."""
     
     name = "threshold"
+    category = "Reference"
     help_text = "Display configuration (threshold --display <keys>)"
-    
+    overview_help = (
+        "threshold  —  Browse meal_plan_config.json (thresholds/templates) by dot-notation key path\n"
+        "\n"
+        "Usage:\n"
+        "  threshold                                     List top-level sections\n"
+        "  threshold --display <key.path>                Show that section's keys/values\n"
+        "  threshold --display <key.path> --all           Show full detail, not just a summary\n"
+        "  threshold --history N --meal <meal>            Show recent threshold lookups for that meal\n"
+        "  threshold --use N --meal <meal> [other flags]  Re-run one from history\n"
+        "\n"
+        "Example: threshold --display meal_templates.breakfast --meal breakfast"
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Display threshold configuration using dot-notation key paths.

@@ -24,8 +24,65 @@ class StashCommand(Command):
     """Stash/restore pending day."""
     
     name = "stash"
+    category = "Pending"
     help_text = "Manage stash (stash push|pop|list|get|drop|discard)"
-    
+    overview_help = (
+        "stash  —  Save and restore pending-day snapshots, like a small undo stack\n"
+        "\n"
+        "Usage: stash <push|pop|list|get|drop|discard> [args]\n"
+        "\n"
+        "Subcommands: push, pop, list, get, drop, discard\n"
+        "Use 'help stash <subcommand>' for details on each."
+    )
+    subcommand_help = {
+        "push": (
+            "stash push  —  Save the current pending day onto the stash stack\n"
+            "\n"
+            "Usage: stash push\n"
+            "\n"
+            "Snapshots the current pending (even if empty) and pushes it onto the\n"
+            "stack. Restore later with 'stash pop' or 'stash get <n>'."
+        ),
+        "pop": (
+            "stash pop  —  Restore the most recently stashed pending day\n"
+            "\n"
+            "Usage: stash pop [--force|-f]\n"
+            "\n"
+            "Pops the top of the stack and makes it the current pending day.\n"
+            "If the current pending has unstashed items, you'll be asked to\n"
+            "confirm (or use --force to skip that check)."
+        ),
+        "list": (
+            "stash list  —  Show what's on the stash stack\n"
+            "\n"
+            "Usage:\n"
+            "  stash list      List every stashed entry (date, item count, timestamp)\n"
+            "  stash list N    Show full detail for entry #N"
+        ),
+        "get": (
+            "stash get  —  Restore a specific stash entry, not just the top one\n"
+            "\n"
+            "Usage: stash get N\n"
+            "\n"
+            "Restores entry #N (from 'stash list') as the current pending day."
+        ),
+        "drop": (
+            "stash drop  —  Remove one entry from the stash stack\n"
+            "\n"
+            "Usage: stash drop N\n"
+            "\n"
+            "Deletes entry #N (from 'stash list') without restoring it."
+        ),
+        "discard": (
+            "stash discard  —  Clear the entire stash stack\n"
+            "\n"
+            "Usage: stash discard\n"
+            "\n"
+            "Removes every stashed entry. Does not affect the current pending day."
+        ),
+    }
+
+
     def execute(self, args: str) -> None:
         """
         Route to stash subcommands.
@@ -605,8 +662,20 @@ class LoadLogCommand(Command):
     """Load a log date into pending for editing."""
     
     name = "loadlog"
+    category = "Pending"
     help_text = "Load log date for editing (loadlog YYYY-MM-DD)"
-    
+    overview_help = (
+        "loadlog  —  Load a saved log date into pending, to edit it\n"
+        "\n"
+        "Usage: loadlog YYYY-MM-DD [--force]\n"
+        "\n"
+        "Auto-stashes the current pending day first, then loads that date's log\n"
+        "entry as the new pending day. Edit it with add/rm/move/setmult, then\n"
+        "save with 'applylog' (or cancel with 'discard'). --force skips the\n"
+        "confirmation if pending currently has unsaved items."
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Load log date into pending for editing.
@@ -724,8 +793,19 @@ class ApplyLogCommand(Command):
     """Apply pending changes back to log."""
     
     name = "applylog"
+    category = "Pending"
     help_text = "Apply edited pending back to log"
-    
+    overview_help = (
+        "applylog  —  Save the edited pending day back to the log entry it came from\n"
+        "\n"
+        "Usage: applylog\n"
+        "\n"
+        "Only valid after 'loadlog'. Overwrites that date's log entry with the\n"
+        "current pending items/totals, then clears the editing state. To cancel\n"
+        "an edit instead, use 'discard'."
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Apply pending changes back to log.
@@ -786,8 +866,19 @@ class DiscardCommand(Command):
     """Discard pending without saving."""
     
     name = "discard"
+    category = "Pending"
     help_text = "Discard pending (normal or loaded log)"
-    
+    overview_help = (
+        "discard  —  Clear the pending day without saving it\n"
+        "\n"
+        "Usage: discard [--force|-f]\n"
+        "\n"
+        "If a log date is loaded (via loadlog), cancels that edit instead\n"
+        "(the pre-edit pending stays stashed). Otherwise clears normal pending\n"
+        "items. Asks for confirmation unless --force is given."
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Discard current pending.

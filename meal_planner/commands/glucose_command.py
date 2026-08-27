@@ -19,8 +19,19 @@ class GlucoseCommand(Command):
     """Show glycemic load analysis."""
     
     name = "glucose"
+    category = "Analysis"
     help_text = "Show glucose analysis (glucose [date] [--meal \"MORNING SNACK\"] [--detail])"
-    
+    overview_help = (
+        "glucose  —  Glycemic load / glucose-response analysis for a day or meal\n"
+        "\n"
+        "Usage: glucose [date] [--meal \"MEAL NAME\"] [--detail]\n"
+        "\n"
+        "date defaults to today's pending day. --meal filters to one meal\n"
+        "(quote multi-word names). --detail adds per-component breakdowns.\n"
+        "Requires meal_plan_config.json glucose-scoring thresholds to be configured."
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Show glucose/glycemic load analysis.

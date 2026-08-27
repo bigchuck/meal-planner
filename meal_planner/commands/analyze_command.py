@@ -22,8 +22,24 @@ class AnalyzeCommand(Command, CommandHistoryMixin):
     """Analyze meals against nutritional templates."""
     
     name = "analyze"
+    category = "Analysis"
     help_text = "Analyze meals against template (analyze [date|id] --template <key> --meal <meal> [--stage])"
-    
+    overview_help = (
+        "analyze  —  Score a meal against a nutritional template\n"
+        "\n"
+        "Usage:\n"
+        "  analyze [date|workspace_id] --template <key> --meal <meal>  Analyze one meal\n"
+        "  analyze --daily                                             Whole-day totals, no template\n"
+        "  analyze --history N --meal <meal>                           Show recent analyze invocations\n"
+        "  analyze --use N --meal <meal> [other flags...]              Re-run one from history\n"
+        "\n"
+        "Target can be a workspace candidate id, a log date, or omitted for the\n"
+        "pending day. --stage adds the result to the staging buffer.\n"
+        "\n"
+        "Example: analyze --template breakfast.protein_low_carb --meal breakfast"
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Analyze meals against a nutritional template.

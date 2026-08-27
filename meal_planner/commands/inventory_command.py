@@ -12,8 +12,61 @@ class InventoryCommand(Command):
     """Manage inventory (leftovers, batch items, rotating items)."""
     
     name = ("inventory", "inv")
+    category = "Recommendation"
     help_text = "Manage inventory (inventory add/remove/depleted/restore/list)"
-    
+    overview_help = (
+        "inventory / inv  —  Track leftovers, batch-cooked, and rotating items\n"
+        "\n"
+        "Usage: inventory <add|remove|depleted|restore|reserve|release|list> [args]\n"
+        "\n"
+        "Availability here feeds the recommend pipeline's leftover-match and\n"
+        "rotating-item filters. Use 'help inventory <subcommand>' for details."
+    )
+    subcommand_help = {
+        "add": (
+            "inventory add  —  Add an item to inventory\n"
+            "\n"
+            "Usage: inventory add <code> [<mult>] --leftover|--batch|--rotating [note]\n"
+            "Example: inventory add FI.8 0.225 --leftover \"from dinner\""
+        ),
+        "remove": (
+            "inventory remove  —  Remove an item from inventory entirely\n"
+            "\n"
+            "Usage: inventory remove <code>\n"
+            "Example: inventory remove FI.8"
+        ),
+        "depleted": (
+            "inventory depleted  —  Mark a rotating item as depleted (out of stock)\n"
+            "\n"
+            "Usage: inventory depleted <code>\n"
+            "Example: inventory depleted GR.H1"
+        ),
+        "restore": (
+            "inventory restore  —  Mark a rotating item available again\n"
+            "\n"
+            "Usage: inventory restore <code> [<mult>]\n"
+            "Example: inventory restore GR.H1 1.5"
+        ),
+        "reserve": (
+            "inventory reserve  —  Mark an item unavailable for planning without removing it\n"
+            "\n"
+            "Usage: inventory reserve <code>\n"
+            "\n"
+            "Works across leftover, batch, and rotating items."
+        ),
+        "release": (
+            "inventory release  —  Undo a reserve, making an item available again\n"
+            "\n"
+            "Usage: inventory release <code>"
+        ),
+        "list": (
+            "inventory list  —  Show all inventory items and their status\n"
+            "\n"
+            "Usage: inventory list"
+        ),
+    }
+
+
     def execute(self, args: str) -> None:
         """
         Execute inventory command.

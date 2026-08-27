@@ -13,8 +13,20 @@ class StartCommand(Command):
     """Start a new pending day."""
     
     name = "start"
+    category = "Pending"
     help_text = "Start new pending day (e.g., start 2025-01-15)"
-    
+    overview_help = (
+        "start  —  Begin a new pending day\n"
+        "\n"
+        "Usage:\n"
+        "  start              Start pending for today\n"
+        "  start YYYY-MM-DD   Start pending for a specific date\n"
+        "\n"
+        "Fails if a pending day with items is already active — 'close' or\n"
+        "'discard' it first."
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Start a new pending day.
@@ -50,8 +62,49 @@ class AddCommand(Command):
     """Add items to pending day."""
     
     name = "add"
+    category = "Pending"
     help_text = "Add codes to pending day (e.g., add B.1 *1.5, S2.4)"
-    
+    overview_help = (
+        "add  —  Add food codes to the pending day\n"
+        "\n"
+        "Usage: add <codes>\n"
+        "  add B.1                     One item\n"
+        "  add B.1 *1.5, S2.4          Multiplier, then a second item\n"
+        "  add chicken                 No comma / no known code -> fuzzy name search\n"
+        "\n"
+        "Starts a pending day automatically if none is active. Rejects CM. combo\n"
+        "codes (add those via their alias name instead). See 'help add --detail'\n"
+        "for the full code syntax (groups, subtraction, time markers, search mode)."
+    )
+    detailed_help = (
+        "add  —  Add food codes to the pending day\n"
+        "\n"
+        "Usage: add <codes>\n"
+        "\n"
+        "Code syntax (comma-separated list of codes/expressions):\n"
+        "  B.1                        Simple code, multiplier defaults to 1\n"
+        "  L.3x2, FI.9 x5.7/4         Multiplier (x or *, integer/decimal/fraction)\n"
+        "  (FR.1, FR.2) *.5           Group: apply one multiplier to several codes\n"
+        "  D.10-VE.T1                 Subtraction: remove VE.T1's nutrition from D.10\n"
+        "  @11:30 (DINNER)            Time marker, with optional meal-name override\n"
+        "\n"
+        "Fuzzy search mode (when args aren't a comma-separated code list):\n"
+        "  add chicken                Search by name; a single unambiguous hit is\n"
+        "                              added directly, multiple hits print a\n"
+        "                              numbered list\n"
+        "  add chicken #2              Add the #2 result from a prior conflict list\n"
+        "  add chicken x1.5            Trailing multiplier applies to the match\n"
+        "  add chicken --last           Add the most recently logged matching item\n"
+        "                              (scans pending, then the last 3 days of log)\n"
+        "\n"
+        "Notes:\n"
+        "  - CM. combo codes cannot be added directly — add them via their alias.\n"
+        "  - Prints the updated day totals after adding.\n"
+        "\n"
+        "See also: ins (insert at a position), rm/move/setmult (edit existing items)."
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Add codes to pending day.
@@ -131,8 +184,18 @@ class CloseCommand(Command):
     """Finalize pending day and save to log."""
     
     name = "close"
+    category = "Pending"
     help_text = "Finalize pending day and save to log"
-    
+    overview_help = (
+        "close  —  Finalize the pending day and save it to the log\n"
+        "\n"
+        "Usage: close\n"
+        "\n"
+        "Calculates totals, appends an entry to the daily log CSV, then clears\n"
+        "the pending day. Blocked while a log entry is being edited (applylog first)."
+    )
+
+
     def execute(self, args: str) -> None:
         """Save pending to log and clear."""
         # Prevent closing during log edit

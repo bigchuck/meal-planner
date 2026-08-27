@@ -11,7 +11,20 @@ class StatsCommand(Command):
     """Show command usage statistics."""
 
     name = "stats"
+    category = "System"
     help_text = "Show usage statistics (stats [YYYY-MM-DD|daily|weekly|alltime])"
+    overview_help = (
+        "stats  —  Show how often each command has been used\n"
+        "\n"
+        "Usage:\n"
+        "  stats                Show today, this week, and all-time sections\n"
+        "  stats YYYY-MM-DD     Show usage for one specific date\n"
+        "  stats daily          Show today only\n"
+        "  stats weekly         Show this week only\n"
+        "  stats alltime        Show all-time totals, last-used dates, and never-used commands\n"
+        "\n"
+        "Requires TRACK_USAGE = True in config.py."
+    )
 
     # quit exits via SystemExit before main.py's post-execute usage.track()
     # call runs, so it can never appear as used - exclude it from "never

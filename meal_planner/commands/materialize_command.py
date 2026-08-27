@@ -18,8 +18,51 @@ class MaterializeCommand(Command):
     """Materialize alias or create scaled master entry."""
     
     name = "materialize"
+    category = "DB Update"
     help_text = "Materialize alias or scale master entry (materialize CODE [mult] [as NEW.CODE])"
-    
+    overview_help = (
+        "materialize  —  Turn an alias (or a scaled portion) into its own master entry\n"
+        "\n"
+        "Usage:\n"
+        "  materialize CODE [mult]                  Preview: show combined nutrition and a suggested new code\n"
+        "  materialize CODE [mult] as NEW.CODE       Create NEW.CODE (a new master.json entry)\n"
+        "  materialize CODE [mult] as NEW.CODE --edit   Same, but prompts to edit the description first\n"
+        "\n"
+        "CODE can be an alias (creates a CM.### combo code) or an existing master code\n"
+        "with a multiplier (creates a scaled variant, e.g. SO.19d 0.5 -> SO.19e).\n"
+        "Nutrition, nutrients, and a recipe snapshot are all filled in automatically."
+    )
+    detailed_help = (
+        "materialize  —  Turn an alias (or a scaled portion) into its own master entry\n"
+        "\n"
+        "Two source types:\n"
+        "  Alias source    Resolves the alias's component codes, sums their nutrition,\n"
+        "                  and (with 'as') creates a CM.### combo code.\n"
+        "  Master source   Scales an existing entry's nutrition by a multiplier and\n"
+        "                  (with 'as') creates a new code (e.g. a portion-size variant).\n"
+        "                  A multiplier is required for master sources.\n"
+        "\n"
+        "Two modes:\n"
+        "  Preview (no 'as'):   materialize CODE [mult]\n"
+        "                       Shows combined/scaled nutrition and suggests a code.\n"
+        "  Execute (with 'as'): materialize CODE [mult] as NEW.CODE [--edit]\n"
+        "                       Creates the master entry, nutrients, and a recipe note\n"
+        "                       recording what it was materialized from. --edit lets you\n"
+        "                       override the auto-generated description before saving.\n"
+        "\n"
+        "The new entry is a static snapshot — later changes to the source alias or\n"
+        "master entry will not propagate to it.\n"
+        "\n"
+        "Examples:\n"
+        "  materialize AL.4                    Preview alias AL.4\n"
+        "  materialize SO.19d 0.5               Preview a half portion of SO.19d\n"
+        "  materialize AL.4 as CM.5             Create CM.5 from alias AL.4\n"
+        "  materialize SO.19d 0.5 as SO.19e --edit   Create a half-portion variant, editing the name\n"
+        "\n"
+        "See also: addcode (manual entry), addrecipe."
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Materialize alias or scale master entry.

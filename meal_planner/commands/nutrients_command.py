@@ -14,8 +14,20 @@ class NutrientsCommand(Command):
     """Show micronutrients for a code."""
     
     name = ("nutrients", "nutrient")
+    category = "Output"
     help_text = "Show micronutrients (nutrients SO.11 or [date] --meals or [date] --meal \"MEAL NAME\")"
-    
+    overview_help = (
+        "nutrients  —  Show micronutrient detail for a food code or a day\n"
+        "\n"
+        "Usage:\n"
+        "  nutrients <code>                  Micronutrients for one food code\n"
+        "  nutrients [date] --meals          Every meal on a day (default: today's pending)\n"
+        "  nutrients [date] --meal \"NAME\"    Just one meal on that day\n"
+        "\n"
+        "Examples: nutrients SO.11 | nutrients --meals | nutrients 2025-01-15 --meal LUNCH"
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Show micronutrients for a code, all meals, or specific meal.

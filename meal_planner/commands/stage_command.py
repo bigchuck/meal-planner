@@ -13,8 +13,55 @@ class StageCommand(Command):
     """Manage staging buffer for email delivery."""
     
     name = "stage"
-    help_text = "Manage staging buffer (stage show|edit|remove|clear)"
-    
+    category = "Output"
+    help_text = "Manage staging buffer (stage show|edit|remove|clear|send)"
+    overview_help = (
+        "stage  —  Manage the staging buffer used to email meal plans/analysis to your phone\n"
+        "\n"
+        "Usage: stage <show|edit|remove|clear|send> [args]\n"
+        "\n"
+        "Add content to the buffer with --stage on report/recipe/analyze/plan.\n"
+        "Subcommands: show, edit, remove, clear, send. Use 'help stage <subcommand>' for details."
+    )
+    subcommand_help = {
+        "show": (
+            "stage show  —  Display the staging buffer's contents\n"
+            "\n"
+            "Usage: stage show\n"
+            "\n"
+            "Lists each staged item's position, label, and line count."
+        ),
+        "edit": (
+            "stage edit  —  Change a staged item's description\n"
+            "\n"
+            "Usage: stage edit <position> --desc \"new description\"\n"
+            "Example: stage edit 2 --desc \"Tuesday Lunch - client meeting\"\n"
+            "\n"
+            "Position is from 'stage show'."
+        ),
+        "remove": (
+            "stage remove  —  Remove one item from the staging buffer\n"
+            "\n"
+            "Usage: stage remove <position>\n"
+            "\n"
+            "Position is from 'stage show'."
+        ),
+        "clear": (
+            "stage clear  —  Empty the entire staging buffer\n"
+            "\n"
+            "Usage: stage clear"
+        ),
+        "send": (
+            "stage send  —  Email the staging buffer's contents\n"
+            "\n"
+            "Usage: stage send [--alt]\n"
+            "\n"
+            "Sends to your primary configured address, or --alt for the alternate\n"
+            "one. Requires data/email_config.json to be set up."
+        ),
+    }
+
+
     def execute(self, args: str) -> None:
         """
         Route to staging buffer subcommands.

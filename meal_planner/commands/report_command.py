@@ -17,7 +17,22 @@ class ReportCommand(Command):
     """Show detailed nutrient breakdown."""
     
     name = "report"
+    category = "Output"
     help_text = "Show detailed breakdown (report [date] [--recipes] [--nutrients] [--meals] [--meal \"NAME\"] [--risk] [--verbose])"
+    overview_help = (
+        "report  —  Detailed nutrient/meal breakdown for a day\n"
+        "\n"
+        "Usage: report [date] [flags]\n"
+        "  --recipes         Include recipe/ingredient text\n"
+        "  --nutrients       Include micronutrients\n"
+        "  --meals           Break the day down meal by meal\n"
+        "  --meal \"NAME\"     Show just one meal\n"
+        "  --risk            Include glycemic risk analysis\n"
+        "  --verbose         Extra detail\n"
+        "  --stage           Add the report to the staging buffer (also enables --verbose)\n"
+        "\n"
+        "date defaults to today's pending day if omitted."
+    )
     def __init__(self, context):
         super().__init__(context)
         self.glucose_calc = GlucoseCalculator()

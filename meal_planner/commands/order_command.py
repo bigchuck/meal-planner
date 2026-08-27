@@ -12,8 +12,53 @@ class OrderCommand(Command):
     """Rank foods by nutrient content."""
     
     name = "order"
-    help_text = "Rank foods by nutrient (order for help)"
-    
+    category = "DB Interrogation"
+    help_text = "Rank foods by nutrient content, ascending or descending"
+    overview_help = (
+        "order  —  Rank foods in the master database by nutrient content\n"
+        "\n"
+        "Usage: order [--per100cal] <nutrient_expr> <-d|-a> <limit> [search_query]\n"
+        "\n"
+        "  nutrient_expr   A field (cal, prot_g, fiber_g, ...) or a ratio (prot_g/cal)\n"
+        "  -d / -a         Descending (highest first) / ascending (lowest first)\n"
+        "  limit           How many results to show (99999 for unlimited)\n"
+        "  search_query    Optional 'find'-style filter; omit to search everything\n"
+        "\n"
+        "Example: order fiber_g -d 15 ve.   (top 15 VE-section items by fiber)\n"
+        "See 'help order --detail' for the full field list and more examples."
+    )
+    detailed_help = (
+        "order  —  Rank foods in the master database by nutrient content\n"
+        "\n"
+        "Usage: order [--per100cal] <nutrient_expr> <-d|-a> <limit> [search_query]\n"
+        "\n"
+        "Flags:\n"
+        "  --per100cal    Normalize values to per 100 calories\n"
+        "\n"
+        "Nutrient expressions:\n"
+        "  Macros:  cal, prot_g, carbs_g, fat_g, sugar_g, gl, gi\n"
+        "  Micros:  fiber_g, sodium_mg, potassium_mg, vitA_mcg, vitC_mg, iron_mg\n"
+        "  Ratios:  <nutrient>/<nutrient> (no spaces, e.g. prot_g/cal)\n"
+        "\n"
+        "Direction:\n"
+        "  -d    Descending (highest first)\n"
+        "  -a    Ascending (lowest first)\n"
+        "\n"
+        "Limit:\n"
+        "  Number of results to show (use 99999 for unlimited)\n"
+        "\n"
+        "Search query:\n"
+        "  Optional filter using 'find' syntax — code patterns, boolean logic\n"
+        "  (AND, OR, NOT), text search. If omitted, searches the entire database.\n"
+        "\n"
+        "Examples:\n"
+        "  order fiber_g -d 15 ve.\n"
+        "  order prot_g/cal -d 20 chicken OR fish\n"
+        "  order --per100cal sugar_g -a 99999\n"
+        "  order gl -a 10 \"st. NOT potato\""
+    )
+
+
     # Available nutrients
     MACROS = ['cal', 'prot_g', 'carbs_g', 'fat_g', 'sugar_g', 'gl', 'gi']
     MICROS = ['fiber_g', 'sodium_mg', 'potassium_mg', 'vitA_mcg', 'vitC_mg', 'iron_mg']

@@ -2,34 +2,101 @@
 Basic commands: help, quit, reload.
 """
 from .base import Command, register_command, get_registry
+from .help_categories import CATEGORIES
 
 
 @register_command
 class HelpCommand(Command):
     """Show help information."""
-    
+
     name = ("help", "h", "?")
-    help_text = "Show this help message"
-    
+    category = "System"
+    help_text = "Show this help message (help [command|category] [subcommand|--detail])"
+    overview_help = (
+        "help  —  Show available commands, grouped by category\n"
+        "\n"
+        "Usage:\n"
+        "  help                          List all commands, grouped by category\n"
+        "  help <category>               List commands in one category\n"
+        "  help <command>                Show a command's syntax and description\n"
+        "  help <command> --detail       Show full detail: every flag and example\n"
+        "  help <command> <subcommand>   Show help for one subcommand (commands that have them)\n"
+        "\n"
+        f"Categories: {', '.join(CATEGORIES)}"
+    )
+
     def execute(self, args: str) -> None:
-        """Display help for all commands."""
+        """Display help for all commands, a category, or one command."""
         registry = get_registry()
-        
-        # If a command name was given, show detailed help for that command
-        if args.strip():
-            cmd_name = args.strip().lower()
-            cmd_class = registry.get(cmd_name)
-            if cmd_class:
-                if cmd_class.detailed_help:
-                    print(f"\n{cmd_class.detailed_help}\n")
-                else:
-                    # Fall back to one-liner if no detailed help defined
-                    print(f"\n{cmd_class.help_text}\n")
-            else:
-                print(f"\nUnknown command: '{cmd_name}'\n")
+        arg_str = args.strip()
+
+        if not arg_str:
+            self._show_grouped(registry)
             return
-    
-        # Show mode status if active
+
+        category_match = self._match_category(arg_str)
+        if category_match:
+            self._show_category(registry, category_match)
+            return
+
+        tokens = arg_str.split()
+        cmd_name = tokens[0].lower()
+        cmd_class = registry.get(cmd_name)
+
+        if cmd_class is None:
+            print(f"\nUnknown command or category: '{arg_str}'\n")
+            return
+
+        rest = tokens[1:]
+
+        if rest and rest[0] == "--detail":
+            detail = cmd_class.detailed_help or cmd_class.overview_help or cmd_class.help_text
+            print(f"\n{detail}\n")
+            return
+
+        if rest:
+            subcommand = rest[0].lower()
+            sub_help = cmd_class.subcommand_help or {}
+            if subcommand in sub_help:
+                print(f"\n{sub_help[subcommand]}\n")
+            else:
+                print(f"\nUnknown subcommand '{subcommand}' for '{cmd_name}'.")
+                if sub_help:
+                    print(f"Available subcommands: {', '.join(sorted(sub_help.keys()))}")
+                print()
+            return
+
+        overview = cmd_class.overview_help or cmd_class.detailed_help or cmd_class.help_text
+        print(f"\n{overview}\n")
+
+    def _match_category(self, text: str) -> str | None:
+        """Case-insensitive match of the full args string against a category name."""
+        for cat in CATEGORIES:
+            if text.lower() == cat.lower():
+                return cat
+        return None
+
+    def _group_by_category(self, registry) -> dict:
+        """Group all registered command classes by their category."""
+        commands = registry.get_all_commands()
+        commands.sort(key=lambda c: c.name if isinstance(c.name, str) else c.name[0])
+
+        grouped: dict = {}
+        for cmd_class in commands:
+            grouped.setdefault(cmd_class.category, []).append(cmd_class)
+        return grouped
+
+    def _print_command_lines(self, cmd_classes: list) -> None:
+        """Print one summary line per command class."""
+        for cmd_class in cmd_classes:
+            if isinstance(cmd_class.name, str):
+                names = cmd_class.name
+            else:
+                names = ", ".join(cmd_class.name)
+            print(f"  {names:20} {cmd_class.help_text}")
+
+    def _show_grouped(self, registry) -> None:
+        """List every command, grouped by category."""
         if self.ctx.mode_mgr.is_active:
             mode = self.ctx.mode_mgr.active_mode
             print(f"\n*** Currently in {mode.prompt_display} mode ***")
@@ -39,31 +106,41 @@ class HelpCommand(Command):
 
         print("\nAvailable Commands:")
         print("=" * 70)
-        
-        # Get unique commands and sort by name
-        commands = registry.get_all_commands()
-        commands.sort(key=lambda c: c.name if isinstance(c.name, str) else c.name[0])
-        
-        for cmd_class in commands:
-            # Show all aliases
-            if isinstance(cmd_class.name, str):
-                names = cmd_class.name
-            else:
-                names = ", ".join(cmd_class.name)
-            
-            print(f"  {names:20} {cmd_class.help_text}")
-        
+
+        by_category = self._group_by_category(registry)
+
+        for cat in CATEGORIES:
+            cmd_classes = by_category.get(cat, [])
+            if not cmd_classes:
+                continue
+            print(f"\n{cat}")
+            print("-" * len(cat))
+            self._print_command_lines(cmd_classes)
+
+        print("\n" + "=" * 70)
+        print("Type 'help <command>' for details, 'help <category>' to filter by category.")
+        print()
+
+    def _show_category(self, registry, category: str) -> None:
+        """List only the commands in one category."""
+        by_category = self._group_by_category(registry)
+        cmd_classes = by_category.get(category, [])
+
+        print(f"\n{category}")
         print("=" * 70)
+        self._print_command_lines(cmd_classes)
         print()
 
 
 @register_command
 class QuitCommand(Command):
     """Exit the application."""
-    
+
     name = ("quit", "q")
+    category = "System"
     help_text = "Exit the application"
-    
+    overview_help = "quit (or q)  —  Exit the application immediately. Workspace is auto-saved on exit."
+
     def execute(self, args: str) -> None:
         """Exit with message."""
         print("SO LONG, CRABBY!")
@@ -72,10 +149,24 @@ class QuitCommand(Command):
 @register_command
 class ReloadCommand(Command):
     """Reload data files from disk."""
-    
+
     name = "reload"
+    category = "System"
     help_text = "Reload data files (reload [--config|--master|--alias|--user|--all])"
-    
+    overview_help = (
+        "reload  —  Reload data files from disk without restarting\n"
+        "\n"
+        "Usage:\n"
+        "  reload              Reload everything (master, config, aliases, user prefs)\n"
+        "  reload --master     Reload just the master database\n"
+        "  reload --config     Reload just meal_plan_config.json (thresholds)\n"
+        "  reload --alias      Reload just the alias file\n"
+        "  reload --user       Reload just user preferences\n"
+        "  reload --all        Same as no flags\n"
+        "\n"
+        "Flags can be combined, e.g. 'reload --master --config'."
+    )
+
     def execute(self, args: str) -> None:
         """Reload data files based on flags."""
         args_lower = args.strip().lower()

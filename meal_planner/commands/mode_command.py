@@ -9,8 +9,22 @@ class ModeCommand(Command):
     """Enter or exit command modes."""
     
     name = "mode"
+    category = "Plan"
     help_text = "Enter/exit command modes (mode plan [id], mode exit)"
-    
+    overview_help = (
+        "mode  —  Enter a REPL mode that auto-prefixes your input with a command\n"
+        "\n"
+        "Usage:\n"
+        "  mode              Show current mode status\n"
+        "  mode plan [id]    Enter plan mode (optionally scoped to one workspace candidate)\n"
+        "  mode exit          Exit the current mode (or type 'exit')\n"
+        "\n"
+        "While in plan mode, bare input like 'show' or 'add 2 B.1' is run as\n"
+        "'plan show'/'plan add 2 B.1' automatically. Prefix a line with '.' to\n"
+        "run a global command instead for that one line."
+    )
+
+
     def execute(self, args: str) -> None:
         """
         Execute mode command.
