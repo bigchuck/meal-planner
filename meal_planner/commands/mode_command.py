@@ -9,7 +9,7 @@ class ModeCommand(Command):
     """Enter or exit command modes."""
     
     name = "mode"
-    category = "Plan"
+    category = "Planning"
     help_text = "Enter/exit command modes (mode plan [id], mode exit)"
     overview_help = (
         "mode  —  Enter a REPL mode that auto-prefixes your input with a command\n"

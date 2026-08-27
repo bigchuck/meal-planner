@@ -11,7 +11,7 @@ CATEGORIES = [
     "Pending",
     "Output",
     "Analysis",
-    "Plan",
+    "Planning",
     "Recommendation",
     "Reference",
     "System",

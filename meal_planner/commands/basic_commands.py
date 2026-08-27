@@ -34,16 +34,17 @@ class HelpCommand(Command):
             self._show_grouped(registry)
             return
 
-        category_match = self._match_category(arg_str)
-        if category_match:
-            self._show_category(registry, category_match)
-            return
-
         tokens = arg_str.split()
         cmd_name = tokens[0].lower()
         cmd_class = registry.get(cmd_name)
 
+        # A known command name always wins, even if it collides with a
+        # category name (e.g. the 'plan' command vs. the 'Plan' category).
         if cmd_class is None:
+            category_match = self._match_category(arg_str)
+            if category_match:
+                self._show_category(registry, category_match)
+                return
             print(f"\nUnknown command or category: '{arg_str}'\n")
             return
 

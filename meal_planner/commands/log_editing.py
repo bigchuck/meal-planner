@@ -29,9 +29,16 @@ class StashCommand(Command):
     overview_help = (
         "stash  —  Save and restore pending-day snapshots, like a small undo stack\n"
         "\n"
-        "Usage: stash <push|pop|list|get|drop|discard> [args]\n"
+        "Usage: stash <subcommand> [args]\n"
         "\n"
-        "Subcommands: push, pop, list, get, drop, discard\n"
+        "Subcommands:\n"
+        "  push               Save current pending to the stack\n"
+        "  pop [--force]      Restore from the top of the stack\n"
+        "  list [N]           Show all entries, or full detail for entry #N\n"
+        "  get N              Restore entry #N (not just the top)\n"
+        "  drop N             Remove entry #N from the stack\n"
+        "  discard            Clear the entire stack\n"
+        "\n"
         "Use 'help stash <subcommand>' for details on each."
     )
     subcommand_help = {

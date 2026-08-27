@@ -18,10 +18,17 @@ class StageCommand(Command):
     overview_help = (
         "stage  —  Manage the staging buffer used to email meal plans/analysis to your phone\n"
         "\n"
-        "Usage: stage <show|edit|remove|clear|send> [args]\n"
+        "Usage: stage <subcommand> [args]\n"
+        "\n"
+        "Subcommands:\n"
+        "  show                             Display buffer contents\n"
+        "  edit <position> --desc \"text\"    Edit description at position\n"
+        "  remove <position>                Remove item at position\n"
+        "  clear                            Clear entire buffer\n"
+        "  send [--alt]                     Email buffer (--alt = alternate address)\n"
         "\n"
         "Add content to the buffer with --stage on report/recipe/analyze/plan.\n"
-        "Subcommands: show, edit, remove, clear, send. Use 'help stage <subcommand>' for details."
+        "Use 'help stage <subcommand>' for details."
     )
     subcommand_help = {
         "show": (
