@@ -29,7 +29,7 @@ class PlanCommand(Command):
         "Usage: plan <subcommand> [args]\n"
         "\n"
         "Subcommands:\n"
-        "  search <meal> [--history N] [--<nutrient> min=X max=Y] [--code/--codes <expr>]\n"
+        "  search <meal>[,<meal>...]|all [--history N] [--<nutrient> min=X max=Y] [--code/--codes <expr>]\n"
         "  show [<id>]\n"
         "  add <id> <codes>\n"
         "  rm <ids> | rm <id> <indices>\n"
@@ -52,12 +52,19 @@ class PlanCommand(Command):
         "search": (
             "plan search  —  Find historical meals and add them as candidates\n"
             "\n"
-            "Usage: plan search <meal_name> [--history N] [--<nutrient> min=X max=Y] [--code/--codes <expr>]\n"
+            "Usage: plan search <meal_name>[,<meal_name>...]|all [--history N] [--<nutrient> min=X max=Y] [--code/--codes <expr>]\n"
+            "\n"
+            "meal_name can be a single meal, a comma-separated list (quote any\n"
+            "multi-word name), or 'all' to search every meal type at once.\n"
+            "--codes/--code accepts glob wildcards (* and ?) in addition to the\n"
+            "usual and/or/not boolean syntax and prefix matching.\n"
             "\n"
             "Examples:\n"
             "  plan search lunch --history 10\n"
             "  plan search lunch --carbs_g max=50 --gl max=15 --prot_g min=25\n"
-            "  plan search breakfast --codes \"bf.1 and bv.4\""
+            "  plan search breakfast --codes \"bf.1 and bv.4\"\n"
+            "  plan search lunch,\"morning snack\" --history 30\n"
+            "  plan search all --codes \"mt.*\""
         ),
         "show": (
             "plan show  —  Show workspace candidates\n"
@@ -223,7 +230,7 @@ Subcommands:
   rename <from> <to>
   report <id> [--nutrients] [--verbose] [--stage]
   rm <id> <indices>
-  search <meal> [--history N] [--<nutrient> min=X max=Y] [--code/--codes <expression>]
+  search <meal>[,<meal>...]|all [--history N] [--<nutrient> min=X max=Y] [--code/--codes <expression>]
   setmult <id> <idx> <mult>
   show [<id>]
 """)
@@ -235,48 +242,74 @@ Subcommands:
     def _search(self, args: List[str]) -> None:
         """Search for meals and add to workspace."""
         if not args:
-            print("\nUsage: plan search <meal_name> [--history N] [--code/--codes <expr>] [--<nutrient> min=X max=Y]")
+            print("\nUsage: plan search <meal_name>[,<meal_name>...]|all [--history N] [--code/--codes <expr>] [--<nutrient> min=X max=Y]")
             print("\nExamples:")
             print("  plan search lunch --history 10")
             print("  plan search lunch --carbs_g max=50 --gl max=15 --prot_g min=25")
             print("  plan search dinner --history 5 --cal max=600")
             print("  plan search breakfast --codes \"bf.1 and bv.4\"")
             print("  plan search lunch --code mt.10 --cal max=500")
+            print("  plan search lunch,\"morning snack\" --history 30")
+            print("  plan search all --codes \"mt.*\"")
 
             print()
             return
         # Check if first arg is a flag (user forgot meal name)
         if args[0].startswith("--"):
             print("\nError: Missing meal name")
-            print("Usage: plan search <meal_name> [options]")
+            print("Usage: plan search <meal_name>[,<meal_name>...]|all [options]")
             print(f"\nValid meal names: {', '.join(MEAL_NAMES)}")
             print("\nExamples:")
             print("  plan search breakfast --history 90 --code bv.4")
             print("  plan search lunch --codes \"mt.10 and ve.t1\"")
             print("  plan search \"afternoon snack\" --cal max=300")
+            print("  plan search lunch,\"morning snack\" --history 30")
+            print("  plan search all --codes \"mt.*\"")
             print()
             return
-        
-        # Parse meal name (first arg)
-        meal_name = normalize_meal_name(args[0])
 
-        # Validate meal name
-        if meal_name not in MEAL_NAMES:
-            print(f"\nError: Invalid meal name '{args[0]}'")
-            print(f"Valid meal names: {', '.join(MEAL_NAMES)}")
-            print("\nExamples:")
-            print("  plan search breakfast --history 90")
-            print("  plan search lunch --code mt.10")
-            print("  plan search \"afternoon snack\" --cal max=300")
-            print()
-            return
+        # Collect meal-spec tokens: everything before the first --flag.
+        # Supports a single meal, 'all', or a comma-separated list (each
+        # name may itself be multiple words, e.g. "morning snack").
+        meal_tokens = []
+        i = 0
+        while i < len(args) and not args[i].startswith("--"):
+            meal_tokens.append(args[i])
+            i += 1
+
+        meal_spec = " ".join(meal_tokens).strip()
+
+        if meal_spec.lower() == "all":
+            target_meal_names = list(MEAL_NAMES)
+        else:
+            raw_names = [n.strip() for n in meal_spec.split(",") if n.strip()]
+            target_meal_names = []
+            invalid_names = []
+            for raw_name in raw_names:
+                normalized = normalize_meal_name(raw_name)
+                if normalized not in MEAL_NAMES:
+                    invalid_names.append(raw_name)
+                elif normalized not in target_meal_names:
+                    target_meal_names.append(normalized)
+
+            if invalid_names or not target_meal_names:
+                bad = ', '.join(invalid_names) if invalid_names else meal_spec
+                print(f"\nError: Invalid meal name(s): {bad}")
+                print(f"Valid meal names: {', '.join(MEAL_NAMES)} (or 'all')")
+                print("\nExamples:")
+                print("  plan search breakfast --history 90")
+                print("  plan search lunch --code mt.10")
+                print("  plan search \"afternoon snack\" --cal max=300")
+                print("  plan search lunch,\"morning snack\" --history 30")
+                print("  plan search all --codes \"mt.*\"")
+                print()
+                return
 
         # Parse options
         history_count = 10  # default
         constraints = {}
         code_filter = None
-        
-        i = 1
+
         while i < len(args):
             arg = args[i]
             
@@ -319,7 +352,11 @@ Subcommands:
             i += 1
         
         # Execute search
-        print(f"\n=== Searching for {meal_name} ===")
+        if meal_spec.lower() == "all":
+            search_label = "all meals"
+        else:
+            search_label = ", ".join(target_meal_names)
+        print(f"\n=== Searching for {search_label} ===")
         print(f"History: Last {history_count} days")
         if code_filter:
             print(f"Code filter: {code_filter}")
@@ -367,13 +404,13 @@ Subcommands:
             if not breakdown:
                 continue
 
-            # Look for target meal
+            # Look for target meal(s)
             for m_name, first_time, meal_totals in breakdown:
-                if m_name != meal_name:
+                if m_name not in target_meal_names:
                     continue
-                
+
                 # Extract items for this meal (in order)
-                meal_items = self._extract_meal_items_in_order(items, meal_name)
+                meal_items = self._extract_meal_items_in_order(items, m_name)
                 
                 # Check for composite meals (L.* codes)
                 has_composite = any(
@@ -397,7 +434,7 @@ Subcommands:
                 # Create candidate data
                 candidate_data = {
                     'source_date': entry_date,
-                    'meal_name': meal_name,
+                    'meal_name': m_name,
                     'original_time': first_time,
                     'items': meal_items,
                     'totals': meal_totals.to_dict(),
@@ -1970,51 +2007,73 @@ Subcommands:
         
         return sorted(indices)
     
+    def _code_term_matches(self, code: str, term: str) -> bool:
+        """
+        Check whether one meal code matches one --codes filter term.
+
+        A term containing '*' or '?' is matched as a glob pattern against
+        the whole code (fnmatch). A plain term (no wildcard) matches as a
+        prefix, same as before wildcards existed (e.g. 'mt.' matches 'MT.10').
+
+        Args:
+            code: Uppercase food code (e.g. 'MT.10')
+            term: Filter term, e.g. 'mt.10', 'mt.', 'mt.*', 'mt.1?'
+
+        Returns:
+            True if code matches term
+        """
+        term_upper = term.upper()
+        if '*' in term_upper or '?' in term_upper:
+            import fnmatch
+            return fnmatch.fnmatch(code, term_upper)
+        return code.startswith(term_upper)
+
     def _meal_matches_code_filter(self, meal_items: List[Dict], code_filter: str) -> bool:
         """
         Check if meal's codes match the boolean code filter.
-        
+
         Args:
             meal_items: List of item dicts with 'code' field
-            code_filter: Boolean expression (e.g., "bf.1 and bv.4", "mt.10 or mt.11")
-        
+            code_filter: Boolean expression (e.g., "bf.1 and bv.4", "mt.10 or mt.11",
+                         "mt.* or fr.2?")
+
         Returns:
             True if meal matches filter, False otherwise
         """
         from meal_planner.utils.search import parse_search_query
-        
+
         # Get meal's codes (uppercase, ignore multipliers for matching)
         meal_codes = {item['code'].upper() for item in meal_items if 'code' in item}
-        
+
         # Parse the code filter into clauses
         try:
             clauses = parse_search_query(code_filter)
         except Exception:
             # If parsing fails, treat as simple code check
-            simple_code = code_filter.upper().strip()
-            return any(code.startswith(simple_code) for code in meal_codes)
-        
+            simple_code = code_filter.strip()
+            return any(self._code_term_matches(code, simple_code) for code in meal_codes)
+
         if not clauses:
             return True  # Empty filter matches all
-        
+
         # Check if any clause matches (OR between clauses)
         for clause in clauses:
             # All positive terms must be present (AND within clause)
             all_pos_match = all(
-                any(code.startswith(term.upper()) for code in meal_codes)
+                any(self._code_term_matches(code, term) for code in meal_codes)
                 for term in clause['pos']
             )
-            
+
             if all_pos_match:
                 # No negative terms can be present (NOT)
                 no_neg_match = not any(
-                    any(code.startswith(term.upper()) for code in meal_codes)
+                    any(self._code_term_matches(code, term) for code in meal_codes)
                     for term in clause['neg']
                     )
-                
+
                 if no_neg_match:
                     return True
-        
+
         return False
     
     def _stage_workspace_report(self, report, ws_id: str, candidate: dict) -> None:
