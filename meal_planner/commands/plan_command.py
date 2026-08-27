@@ -30,7 +30,7 @@ class PlanCommand(Command):
         "\n"
         "Subcommands:\n"
         "  search <meal>[,<meal>...]|all [--history N] [--<nutrient> min=X max=Y] [--code/--codes <expr>]\n"
-        "  show [<id>]\n"
+        "  show [<id>|<id,id,...>|<id-id>]\n"
         "  add <id> <codes>\n"
         "  rm <ids> | rm <id> <indices>\n"
         "  move <id> <from> <to>\n"
@@ -70,8 +70,12 @@ class PlanCommand(Command):
             "plan show  —  Show workspace candidates\n"
             "\n"
             "Usage:\n"
-            "  plan show       Show all candidates\n"
-            "  plan show <id>  Show one candidate in detail"
+            "  plan show              Show all candidates (compact, grouped by meal)\n"
+            "  plan show <id>         Show one candidate in detail\n"
+            "  plan show <id,id,...>  Show several candidates in detail (comma list)\n"
+            "  plan show <id-id>      Show a numeric range of candidates in detail\n"
+            "\n"
+            "Examples: plan show 5 | plan show 1,3,7 | plan show 7-10"
         ),
         "add": (
             "plan add  —  Add codes to a candidate\n"
@@ -232,7 +236,7 @@ Subcommands:
   rm <id> <indices>
   search <meal>[,<meal>...]|all [--history N] [--<nutrient> min=X max=Y] [--code/--codes <expression>]
   setmult <id> <idx> <mult>
-  show [<id>]
+  show [<id>|<id,id,...>|<id-id>]
 """)
     
     # =========================================================================
@@ -500,8 +504,9 @@ Subcommands:
     def _show(self, args: List[str]) -> None:
         """Show workspace contents."""
         if args:
-            # Show specific candidate
-            self._show_detail(args[0])
+            # Show one or more specific candidates (comma list and/or range)
+            for candidate_id in self._parse_candidate_ids(args[0]):
+                self._show_detail(candidate_id)
         else:
             # Show all candidates
             self._show_all()
