@@ -5,8 +5,8 @@ from datetime import datetime
 import copy
 from datetime import date as date_type
 from .base import Command, register_command
-from .pending_commands import ShowCommand
 from meal_planner.parsers import CodeParser
+from meal_planner.utils.pending_display import calculate_totals, print_day_summary
 
 """
 Stash command - expanded with metadata and subcommands.
@@ -196,11 +196,10 @@ class StashCommand(Command):
         self.ctx.pending_source = "stash_pop"
         
         print("Restored from stash.")
-        
+
         # Show summary
-        from .pending_commands import ShowCommand
-        ShowCommand(self.ctx).execute("")
-    
+        print_day_summary(self.ctx)
+
     def _list(self, args: list) -> None:
         """List stashed entries (summary or detail)."""
         if not self.ctx.pending_stack:
@@ -450,11 +449,10 @@ class StashCommand(Command):
         self.ctx.pending_source = "stash_pop"
         
         print("Restored from stash.")
-        
+
         # Show summary
-        from .pending_commands import ShowCommand
-        ShowCommand(self.ctx).execute("")
-    
+        print_day_summary(self.ctx)
+
     def _drop(self, args: list) -> None:
         """Remove entry from stack without restoring."""
         if not args:
@@ -756,9 +754,7 @@ class ApplyLogCommand(Command):
         codes_str = items_to_code_string(items)
         
         # Calculate totals
-        from .pending_commands import ShowCommand
-        show_cmd = ShowCommand(self.ctx)
-        totals, missing, _ = show_cmd._calculate_totals(items)
+        totals, missing, _ = calculate_totals(self.ctx.master, items)
         
         # Update log
         success = self.ctx.log.update_date(query_date, codes_str, totals)

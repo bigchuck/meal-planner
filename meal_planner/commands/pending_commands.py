@@ -5,6 +5,7 @@ from datetime import date
 from .base import Command, register_command
 from meal_planner.parsers import CodeParser
 from meal_planner.models import MealItem, DailyTotals
+from meal_planner.utils.pending_display import calculate_totals, print_day_summary
 
 
 @register_command
@@ -122,103 +123,8 @@ class AddCommand(Command):
             print("THANKS FOR ALL THE FISH!!!")
         
         # Show updated totals
-        ShowCommand(self.ctx).execute("")
+        print_day_summary(self.ctx)
 
-
-@register_command
-class ShowCommand(Command):
-    """Show current pending day totals."""
-    
-    name = "show"
-    help_text = "Show current pending day totals"
-    
-    def execute(self, args: str) -> None:
-        """Display pending day with totals."""
-        try:
-            pending = self.ctx.pending_mgr.load()
-        except Exception as e:
-            print(f"\n(No active day. Use 'start' to begin.)\n")
-            return
-        
-        if pending is None or not pending.get("items"):
-            print("\n(No active day. Use 'start' to begin.)\n")
-            return
-        
-        items = pending.get("items", [])
-        totals, missing, code_strs = self._calculate_totals(items)
-        
-        print("\n--- Current Day ---")
-        print(f"Date: {pending.get('date')}")
-        print(f"Codes: {', '.join(code_strs) if code_strs else '(none)'}")
-        print(f"Calories: {int(round(totals['cal']))}")
-        print(f"Protein: {int(round(totals['prot_g']))} g")
-        print(f"Carbs: {int(round(totals['carbs_g']))} g")
-        print(f"Fat: {int(round(totals['fat_g']))} g")
-        print(f"Sugars: {int(round(totals['sugar_g']))} g")
-        print(f"GL: {int(round(totals['gl']))}")
-        
-        if missing:
-            print(f"Missing codes (not included): {', '.join(missing)}")
-        
-        print("--------------------\n")
-    
-    def _calculate_totals(self, items: list):
-        """
-        Calculate totals from items list.
-        
-        Args:
-            items: List of item dicts
-        
-        Returns:
-            Tuple of (totals_dict, missing_codes, code_strings)
-        """
-        totals = {
-            "cal": 0.0, "prot_g": 0.0, "carbs_g": 0.0,
-            "fat_g": 0.0, "sugar_g": 0.0, "gl": 0.0
-        }
-        missing = []
-        code_strs = []
-        
-        for item in items:
-            # Time marker
-            if "time" in item and item.get("time"):
-                time_str = f"@{item['time']}"
-                meal_override = item.get("meal_override")
-                if meal_override:
-                    time_str += f" ({meal_override})"
-                code_strs.append(time_str)
-                continue
-            
-            # Code item
-            if "code" not in item:
-                continue
-            
-            code = str(item["code"]).upper()
-            mult = float(item.get("mult", 1.0))
-            
-            # Look up in master
-            nutrients = self.ctx.master.get_nutrient_totals(code, mult)
-            
-            if nutrients is None:
-                missing.append(code)
-                continue
-            
-            # Accumulate
-            for key in totals.keys():
-                totals[key] += nutrients.get(key, 0.0)
-            
-            # Format code string
-            if mult < 0:
-                amag = abs(mult)
-                code_strs.append(
-                    f"-{code}" if abs(amag - 1.0) < 1e-9 else f"-{code} x{amag:g}"
-                )
-            else:
-                code_strs.append(
-                    f"{code} x{mult:g}" if abs(mult - 1.0) > 1e-9 else code
-                )
-        
-        return totals, missing, code_strs
 
 @register_command
 class CloseCommand(Command):
@@ -246,12 +152,11 @@ class CloseCommand(Command):
         
         items = pending.get("items", [])
         
-        # Calculate totals using ShowCommand's helper
-        show_cmd = ShowCommand(self.ctx)
-        totals, missing, code_strs = show_cmd._calculate_totals(items)
-        
+        # Calculate totals
+        totals, missing, code_strs = calculate_totals(self.ctx.master, items)
+
         # Show what we're saving
-        show_cmd.execute("")
+        print_day_summary(self.ctx)
         
         # Create log entry
         entry = {

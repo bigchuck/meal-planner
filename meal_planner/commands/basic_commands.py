@@ -1,5 +1,5 @@
 """
-Basic commands: help, quit, reload, status.
+Basic commands: help, quit, reload.
 """
 from .base import Command, register_command, get_registry
 
@@ -123,21 +123,3 @@ class ReloadCommand(Command):
             print(f"Reloaded: {', '.join(reloaded)}")
         else:
             print("No files reloaded")
-
-@register_command
-class StatusCommand(Command):
-    """Show current pending status."""
-    
-    name = "status"
-    help_text = "Show current pending day status"
-    
-    def execute(self, args: str) -> None:
-        """Display pending status."""
-        pending = self.ctx.pending_mgr.load()
-        
-        if pending is None:
-            print("No pending day.")
-        else:
-            date = pending.get("date", "unknown")
-            items = pending.get("items", [])
-            print(f"Pending day: {date} with {len(items)} item(s).")

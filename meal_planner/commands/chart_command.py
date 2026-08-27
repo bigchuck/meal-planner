@@ -161,9 +161,8 @@ class ChartCommand(Command):
             return None
         
         # Calculate totals
-        from .pending_commands import ShowCommand
-        show_cmd = ShowCommand(self.ctx)
-        totals, _, code_strs = show_cmd._calculate_totals(pending["items"])
+        from meal_planner.utils.pending_display import calculate_totals
+        totals, _, code_strs = calculate_totals(self.ctx.master, pending["items"])
         
         # Build DataFrame
         import pandas as pd
