@@ -42,6 +42,7 @@ class FindCommand(Command):
         "  --limit N               Return only the first N results\n"
         "  --skip N                Skip the first N results\n"
         "  --available             Restrict to items currently in inventory\n"
+        "  --date                  Show the date each item was added to the database\n"
         "\n"
         "Examples:\n"
         "  f chicken                         Items matching 'chicken'\n"
@@ -51,8 +52,9 @@ class FindCommand(Command):
         "  f --recipe cumin                  Any item whose recipe contains cumin\n"
         "  f salmon --pair broccoli          Salmon items tagged as pairing with broccoli\n"
         "  f --profile \"med*\" --limit 10     Mediterranean-profile items, first 10\n"
-        "  f sa. --list-affinity pair        Show all unique pair values for SA items"
-    )    
+        "  f sa. --list-affinity pair        Show all unique pair values for SA items\n"
+        "  f sa. --date                      SA items, showing date added"
+    )
 
     def execute(self, args: str) -> None:
         """
@@ -62,8 +64,9 @@ class FindCommand(Command):
             args: Search term with optional flags:
                 --recipe <ingredient query>
                 --limit N: Show only N results
-                --skip N: Skip first N results  
+                --skip N: Skip first N results
                 --available: Filter to items in inventory (batch items only)
+                --date: Show the date each item was added to the database
         Examples:
             f sa.                              All SA-section items
             f sa. --recipe "dill or tahini"   SA items whose recipe contains dill or tahini
@@ -71,7 +74,7 @@ class FindCommand(Command):
             f --recipe cumin                  Any item whose recipe contains cumin
         """
         if not args.strip():
-            print("Usage: find <search term> [--recipe <ingredient query>] [--limit N] [--skip N] [--available]")
+            print("Usage: find <search term> [--recipe <ingredient query>] [--limit N] [--skip N] [--available] [--date]")
             return
         
         # Parse flags
@@ -84,6 +87,7 @@ class FindCommand(Command):
         limit = None
         skip = 0
         available_only = False
+        show_date = False
         recipe_query = None
         pair_query = None
         best_with_query = None
@@ -116,6 +120,9 @@ class FindCommand(Command):
                     return
             elif parts[i] == "--available":
                 available_only = True
+                i += 1
+            elif parts[i] == "--date":
+                show_date = True
                 i += 1
             elif parts[i] == "--recipe":
                 # Collect all following tokens until the next '--' flag
@@ -161,7 +168,7 @@ class FindCommand(Command):
         if not query_parts and not any([recipe_query, pair_query, best_with_query, avoid_query, profile_query]):
             print("Usage: find <search term> [--recipe <query>] [--pair <item>] "
                   "[--best-with <item>] [--avoid <item>] [--profile <tag>] "
-                  "[--limit N] [--skip N] [--available]")
+                  "[--limit N] [--skip N] [--available] [--date]")
             return
 
         if query_parts:
@@ -297,28 +304,29 @@ class FindCommand(Command):
         print()
 
         if not results.empty:
-            print(self._format_results(results))
+            print(self._format_results(results, show_date=show_date))
 
         if alias_results:
             print(self._format_alias_results(alias_results))
 
         print()
 
-    def _format_results(self, df) -> str:
+    def _format_results(self, df, show_date: bool = False) -> str:
         """
         Format search results for display.
-        
+
         Args:
             df: DataFrame of results
-        
+            show_date: If True, prefix each line with the item's date_added
+
         Returns:
             Formatted string
         """
         if df.empty:
             return "(no matches)"
-        
+
         cols = ColumnResolver(df)
-        
+
         lines = []
         for _, row in df.iterrows():
             code = str(row[cols.code])
@@ -328,26 +336,31 @@ class FindCommand(Command):
             prot = row[cols.prot_g]
             carb = row[cols.carbs_g]
             fat = row[cols.fat_g]
-            
+
             # Build nutrition string
             nutr_parts = [f"cal={cal}", f"P={prot}", f"C={carb}", f"F={fat}"]
-            
+
             # Add GI/GL if present
             if cols.gi and row[cols.gi] == row[cols.gi]:  # not NaN
                 nutr_parts.append(f"GI={int(row[cols.gi])}")
             if cols.gl and row[cols.gl] == row[cols.gl]:
                 nutr_parts.append(f"GL={int(row[cols.gl])}")
-            
+
             # Add sugar if present
             if cols.sugar_g and row[cols.sugar_g] == row[cols.sugar_g]:
                 nutr_parts.append(f"Sugars={int(row[cols.sugar_g])}")
-            
+
             nutr_str = " ".join(nutr_parts)
-            
+
+            prefix = ""
+            if show_date:
+                date_added = str(row[cols.date_added]) if cols.date_added else ""
+                prefix = f"{date_added or 'unknown':<10} | "
+
             lines.append(
-                f"  {code:>8} | {section:<7} | {option} [{nutr_str}]"
+                f"  {prefix}{code:>8} | {section:<7} | {option} [{nutr_str}]"
             )
-        
+
         return "\n".join(lines)
     
     def _format_alias_results(self, results: List[tuple]) -> str:

@@ -176,6 +176,13 @@ class ColumnResolver:
     def codes(self) -> str:
         """Codes column name."""
         return self._resolve("codes", "codes")
+
+    @property
+    def date_added(self) -> Optional[str]:
+        """Date-added column name (may be None if not found)."""
+        if "date_added" not in self._cache:
+            self._cache["date_added"] = get_column(self.df, "date_added")
+        return self._cache["date_added"]
     
     def as_dict(self) -> dict:
         """
