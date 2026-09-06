@@ -212,9 +212,12 @@ class FindCommand(Command):
                 results, 'profile', profile_query, pattern=is_pattern
             )
         
-        # Also search aliases if available
+        # Also search aliases if available. Aliases have no recipe or
+        # affinity data of their own, so skip them when such a filter is
+        # active rather than letting them leak into filtered results.
         alias_results = []
-        if self.ctx.aliases:
+        has_content_filter = any([recipe_query, pair_query, best_with_query, avoid_query, profile_query])
+        if self.ctx.aliases and not has_content_filter:
             alias_results = self.ctx.aliases.search(query)
 
         # Filter for inventory if requested
