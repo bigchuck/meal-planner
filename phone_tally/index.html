@@ -392,32 +392,7 @@
     printLine("  total [<date>]                        show running total (default: active)");
     printLine("  f <query>                            search foods (supports AND/OR/NOT, \"phrase\", fr. prefix)");
     printLine("  export [<date>]                      show a log-format row to copy/paste");
-    printLine("  refresh                               re-fetch index.html/master.json from the network");
     printLine("  help                                  this list");
-  }
-
-  function cmd_refresh() {
-    if (!("serviceWorker" in navigator)) {
-      printLine("Service workers aren't supported here — nothing to refresh.", "err");
-      return;
-    }
-    navigator.serviceWorker.getRegistration().then((reg) => {
-      const controller = navigator.serviceWorker.controller;
-      if (!reg || !controller) {
-        printLine("No offline cache active yet — just reload the page normally to pick up changes.", "dim");
-        return;
-      }
-      printLine("Fetching fresh copies from the network...", "dim");
-      controller.postMessage("refresh");
-      const onMessage = (ev) => {
-        if (ev.data === "refresh-done") {
-          navigator.serviceWorker.removeEventListener("message", onMessage);
-          printLine("Refreshed. Reloading...", "dim");
-          setTimeout(() => location.reload(), 300);
-        }
-      };
-      navigator.serviceWorker.addEventListener("message", onMessage);
-    });
   }
 
   function cmd_start(args) {
@@ -884,7 +859,6 @@
       case "total": cmd_total(rest); break;
       case "f": cmd_search(rest); break;
       case "export": cmd_export(rest); break;
-      case "refresh": cmd_refresh(); break;
       case "help": cmd_help(); break;
       default: printLine(`Unknown command: ${cmdName} (try "help")`, "err");
     }
@@ -902,12 +876,6 @@
   printLine("Meal Tally — type 'help' for commands.", "dim");
   refreshHeader();
   loadMaster().then(refreshHeader);
-
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js")
-      .then(() => printLine("Offline cache ready (type 'refresh' to update it).", "dim"))
-      .catch(() => printLine("Offline caching unavailable in this browser.", "dim"));
-  }
 })();
 </script>
 </body>
