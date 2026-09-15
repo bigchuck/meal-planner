@@ -373,6 +373,7 @@
     printLine("  f <query>                            search foods (supports AND/OR/NOT, \"phrase\", fr. prefix)");
     printLine("  export [<date>]                      show a log-format row to copy/paste");
     printLine("  help                                  this list");
+    printLine("  u / d                                 recall previous/next command (no submit)");
   }
 
   function cmd_start(args) {
@@ -891,28 +892,38 @@
     draft = "";
   }
 
-  cmdInput.addEventListener("keydown", (ev) => {
-    if (ev.key === "ArrowUp") {
+  // direction: -1 = back to older commands, +1 = forward toward the draft
+  function navigateHistory(direction) {
+    if (direction < 0) {
       if (historyPos === history.length) draft = cmdInput.value;
-      if (historyPos > 0) {
-        historyPos--;
-        cmdInput.value = history[historyPos];
-        requestAnimationFrame(() => cmdInput.setSelectionRange(cmdInput.value.length, cmdInput.value.length));
-      }
-      ev.preventDefault();
-    } else if (ev.key === "ArrowDown") {
-      if (historyPos < history.length) {
-        historyPos++;
-        cmdInput.value = historyPos === history.length ? draft : history[historyPos];
-        requestAnimationFrame(() => cmdInput.setSelectionRange(cmdInput.value.length, cmdInput.value.length));
-      }
-      ev.preventDefault();
+      if (historyPos > 0) historyPos--;
+    } else {
+      if (historyPos >= history.length) return;
+      historyPos++;
     }
+    cmdInput.value = historyPos === history.length ? draft : history[historyPos];
+    cmdInput.focus();
+    requestAnimationFrame(() => cmdInput.setSelectionRange(cmdInput.value.length, cmdInput.value.length));
+  }
+
+  cmdInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowUp") { navigateHistory(-1); ev.preventDefault(); }
+    else if (ev.key === "ArrowDown") { navigateHistory(1); ev.preventDefault(); }
   });
 
   document.getElementById("inputRow").addEventListener("submit", (ev) => {
     ev.preventDefault();
     const line = cmdInput.value;
+    const trimmedLower = line.trim().toLowerCase();
+
+    // "u"/"d" recall history without submitting, for keyboards with no arrow
+    // keys (i.e. every phone on-screen keyboard) - type it, hit Go, edit
+    // the recalled line if you like, then hit Go again to actually run it.
+    if (trimmedLower === "u" || trimmedLower === "d") {
+      navigateHistory(trimmedLower === "u" ? -1 : 1);
+      return;
+    }
+
     cmdInput.value = "";
     if (line.trim()) pushHistory(line);
     dispatch(line);
