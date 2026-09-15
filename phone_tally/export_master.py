@@ -22,7 +22,7 @@ OUTPUT_PATH = Path(__file__).parent / "master.json"
 
 EXPORT_COLUMNS = [
     "code", "section", "option",
-    "cal", "prot_g", "carbs_g", "fat_g", "sugar_g", "GL",
+    "cal", "prot_g", "carbs_g", "fat_g", "GI", "GL", "sugar_g",
     "fiber_g", "sodium_mg", "potassium_mg", "vitA_mcg", "vitC_mg", "iron_mg",
 ]
 

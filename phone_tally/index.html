@@ -79,9 +79,6 @@
   .line.cmd { color: var(--accent); }
   .line.err { color: var(--err); }
   .line.dim { color: var(--dim); }
-  table.results { border-collapse: collapse; width: 100%; margin: 4px 0; }
-  table.results td { padding: 1px 6px 1px 0; vertical-align: top; }
-  table.results td.code { color: var(--accent); white-space: nowrap; }
   input.copyline {
     display: block;
     width: 100%;
@@ -180,23 +177,6 @@
     div.className = "line" + (cls ? " " + cls : "");
     div.textContent = text;
     scrollback.appendChild(div);
-    scrollback.scrollTop = scrollback.scrollHeight;
-  }
-
-  function printTable(rows) {
-    const table = document.createElement("table");
-    table.className = "results";
-    for (const r of rows) {
-      const tr = document.createElement("tr");
-      for (let i = 0; i < r.length; i++) {
-        const td = document.createElement("td");
-        if (i === 0) td.className = "code";
-        td.textContent = r[i];
-        tr.appendChild(td);
-      }
-      table.appendChild(tr);
-    }
-    scrollback.appendChild(table);
     scrollback.scrollTop = scrollback.scrollHeight;
   }
 
@@ -623,11 +603,23 @@
       return;
     }
     const capped = results.slice(0, 40);
-    printTable(capped.map(r => [r.code, r.section || "", r.option || "",
-      `${Math.round(Number(r.cal) || 0)}cal`]));
+    for (const r of capped) {
+      printLine(formatSearchResultLine(r));
+    }
     if (results.length > capped.length) {
       printLine(`... and ${results.length - capped.length} more. Refine your search.`, "dim");
     }
+  }
+
+  // Matches the desktop search command's line format (search_command.py):
+  // "  CODE | Section | Option [cal=X P=X C=X F=X GI=X GL=X Sugars=X]"
+  function formatSearchResultLine(r) {
+    const n = (v) => Math.round(Number(v) || 0);
+    const nutr = [
+      `cal=${n(r.cal)}`, `P=${n(r.prot_g)}`, `C=${n(r.carbs_g)}`, `F=${n(r.fat_g)}`,
+      `GI=${n(r.GI)}`, `GL=${n(r.GL)}`, `Sugars=${n(r.sugar_g)}`,
+    ].join(" ");
+    return `  ${r.code} | ${r.section || ""} | ${r.option || ""} [${nutr}]`;
   }
 
   // ---------- search (port of hybrid_search boolean/DNF logic) ----------
@@ -864,10 +856,65 @@
     }
   }
 
+  // ---------- command history (like a shell: Up/Down recall, freely editable) ----------
+
+  const HISTORY_KEY = "mealtally_history_v1";
+  const HISTORY_MAX = 200;
+  let history = loadHistory();
+  let historyPos = history.length; // one past the newest entry = "not browsing"
+  let draft = "";
+
+  function loadHistory() {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveHistory() {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+    } catch (e) {
+      // non-fatal; history just won't persist across reloads
+    }
+  }
+
+  function pushHistory(line) {
+    if (history[history.length - 1] !== line) {
+      history.push(line);
+      if (history.length > HISTORY_MAX) history.shift();
+      saveHistory();
+    }
+    historyPos = history.length;
+    draft = "";
+  }
+
+  cmdInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowUp") {
+      if (historyPos === history.length) draft = cmdInput.value;
+      if (historyPos > 0) {
+        historyPos--;
+        cmdInput.value = history[historyPos];
+        requestAnimationFrame(() => cmdInput.setSelectionRange(cmdInput.value.length, cmdInput.value.length));
+      }
+      ev.preventDefault();
+    } else if (ev.key === "ArrowDown") {
+      if (historyPos < history.length) {
+        historyPos++;
+        cmdInput.value = historyPos === history.length ? draft : history[historyPos];
+        requestAnimationFrame(() => cmdInput.setSelectionRange(cmdInput.value.length, cmdInput.value.length));
+      }
+      ev.preventDefault();
+    }
+  });
+
   document.getElementById("inputRow").addEventListener("submit", (ev) => {
     ev.preventDefault();
     const line = cmdInput.value;
     cmdInput.value = "";
+    if (line.trim()) pushHistory(line);
     dispatch(line);
   });
 
