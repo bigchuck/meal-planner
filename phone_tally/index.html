@@ -82,6 +82,17 @@
   table.results { border-collapse: collapse; width: 100%; margin: 4px 0; }
   table.results td { padding: 1px 6px 1px 0; vertical-align: top; }
   table.results td.code { color: var(--accent); white-space: nowrap; }
+  input.copyline {
+    display: block;
+    width: 100%;
+    font: inherit;
+    color: var(--fg);
+    background: var(--input-bg);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 6px 8px;
+    margin: 4px 0;
+  }
   form#inputRow {
     display: flex;
     gap: 8px;
@@ -274,6 +285,20 @@
 
   function trimNum(n) {
     return Number(n.toFixed(6)).toString();
+  }
+
+  // Human-readable form for `items`/`rm` output: code entries get their
+  // master-data description appended, matching the desktop app's
+  // abbreviated report format ("CODE xMULT - Description"). Never used for
+  // export — that needs the bare code string the log format expects.
+  function formatEntryDisplay(e) {
+    if (isCodeEntry(e)) {
+      const codePart = formatEntry(e);
+      const row = master ? master.get(e.code) : null;
+      const option = row ? row.option : null;
+      return option ? `${codePart} - ${option}` : `${codePart} (unknown code)`;
+    }
+    return formatEntry(e);
   }
 
   // ---------- multiplier expression (matches desktop's */ chain) ----------
@@ -502,7 +527,7 @@
     }
     const removed = log.splice(n - 1, 1)[0];
     saveLog();
-    printLine(`Removed #${n}: ${formatEntry(removed)}`, "dim");
+    printLine(`Removed #${n}: ${formatEntryDisplay(removed)}`, "dim");
     refreshHeader();
   }
 
@@ -545,7 +570,7 @@
       printLine("  (no entries)", "dim");
     }
     for (let i = start; i < end; i++) {
-      printLine(`#${i + 1}  ${formatEntry(log[i])}`);
+      printLine(`#${i + 1}  ${formatEntryDisplay(log[i])}`);
     }
     printLine(formatTotalsSummary(totalsForSegment(dateIdx)), "dim");
   }
@@ -576,17 +601,34 @@
     const codes = parts.join(", ");
     const row = `${log[dateIdx].date},"${codes}",,,,,,,`;
     printLine("Log row (paste after backing up the log file first):");
-    printLine(row);
+    printSelectable(row);
     tryCopyToClipboard(row);
+  }
+
+  // Renders text in a readonly, pre-selected input so it can be copied via
+  // long-press -> Select All -> Copy even when the Clipboard API is
+  // unavailable (it requires a secure/HTTPS context, which plain S3
+  // website hosting doesn't provide).
+  function printSelectable(text) {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.readOnly = true;
+    input.className = "copyline";
+    input.value = text;
+    scrollback.appendChild(input);
+    scrollback.scrollTop = scrollback.scrollHeight;
+    input.focus();
+    input.select();
+    input.setSelectionRange(0, text.length);
   }
 
   function tryCopyToClipboard(text) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text)
         .then(() => printLine("Copied to clipboard.", "dim"))
-        .catch(() => printLine("Could not copy automatically — select and copy the line above.", "dim"));
+        .catch(() => printLine("Could not copy automatically — the line above is selected, just copy it.", "dim"));
     } else {
-      printLine("Clipboard API unavailable — select and copy the line above.", "dim");
+      printLine("Clipboard API unavailable (needs HTTPS) — the line above is selected, just copy it.", "dim");
     }
   }
 
