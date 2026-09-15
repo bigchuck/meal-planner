@@ -1,0 +1,872 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Meal Tally</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f5f2;
+    --fg: #1c1c1c;
+    --dim: #6b6b6b;
+    --line: #d8d8d2;
+    --accent: #2b6cb0;
+    --err: #b0302b;
+    --input-bg: #ffffff;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17181a;
+      --fg: #e8e8e6;
+      --dim: #9a9a9a;
+      --line: #333436;
+      --accent: #6fa8dc;
+      --err: #e07a76;
+      --input-bg: #232426;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17181a;
+    --fg: #e8e8e6;
+    --dim: #9a9a9a;
+    --line: #333436;
+    --accent: #6fa8dc;
+    --err: #e07a76;
+    --input-bg: #232426;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.4 ui-monospace, "SF Mono", Consolas, monospace;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overscroll-behavior: none;
+  }
+  header {
+    padding: 10px 12px calc(8px + env(safe-area-inset-top, 0px));
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+  header .title-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  header .active-date {
+    color: var(--dim);
+    font-size: 12px;
+  }
+  header .totals {
+    margin-top: 4px;
+    font-size: 13px;
+  }
+  header .totals b { color: var(--accent); }
+  #scrollback {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 12px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .line { white-space: pre-wrap; word-break: break-word; margin: 2px 0; }
+  .line.cmd { color: var(--accent); }
+  .line.err { color: var(--err); }
+  .line.dim { color: var(--dim); }
+  table.results { border-collapse: collapse; width: 100%; margin: 4px 0; }
+  table.results td { padding: 1px 6px 1px 0; vertical-align: top; }
+  table.results td.code { color: var(--accent); white-space: nowrap; }
+  form#inputRow {
+    display: flex;
+    gap: 8px;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+  #cmd {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    color: var(--fg);
+    background: var(--input-bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+  #cmd:focus { outline: 2px solid var(--accent); }
+  button {
+    font: inherit;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 14px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="title-row">
+    <strong>Meal Tally</strong>
+    <span class="active-date" id="activeDateLabel">no date started</span>
+  </div>
+  <div class="totals" id="totalsLine">Cal: 0 | P: 0g | C: 0g | F: 0g | Sugars: 0g | GL: 0</div>
+</header>
+<div id="scrollback"></div>
+<form id="inputRow">
+  <input id="cmd" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="add, f, items, help ..." />
+  <button type="submit">Go</button>
+</form>
+
+<script>
+(() => {
+  "use strict";
+
+  const STORAGE_KEY = "mealtally_log_v1";
+  const MEAL_NAMES = ["BREAKFAST", "MORNING SNACK", "LUNCH", "AFTERNOON SNACK", "DINNER", "EVENING SNACK"];
+  const CODE_RE = /^[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z0-9]+)+$/;
+  const NUTRIENT_KEYS = ["cal", "prot_g", "carbs_g", "fat_g", "sugar_g", "gl",
+    "fiber_g", "sodium_mg", "potassium_mg", "vitA_mcg", "vitC_mg", "iron_mg"];
+
+  const scrollback = document.getElementById("scrollback");
+  const cmdInput = document.getElementById("cmd");
+  const totalsLine = document.getElementById("totalsLine");
+  const activeDateLabel = document.getElementById("activeDateLabel");
+
+  let master = null;       // Map<code, row>
+  let masterList = [];      // array of rows, for search
+  let log = loadLog();
+
+  // ---------- persistence ----------
+
+  function loadLog() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveLog() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(log));
+    } catch (e) {
+      printLine("Warning: could not save to localStorage (" + e.message + ")", "err");
+    }
+  }
+
+  // ---------- output ----------
+
+  function printLine(text, cls) {
+    const div = document.createElement("div");
+    div.className = "line" + (cls ? " " + cls : "");
+    div.textContent = text;
+    scrollback.appendChild(div);
+    scrollback.scrollTop = scrollback.scrollHeight;
+  }
+
+  function printTable(rows) {
+    const table = document.createElement("table");
+    table.className = "results";
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      for (let i = 0; i < r.length; i++) {
+        const td = document.createElement("td");
+        if (i === 0) td.className = "code";
+        td.textContent = r[i];
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    scrollback.appendChild(table);
+    scrollback.scrollTop = scrollback.scrollHeight;
+  }
+
+  // ---------- master data ----------
+
+  async function loadMaster() {
+    try {
+      const res = await fetch("master.json", { cache: "no-store" });
+      if (!res.ok) throw new Error(res.status + " " + res.statusText);
+      masterList = await res.json();
+      master = new Map();
+      for (const row of masterList) {
+        master.set(String(row.code).toUpperCase(), row);
+      }
+      printLine(`Loaded ${masterList.length} codes from master.json.`, "dim");
+    } catch (e) {
+      printLine("Could not load master.json: " + e.message, "err");
+      printLine("Search and code validation won't work until this is fixed.", "err");
+    }
+  }
+
+  // ---------- entry helpers ----------
+
+  function isDateEntry(e) { return e.type === "date"; }
+  function isTimeEntry(e) { return e.type === "time"; }
+  function isCodeEntry(e) { return e.type === "code"; }
+
+  function todayStr() {
+    const d = new Date();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${d.getFullYear()}-${m}-${day}`;
+  }
+
+  function isValidDateStr(s) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(s);
+  }
+
+  // Ensures the log has at least one date entry; silently prepends
+  // start(today) if the log is empty or has no date entry yet.
+  function ensureDateAnchor() {
+    if (!log.some(isDateEntry)) {
+      log.push({ type: "date", date: todayStr(), ts: Date.now() });
+    }
+  }
+
+  function activeDateIndex() {
+    for (let i = log.length - 1; i >= 0; i--) {
+      if (isDateEntry(log[i])) return i;
+    }
+    return -1;
+  }
+
+  function findDateIndex(dateStr) {
+    for (let i = 0; i < log.length; i++) {
+      if (isDateEntry(log[i]) && log[i].date === dateStr) return i;
+    }
+    return -1;
+  }
+
+  // Segment = [startIndex, endIndex) of entries belonging to the date
+  // entry at dateIdx (endIndex is the next date entry, or log.length).
+  function segmentBounds(dateIdx) {
+    const start = dateIdx + 1;
+    let end = log.length;
+    for (let i = start; i < log.length; i++) {
+      if (isDateEntry(log[i])) { end = i; break; }
+    }
+    return [start, end];
+  }
+
+  function formatEntry(e) {
+    if (isDateEntry(e)) return `=== ${e.date} ===`;
+    if (isTimeEntry(e)) return e.meal ? `@${e.time} (${e.meal})` : `@${e.time}`;
+    if (isCodeEntry(e)) {
+      const m = e.mult;
+      if (Math.abs(m - 1.0) < 1e-9) return e.code;
+      if (m < 0) {
+        const amag = Math.abs(m);
+        return Math.abs(amag - 1.0) < 1e-9 ? `-${e.code}` : `-${e.code} x${trimNum(amag)}`;
+      }
+      return `${e.code} x${trimNum(m)}`;
+    }
+    return "?";
+  }
+
+  function trimNum(n) {
+    return Number(n.toFixed(6)).toString();
+  }
+
+  // ---------- multiplier expression (matches desktop's */ chain) ----------
+
+  function evalMultiplierExpression(expr) {
+    if (!expr) return 1.0;
+    const s = expr.trim();
+    const nums = s.split(/[*/]/);
+    const ops = s.match(/[*/]/g) || [];
+    try {
+      const toFloat = (x) => {
+        x = x.trim();
+        if (x.startsWith(".")) x = "0" + x;
+        return parseFloat(x);
+      };
+      let val = toFloat(nums[0]);
+      for (let i = 0; i < ops.length; i++) {
+        const rhs = toFloat(nums[i + 1]);
+        if (ops[i] === "*") val *= rhs;
+        else val = rhs !== 0 ? val / rhs : 0.0;
+      }
+      if (Number.isNaN(val)) return 1.0;
+      return val;
+    } catch (e) {
+      return 1.0;
+    }
+  }
+
+  // ---------- totals ----------
+
+  function zeroTotals() {
+    const t = {};
+    for (const k of NUTRIENT_KEYS) t[k] = 0;
+    return t;
+  }
+
+  function addRowToTotals(totals, row, mult) {
+    totals.cal += (Number(row.cal) || 0) * mult;
+    totals.prot_g += (Number(row.prot_g) || 0) * mult;
+    totals.carbs_g += (Number(row.carbs_g) || 0) * mult;
+    totals.fat_g += (Number(row.fat_g) || 0) * mult;
+    totals.sugar_g += (Number(row.sugar_g) || 0) * mult;
+    totals.gl += (Number(row.GL) || 0) * mult;
+    totals.fiber_g += (Number(row.fiber_g) || 0) * mult;
+    totals.sodium_mg += (Number(row.sodium_mg) || 0) * mult;
+    totals.potassium_mg += (Number(row.potassium_mg) || 0) * mult;
+    totals.vitA_mcg += (Number(row.vitA_mcg) || 0) * mult;
+    totals.vitC_mg += (Number(row.vitC_mg) || 0) * mult;
+    totals.iron_mg += (Number(row.iron_mg) || 0) * mult;
+  }
+
+  function totalsForSegment(dateIdx) {
+    const totals = zeroTotals();
+    if (dateIdx < 0) return totals;
+    const [start, end] = segmentBounds(dateIdx);
+    for (let i = start; i < end; i++) {
+      const e = log[i];
+      if (!isCodeEntry(e)) continue;
+      const row = master ? master.get(e.code) : null;
+      if (row) addRowToTotals(totals, row, e.mult);
+    }
+    return totals;
+  }
+
+  function formatTotalsSummary(t) {
+    const r = (v) => Math.round(v);
+    return `Cal: ${r(t.cal)} | P: ${r(t.prot_g)}g | C: ${r(t.carbs_g)}g | F: ${r(t.fat_g)}g | Sugars: ${r(t.sugar_g)}g | GL: ${r(t.gl)}`;
+  }
+
+  function refreshHeader() {
+    const dateIdx = activeDateIndex();
+    if (dateIdx < 0) {
+      activeDateLabel.textContent = "no date started";
+      totalsLine.textContent = formatTotalsSummary(zeroTotals());
+      return;
+    }
+    activeDateLabel.textContent = log[dateIdx].date;
+    totalsLine.textContent = formatTotalsSummary(totalsForSegment(dateIdx));
+  }
+
+  // ---------- commands ----------
+
+  function cmd_help() {
+    printLine("Commands:");
+    printLine("  add <code>[ x<mult>][, <code>...]   add food entries");
+    printLine("  add <time>[ <meal>]                 add a time marker, e.g. add 11:30 dinner");
+    printLine("  start [<date>]                      begin a new date (default: today)");
+    printLine("  items [<date>]                       list entries for a date (default: active)");
+    printLine("  rm <n>                               remove entry n");
+    printLine("  move <n> <newline>                   reposition entry n to index newline");
+    printLine("  total [<date>]                        show running total (default: active)");
+    printLine("  f <query>                            search foods (supports AND/OR/NOT, \"phrase\", fr. prefix)");
+    printLine("  export [<date>]                      show a log-format row to copy/paste");
+    printLine("  refresh                               re-fetch index.html/master.json from the network");
+    printLine("  help                                  this list");
+  }
+
+  function cmd_refresh() {
+    if (!("serviceWorker" in navigator)) {
+      printLine("Service workers aren't supported here — nothing to refresh.", "err");
+      return;
+    }
+    navigator.serviceWorker.getRegistration().then((reg) => {
+      const controller = navigator.serviceWorker.controller;
+      if (!reg || !controller) {
+        printLine("No offline cache active yet — just reload the page normally to pick up changes.", "dim");
+        return;
+      }
+      printLine("Fetching fresh copies from the network...", "dim");
+      controller.postMessage("refresh");
+      const onMessage = (ev) => {
+        if (ev.data === "refresh-done") {
+          navigator.serviceWorker.removeEventListener("message", onMessage);
+          printLine("Refreshed. Reloading...", "dim");
+          setTimeout(() => location.reload(), 300);
+        }
+      };
+      navigator.serviceWorker.addEventListener("message", onMessage);
+    });
+  }
+
+  function cmd_start(args) {
+    const dateStr = args.trim() || todayStr();
+    if (!isValidDateStr(dateStr)) {
+      printLine(`Invalid date: ${dateStr} (expected YYYY-MM-DD)`, "err");
+      return;
+    }
+    log.push({ type: "date", date: dateStr, ts: Date.now() });
+    saveLog();
+    printLine(`Started ${dateStr}.`, "dim");
+    refreshHeader();
+  }
+
+  // Whole-args form: "add 11:30" or "add 11:30 dinner"
+  const TIME_ADD_RE = /^(\d{1,2}(?::\d{2})?)(?:\s+(.+))?$/;
+
+  function cmd_add(args) {
+    const trimmed = args.trim();
+    if (!trimmed) {
+      printLine("Usage: add <code>[ x<mult>][, ...]  or  add <time>[ <meal>]", "err");
+      return;
+    }
+
+    const timeMatch = TIME_ADD_RE.exec(trimmed);
+    if (timeMatch && !trimmed.includes(",") && !CODE_RE.test(trimmed.split(/\s+/)[0])) {
+      addTimeEntry(timeMatch[1], timeMatch[2]);
+      return;
+    }
+
+    addCodeEntries(trimmed);
+  }
+
+  function addTimeEntry(timeRaw, mealRaw) {
+    let h, m;
+    if (timeRaw.includes(":")) {
+      [h, m] = timeRaw.split(":").map(Number);
+    } else {
+      h = Number(timeRaw); m = 0;
+    }
+    if (!(h >= 0 && h <= 23 && m >= 0 && m <= 59)) {
+      printLine(`Invalid time: ${timeRaw}`, "err");
+      return;
+    }
+    const time = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+
+    let meal = null;
+    if (mealRaw) {
+      const normalized = mealRaw.toUpperCase().replace(/_/g, " ").trim();
+      const compact = normalized.replace(/\s+/g, "");
+      meal = MEAL_NAMES.find(n => n === normalized || n.replace(/\s+/g, "") === compact) || null;
+      if (!meal) {
+        printLine(`Invalid meal name: ${mealRaw}. Valid: ${MEAL_NAMES.join(", ")}`, "err");
+        return;
+      }
+    }
+
+    ensureDateAnchor();
+    log.push({ type: "time", time, meal, ts: Date.now() });
+    saveLog();
+    printLine(`Added @${time}${meal ? " (" + meal + ")" : ""}.`, "dim");
+    refreshHeader();
+  }
+
+  function addCodeEntries(trimmed) {
+    const chunks = trimmed.split(",").map(c => c.trim()).filter(Boolean);
+    const parsed = [];
+
+    for (const chunk of chunks) {
+      const parts = chunk.split(/\s+/);
+      const codeRaw = parts[0].toUpperCase();
+
+      if (!CODE_RE.test(codeRaw)) {
+        printLine(`Bad entry "${chunk}": not a valid code. Nothing added.`, "err");
+        return;
+      }
+      if (!master || !master.has(codeRaw)) {
+        printLine(`Unknown code "${codeRaw}". Nothing added.`, "err");
+        return;
+      }
+
+      let mult = 1.0;
+      const rest = chunk.slice(chunk.indexOf(parts[0]) + parts[0].length).trim();
+      const multMatch = /^[*x×]\s*([0-9]*\.?[0-9]+(?:\s*[*/]\s*[0-9]*\.?[0-9]+)*)/i.exec(rest);
+      if (multMatch) {
+        mult = evalMultiplierExpression(multMatch[1]);
+      } else if (rest) {
+        printLine(`Bad multiplier in "${chunk}". Nothing added.`, "err");
+        return;
+      }
+
+      parsed.push({ type: "code", code: codeRaw, mult, ts: Date.now() });
+    }
+
+    ensureDateAnchor();
+    for (const e of parsed) log.push(e);
+    saveLog();
+    printLine(`Added ${parsed.length} entr${parsed.length === 1 ? "y" : "ies"}.`, "dim");
+    refreshHeader();
+  }
+
+  function cmd_rm(args) {
+    const n = parseInt(args.trim(), 10);
+    if (!Number.isInteger(n) || n < 1 || n > log.length) {
+      printLine(`Invalid index: ${args.trim()}`, "err");
+      return;
+    }
+    const removed = log.splice(n - 1, 1)[0];
+    saveLog();
+    printLine(`Removed #${n}: ${formatEntry(removed)}`, "dim");
+    refreshHeader();
+  }
+
+  function cmd_move(args) {
+    const parts = args.trim().split(/\s+/);
+    const n = parseInt(parts[0], 10);
+    const newline = parseInt(parts[1], 10);
+    if (!Number.isInteger(n) || n < 1 || n > log.length ||
+        !Number.isInteger(newline) || newline < 1 || newline > log.length) {
+      printLine("Usage: move <n> <newline> (both must be valid indices)", "err");
+      return;
+    }
+    const [entry] = log.splice(n - 1, 1);
+    log.splice(newline - 1, 0, entry);
+    saveLog();
+    printLine(`Moved #${n} to #${newline}.`, "dim");
+    refreshHeader();
+  }
+
+  function cmd_items(args) {
+    const dateStr = args.trim();
+    let dateIdx;
+    if (dateStr) {
+      dateIdx = findDateIndex(dateStr);
+      if (dateIdx < 0) {
+        printLine(`No date entry found for ${dateStr}.`, "err");
+        return;
+      }
+    } else {
+      dateIdx = activeDateIndex();
+      if (dateIdx < 0) {
+        printLine("No entries yet.", "dim");
+        return;
+      }
+    }
+
+    printLine(`#${dateIdx + 1}  ${formatEntry(log[dateIdx])}`);
+    const [start, end] = segmentBounds(dateIdx);
+    if (start === end) {
+      printLine("  (no entries)", "dim");
+    }
+    for (let i = start; i < end; i++) {
+      printLine(`#${i + 1}  ${formatEntry(log[i])}`);
+    }
+    printLine(formatTotalsSummary(totalsForSegment(dateIdx)), "dim");
+  }
+
+  function cmd_total(args) {
+    const dateStr = args.trim();
+    const dateIdx = dateStr ? findDateIndex(dateStr) : activeDateIndex();
+    if (dateIdx < 0) {
+      printLine(dateStr ? `No date entry found for ${dateStr}.` : "No entries yet.", "err");
+      return;
+    }
+    printLine(`${log[dateIdx].date}: ${formatTotalsSummary(totalsForSegment(dateIdx))}`);
+  }
+
+  function cmd_export(args) {
+    const dateStr = args.trim();
+    const dateIdx = dateStr ? findDateIndex(dateStr) : activeDateIndex();
+    if (dateIdx < 0) {
+      printLine(dateStr ? `No date entry found for ${dateStr}.` : "No entries yet.", "err");
+      return;
+    }
+    const [start, end] = segmentBounds(dateIdx);
+    const parts = [];
+    for (let i = start; i < end; i++) {
+      const e = log[i];
+      if (isCodeEntry(e) || isTimeEntry(e)) parts.push(formatEntry(e));
+    }
+    const codes = parts.join(", ");
+    const row = `${log[dateIdx].date},"${codes}",,,,,,,`;
+    printLine("Log row (paste after backing up the log file first):");
+    printLine(row);
+    tryCopyToClipboard(row);
+  }
+
+  function tryCopyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text)
+        .then(() => printLine("Copied to clipboard.", "dim"))
+        .catch(() => printLine("Could not copy automatically — select and copy the line above.", "dim"));
+    } else {
+      printLine("Clipboard API unavailable — select and copy the line above.", "dim");
+    }
+  }
+
+  function cmd_search(args) {
+    const query = args.trim();
+    if (!query) {
+      printLine("Usage: f <query>", "err");
+      return;
+    }
+    if (!master) {
+      printLine("Master data not loaded yet.", "err");
+      return;
+    }
+    const results = hybridSearch(masterList, query);
+    if (results.length === 0) {
+      printLine("No matches.", "dim");
+      return;
+    }
+    const capped = results.slice(0, 40);
+    printTable(capped.map(r => [r.code, r.section || "", r.option || "",
+      `${Math.round(Number(r.cal) || 0)}cal`]));
+    if (results.length > capped.length) {
+      printLine(`... and ${results.length - capped.length} more. Refine your search.`, "dim");
+    }
+  }
+
+  // ---------- search (port of hybrid_search boolean/DNF logic) ----------
+
+  function parseSearchQuery(query) {
+    let q = query.replace(/\(/g, " ( ").replace(/\)/g, " ) ");
+    const tokenRe = /"([^"]+)"|(\S+)/g;
+    const rawTokens = [];
+    let m;
+    while ((m = tokenRe.exec(q)) !== null) {
+      rawTokens.push(m[1] !== undefined ? m[1] : m[2]);
+    }
+    const ops = new Set(["and", "or", "not"]);
+    const tokens = rawTokens.map(t => {
+      if (ops.has(t.toLowerCase())) return t.toUpperCase();
+      return t;
+    });
+
+    try {
+      const [expr, pos] = parseOr(tokens, 0);
+      if (pos !== tokens.length) return parseSimple(tokens);
+      return expressionToClauses(expr);
+    } catch (e) {
+      return parseSimple(tokens);
+    }
+  }
+
+  function parseOr(tokens, pos) {
+    let [left, p] = parseAnd(tokens, pos);
+    while (p < tokens.length && tokens[p] === "OR") {
+      p++;
+      const [right, p2] = parseAnd(tokens, p);
+      left = { op: "OR", left, right };
+      p = p2;
+    }
+    return [left, p];
+  }
+
+  function parseAnd(tokens, pos) {
+    let [left, p] = parseNot(tokens, pos);
+    while (p < tokens.length && tokens[p] !== "OR" && tokens[p] !== ")") {
+      if (tokens[p] === "AND") {
+        p++;
+        if (p >= tokens.length) break;
+      }
+      const [right, p2] = parseNot(tokens, p);
+      left = { op: "AND", left, right };
+      p = p2;
+    }
+    return [left, p];
+  }
+
+  function parseNot(tokens, pos) {
+    if (pos < tokens.length && tokens[pos] === "NOT") {
+      const [expr, p] = parsePrimary(tokens, pos + 1);
+      return [{ op: "NOT", expr }, p];
+    }
+    return parsePrimary(tokens, pos);
+  }
+
+  function parsePrimary(tokens, pos) {
+    if (pos >= tokens.length) throw new Error("Unexpected end of expression");
+    const token = tokens[pos];
+    if (token === "(") {
+      const [expr, p] = parseOr(tokens, pos + 1);
+      if (p >= tokens.length || tokens[p] !== ")") throw new Error("Missing closing paren");
+      return [expr, p + 1];
+    }
+    if (token === ")" || token === "OR" || token === "AND" || token === "NOT") {
+      throw new Error("Unexpected token: " + token);
+    }
+    return [{ op: "TERM", term: token }, pos + 1];
+  }
+
+  function toDnf(expr) {
+    const op = expr.op;
+    if (op === "TERM") return expr;
+    if (op === "NOT") {
+      const inner = toDnf(expr.expr);
+      if (inner.op === "TERM") return { op: "NOT_TERM", term: inner.term };
+      if (inner.op === "NOT_TERM") return { op: "TERM", term: inner.term };
+      if (inner.op === "AND") {
+        const left = toDnf({ op: "NOT", expr: inner.left });
+        const right = toDnf({ op: "NOT", expr: inner.right });
+        return toDnf({ op: "OR", left, right });
+      }
+      if (inner.op === "OR") {
+        const left = toDnf({ op: "NOT", expr: inner.left });
+        const right = toDnf({ op: "NOT", expr: inner.right });
+        return toDnf({ op: "AND", left, right });
+      }
+      return inner;
+    }
+    if (op === "AND") {
+      const left = toDnf(expr.left);
+      const right = toDnf(expr.right);
+      if (right.op === "OR") {
+        return toDnf({ op: "OR", left: toDnf({ op: "AND", left, right: right.left }), right: toDnf({ op: "AND", left, right: right.right }) });
+      }
+      if (left.op === "OR") {
+        return toDnf({ op: "OR", left: toDnf({ op: "AND", left: left.left, right }), right: toDnf({ op: "AND", left: left.right, right }) });
+      }
+      return { op: "AND", left, right };
+    }
+    if (op === "OR") {
+      return { op: "OR", left: toDnf(expr.left), right: toDnf(expr.right) };
+    }
+    return expr;
+  }
+
+  function collectOrClauses(expr, clauses) {
+    if (expr.op === "OR") {
+      collectOrClauses(expr.left, clauses);
+      collectOrClauses(expr.right, clauses);
+    } else {
+      clauses.push(expr);
+    }
+  }
+
+  function collectAndTerms(expr, pos, neg) {
+    if (expr.op === "TERM") pos.push(expr.term);
+    else if (expr.op === "NOT_TERM") neg.push(expr.term);
+    else if (expr.op === "AND") {
+      collectAndTerms(expr.left, pos, neg);
+      collectAndTerms(expr.right, pos, neg);
+    }
+  }
+
+  function clauseFromAndExpr(expr) {
+    const pos = [], neg = [];
+    collectAndTerms(expr, pos, neg);
+    return { pos, neg };
+  }
+
+  function expressionToClauses(expr) {
+    const dnf = toDnf(expr);
+    if (dnf.op === "OR") {
+      const clauses = [];
+      collectOrClauses(dnf, clauses);
+      return clauses.map(clauseFromAndExpr);
+    }
+    return [clauseFromAndExpr(dnf)];
+  }
+
+  function parseSimple(tokens) {
+    const clauses = [];
+    let current = { pos: [], neg: [] };
+    let negateNext = false;
+    for (const t of tokens) {
+      if (t === "OR") {
+        if (current.pos.length || current.neg.length) clauses.push(current);
+        current = { pos: [], neg: [] };
+        negateNext = false;
+      } else if (t === "AND") {
+        // implicit, skip
+      } else if (t === "NOT") {
+        negateNext = true;
+      } else if (t === "(" || t === ")") {
+        // ignore in fallback mode
+      } else {
+        if (negateNext) { current.neg.push(t); negateNext = false; }
+        else current.pos.push(t);
+      }
+    }
+    if (current.pos.length || current.neg.length) clauses.push(current);
+    if (clauses.length === 0) clauses.push({ pos: [], neg: [] });
+    return clauses;
+  }
+
+  const PUNCT_RE = /[!-\/:-@[-`{-~]/g;
+
+  function normalizeForSearch(s) {
+    return String(s).toLowerCase().replace(PUNCT_RE, "");
+  }
+
+  function matchTermInRow(row, term) {
+    const termLower = term.toLowerCase().trim();
+    const code = String(row.code || "").toLowerCase();
+    const section = String(row.section || "").toLowerCase();
+    const option = String(row.option || "").toLowerCase();
+
+    if (termLower.includes(".")) {
+      return code.startsWith(termLower);
+    }
+
+    const combined = normalizeForSearch(code + " " + section + " " + option);
+    const termNormalized = normalizeForSearch(termLower);
+    return combined.includes(termNormalized);
+  }
+
+  function hybridSearch(rows, query) {
+    const clauses = parseSearchQuery(query);
+    if (!clauses.length) return rows.slice();
+
+    return rows.filter(row => {
+      for (const clause of clauses) {
+        let ok = true;
+        for (const term of clause.pos) {
+          if (!matchTermInRow(row, term)) { ok = false; break; }
+        }
+        if (ok) {
+          for (const term of clause.neg) {
+            if (matchTermInRow(row, term)) { ok = false; break; }
+          }
+        }
+        if (ok) return true;
+      }
+      return false;
+    });
+  }
+
+  // ---------- dispatch ----------
+
+  function dispatch(line) {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    printLine("> " + trimmed, "cmd");
+
+    const spaceIdx = trimmed.indexOf(" ");
+    const cmdName = (spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)).toLowerCase();
+    const rest = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1);
+
+    switch (cmdName) {
+      case "add": cmd_add(rest); break;
+      case "rm": cmd_rm(rest); break;
+      case "move": cmd_move(rest); break;
+      case "start": cmd_start(rest); break;
+      case "items": cmd_items(rest); break;
+      case "total": cmd_total(rest); break;
+      case "f": cmd_search(rest); break;
+      case "export": cmd_export(rest); break;
+      case "refresh": cmd_refresh(); break;
+      case "help": cmd_help(); break;
+      default: printLine(`Unknown command: ${cmdName} (try "help")`, "err");
+    }
+  }
+
+  document.getElementById("inputRow").addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const line = cmdInput.value;
+    cmdInput.value = "";
+    dispatch(line);
+  });
+
+  // ---------- boot ----------
+
+  printLine("Meal Tally — type 'help' for commands.", "dim");
+  refreshHeader();
+  loadMaster().then(refreshHeader);
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js")
+      .then(() => printLine("Offline cache ready (type 'refresh' to update it).", "dim"))
+      .catch(() => printLine("Offline caching unavailable in this browser.", "dim"));
+  }
+})();
+</script>
+</body>
+</html>
