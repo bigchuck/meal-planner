@@ -555,7 +555,11 @@
       if (isCodeEntry(e) || isTimeEntry(e)) parts.push(formatEntry(e));
     }
     const codes = parts.join(", ");
-    const row = `${log[dateIdx].date},"${codes}",,,,,,,`;
+    const t = totalsForSegment(dateIdx);
+    const r = (v) => Math.round(v);
+    // Log CSV column order: date,codes,cal,prot_g,carbs_g,fat_g,gi_avg,gl,sugar_g
+    // gi_avg isn't tracked by this app, so it's always written as 0.
+    const row = `${log[dateIdx].date},"${codes}",${r(t.cal)},${r(t.prot_g)},${r(t.carbs_g)},${r(t.fat_g)},0,${r(t.gl)},${r(t.sugar_g)}`;
     printLine("Log row (paste after backing up the log file first):");
     printSelectable(row);
     tryCopyToClipboard(row);
