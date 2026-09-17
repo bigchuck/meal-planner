@@ -23,6 +23,7 @@ wheels/
 .installed.cfg
 *.egg
 data/backups/
+index.html
 
 # IDEs
 .vscode/
