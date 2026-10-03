@@ -179,8 +179,16 @@ class CommandContext:
     def reload_user_prefs(self):
         """Reload user preferences from disk."""
         if self.user_prefs:
-            if not self.user_prefs.load():
-                print(f"Warning: {self.user_prefs.get_error_message()}")
+            self.user_prefs.load()
+            self.print_user_prefs_warnings()
+
+    def print_user_prefs_warnings(self):
+        """Print user preferences validation problems, if any."""
+        if self.user_prefs and self.user_prefs.validation_errors:
+            print("⚠️ WARNING: user preferences file has problems:")
+            for error in self.user_prefs.validation_errors:
+                print(f"  - {error}")
+            print()
 
     def save_workspace(self):
         """Save planning workspace to disk (auto-save)."""

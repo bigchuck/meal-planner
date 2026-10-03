@@ -39,6 +39,7 @@ def repl():
     ctx = CommandContext(MASTER_FILE, LOG_FILE, PENDING_FILE, ALIASES_FILE, 
                         THRESHOLDS_FILE, USER_PREFS_FILE, WORKSPACE_FILE,
                         STAGING_BUFFER_FILE, EMAIL_CONFIG_FILE, EMAIL_SEND_LOG)
+    ctx.print_user_prefs_warnings()
 
     import atexit
     # Register auto-save on exit

@@ -27,6 +27,7 @@ class UserPreferencesManager:
         self.log_manager = log_manager
         self._prefs: Optional[Dict[str, Any]] = None
         self._validation_errors: List[str] = []
+        self._low_confidence_periods: List[Dict[str, Any]] = []
     
     def load(self) -> bool:
         """
@@ -37,6 +38,7 @@ class UserPreferencesManager:
         """
         self._validation_errors.clear()
         self._prefs = None
+        self._low_confidence_periods = []
         
         # Check file exists
         if not self.filepath.exists():
@@ -108,6 +110,20 @@ class UserPreferencesManager:
         else:
             return 10
 
+    def get_low_confidence_periods(self) -> List[Dict[str, Any]]:
+        """
+        Get validated low-confidence logging periods.
+
+        Returns:
+            List of {'start': date, 'end': date, 'note': str}, sorted by start.
+            Empty if the section is missing or preferences not loaded.
+        """
+        return [dict(p) for p in self._low_confidence_periods]
+
+    def is_low_confidence(self, day: date) -> bool:
+        """Check whether a date falls within a low-confidence period."""
+        return any(p['start'] <= day <= p['end'] for p in self._low_confidence_periods)
+
     # =========================================================================
     # Validation
     # =========================================================================
@@ -117,7 +133,67 @@ class UserPreferencesManager:
         if not isinstance(self._prefs, dict):
             self._validation_errors.append("Root must be a JSON object")
             return
-            
+
+        self._validate_low_confidence_periods()
+
+    def _validate_low_confidence_periods(self) -> None:
+        """
+        Validate and parse the optional low_confidence_periods section.
+
+        A missing section is silent. Malformed entries are reported in
+        validation errors and skipped; valid entries are kept.
+        """
+        section = self._prefs.get('low_confidence_periods')
+        if section is None:
+            return
+
+        key = 'low_confidence_periods'
+        if not isinstance(section, list):
+            self._validation_errors.append(f"{key} must be a list")
+            return
+
+        parsed = []
+        for i, entry in enumerate(section):
+            where = f"{key}[{i}]"
+            if not isinstance(entry, dict):
+                self._validation_errors.append(f"{where}: must be an object")
+                continue
+
+            try:
+                start = date.fromisoformat(str(entry.get('start')))
+                end = date.fromisoformat(str(entry.get('end')))
+            except ValueError:
+                self._validation_errors.append(
+                    f"{where}: start/end must be YYYY-MM-DD dates"
+                )
+                continue
+
+            if end < start:
+                self._validation_errors.append(f"{where}: end before start")
+                continue
+
+            note = entry.get('note', '')
+            if not isinstance(note, str):
+                self._validation_errors.append(f"{where}: note must be a string")
+                continue
+
+            parsed.append({'start': start, 'end': end, 'note': note, 'index': i})
+
+        # Reject overlaps (keep the earlier-starting period)
+        parsed.sort(key=lambda p: p['start'])
+        kept = []
+        for p in parsed:
+            if kept and p['start'] <= kept[-1]['end']:
+                self._validation_errors.append(
+                    f"{key}[{p['index']}]: overlaps {key}[{kept[-1]['index']}]"
+                )
+                continue
+            kept.append(p)
+
+        self._low_confidence_periods = [
+            {'start': p['start'], 'end': p['end'], 'note': p['note']} for p in kept
+        ]
+
     def _create_default_file(self) -> None:
         """Create default user preferences file."""
         default = {

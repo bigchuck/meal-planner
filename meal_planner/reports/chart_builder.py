@@ -12,7 +12,9 @@ import matplotlib.pyplot as plt
 import webbrowser
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict, Any
+
+LOW_CONFIDENCE_COLOR = "#FFB000"  # amber
 
 
 class ChartBuilder:
@@ -24,6 +26,7 @@ class ChartBuilder:
     - Moving average (dashed line)
     - Gaps in data (line breaks)
     - Single-day values (marked with +/x)
+    - Low-confidence days (open amber markers)
     """
     
     def __init__(self, output_file: Path = Path("meal_plan_trend.jpg")):
@@ -37,7 +40,8 @@ class ChartBuilder:
     
     def build_from_dataframe(self, df: pd.DataFrame, window: int = 7,
                             title: Optional[str] = None,
-                            mode: str = "macro", dots=False) -> None:
+                            mode: str = "macro", dots=False,
+                            low_confidence_periods: Optional[List[Dict[str, Any]]] = None) -> None:
         """
         Build chart from DataFrame with date and nutrient columns.
         
@@ -45,6 +49,8 @@ class ChartBuilder:
             df: DataFrame with columns: date, cal, prot_g, carbs_g, fat_g, sugar_g, gl
             window: Moving average window (days)
             title: Chart title (optional)
+            low_confidence_periods: List of {'start': date, 'end': date} ranges
+                whose daily values are marked with open amber markers
         """
         if df.empty:
             print("(no data to chart)")
@@ -64,7 +70,8 @@ class ChartBuilder:
         roll_df = full_df.rolling(window=window, min_periods=window).mean()
         
         # Create the chart
-        self._create_chart(full_df, roll_df, window, title, mode, dots)
+        low_conf_mask = self._low_confidence_mask(full_df.index, low_confidence_periods)
+        self._create_chart(full_df, roll_df, window, title, mode, dots, low_conf_mask)
         
         # Open in browser
         webbrowser.open(os.path.abspath(self.output_file))
@@ -111,8 +118,17 @@ class ChartBuilder:
         
         return df
     
+    def _low_confidence_mask(self, index: pd.DatetimeIndex,
+                             periods: Optional[List[Dict[str, Any]]]) -> np.ndarray:
+        """Boolean array marking calendar dates inside any low-confidence period."""
+        mask = np.zeros(len(index), dtype=bool)
+        for p in periods or []:
+            mask |= (index >= pd.Timestamp(p["start"])) & (index <= pd.Timestamp(p["end"]))
+        return mask
+
     def _create_chart(self, daily_df: pd.DataFrame, ma_df: pd.DataFrame,
-                    window: int, title: Optional[str], mode: str = "macro", dots=False) -> None:
+                    window: int, title: Optional[str], mode: str = "macro", dots=False,
+                    low_conf_mask: Optional[np.ndarray] = None) -> None:
         """Create and save the multi-panel chart."""
         # Metrics to plot
         if mode == "micro":
@@ -165,6 +181,15 @@ class ChartBuilder:
                 label=f"MA({window})", singleton_marker="x", 
                 singleton_label=f"MA({window}) (x1)"
             )
+
+            # Open amber markers over daily values on low-confidence days
+            if low_conf_mask is not None:
+                lc = low_conf_mask & ~np.isnan(y_daily)
+                if lc.any():
+                    ax.plot(dates[lc], y_daily[lc], marker="o", linewidth=0,
+                            markersize=8, markerfacecolor="none",
+                            markeredgecolor=LOW_CONFIDENCE_COLOR, markeredgewidth=1.5,
+                            label="Low confidence", zorder=3)
             
             ax.set_ylabel(label)
             ax.grid(True, alpha=0.25)

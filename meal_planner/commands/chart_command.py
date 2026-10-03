@@ -161,9 +161,12 @@ class ChartCommand(Command):
         
         title = " - ".join(title_parts)
         
+        low_conf = self.ctx.user_prefs.get_low_confidence_periods() if self.ctx.user_prefs else []
+
         builder.build_from_dataframe(chart_df, window=window, title=title,
                                      mode="micro" if include_micro else "macro",
-                                     dots=include_dots)
+                                     dots=include_dots,
+                                     low_confidence_periods=low_conf)
     
     def _build_today_dataframe(self):
         """Build DataFrame row from pending data."""
