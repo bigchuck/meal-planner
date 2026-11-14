@@ -442,15 +442,6 @@ Subcommands:
 
                 # Extract items for this meal (in order)
                 meal_items = self._extract_meal_items_in_order(items, m_name)
-                
-                # Check for composite meals (L.* codes)
-                has_composite = any(
-                    item.get('code', '').upper().startswith('L.')
-                    for item in meal_items
-                )
-                
-                if has_composite:
-                    continue  # Skip composite meals
 
                 if code_filter:
                     if not self._meal_matches_code_filter(meal_items, code_filter):

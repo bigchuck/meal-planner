@@ -28,6 +28,7 @@ from . import inventory_command
 from . import lock_command
 from . import materialize_command
 from . import export_command
+from . import top_command
 
 __all__ = [
     'Command',

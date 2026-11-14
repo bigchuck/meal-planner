@@ -7,10 +7,13 @@ ReportBuilder, which resolves each code through master.json. This means
 the exported values reflect the same computation used in report/chart
 rather than the pre-summed columns stored in the log.
 
-Two modes:
+Modes:
   export --daily    One row per calendar date, all macros + micros summed.
   export --meals    Six CSVs (one per meal type), same columns, zero-filled
                     for dates where the meal was absent.
+  export --top <nutrient> [N]
+                    One row per day per top-N contributing food item
+                    (long format), optionally limited with --meal NAME.
 
 Date range arguments mirror the chart command:
   export --daily                        last 90 days
@@ -19,6 +22,7 @@ Date range arguments mirror the chart command:
   export --daily 2025-01-01 2025-03-31  explicit range
 """
 import re
+import shlex
 from datetime import date as date_type, timedelta
 from pathlib import Path
 
@@ -26,6 +30,9 @@ from .base import Command, register_command
 from meal_planner.reports.report_builder import ReportBuilder
 from meal_planner.parsers.code_parser import CodeParser
 from meal_planner.utils.time_utils import MEAL_NAMES
+from meal_planner.reports.contributors import (
+    NUTRIENT_KEYS, resolve_nutrient, resolve_meal, day_contributions,
+)
 from config import CHART_OUTPUT_FILE  # output directory matches chart command
 
 
@@ -79,7 +86,7 @@ class ExportCommand(Command):
     category = "Output"
     help_text = (
         "Export nutrient data to CSV "
-        "(export --daily|--meals [--history N] [start] [end])"
+        "(export --daily|--meals|--top <nutrient> [N] [--history N] [start] [end])"
     )
     overview_help = (
         "export  —  Export nutrient data to CSV for spreadsheet analysis\n"
@@ -89,6 +96,13 @@ class ExportCommand(Command):
         "  export --meals                         Six CSVs, one per meal type, zero-filled where absent\n"
         "  export --daily --history 60            Last 60 days instead of the default 90\n"
         "  export --daily 2025-01-01 2025-03-31    Explicit date range\n"
+        "  export --top carbs 5                    Top 5 carb contributors per day\n"
+        "  export --top prot_g 3 --meal lunch      Top 3 protein items per day, lunch only\n"
+        "\n"
+        "--top writes export_top_<nutrient>[_<meal>].csv, one row per day per\n"
+        "ranked item: date, rank, code, option, section, amount, servings,\n"
+        "pct_of_day, day_total. Days with no log entry are omitted. N defaults\n"
+        "to 5. Nutrient: " + ", ".join(NUTRIENT_KEYS) + " (or carbs, protein, ...).\n"
         "\n"
         "All values are recomputed via the same code path as report/chart, not\n"
         "the pre-summed log columns. Files are written next to the chart output."
@@ -112,10 +126,16 @@ class ExportCommand(Command):
             export --daily 2025-01-01
             export --daily 2025-01-01 2025-06-30
         """
-        tokens = args.strip().split() if args.strip() else []
+        try:
+            tokens = shlex.split(args) if args.strip() else []
+        except ValueError:
+            tokens = args.split()
 
         do_daily = False
         do_meals = False
+        top_nutrient = None
+        top_n = 5
+        top_meal = None
         history_days = None
         date_tokens = []
 
@@ -126,6 +146,27 @@ class ExportCommand(Command):
                 do_daily = True
             elif token.lower() == "--meals":
                 do_meals = True
+            elif token.lower() == "--top":
+                if i + 1 >= len(tokens):
+                    print("Error: --top requires a nutrient, e.g. export --top carbs 5")
+                    return
+                top_nutrient = resolve_nutrient(tokens[i + 1])
+                if top_nutrient is None:
+                    print(f"Error: Unknown nutrient '{tokens[i + 1]}'. Valid: {', '.join(NUTRIENT_KEYS)}")
+                    return
+                i += 1
+                if i + 1 < len(tokens) and tokens[i + 1].isdigit():
+                    top_n = max(1, int(tokens[i + 1]))
+                    i += 1
+            elif token.lower() == "--meal":
+                if i + 1 >= len(tokens):
+                    print("Error: --meal requires a meal name")
+                    return
+                top_meal = resolve_meal(tokens[i + 1])
+                if top_meal is None:
+                    print(f"Error: Invalid meal name '{tokens[i + 1]}'. Valid: {', '.join(MEAL_NAMES)}")
+                    return
+                i += 1
             elif token.lower() == "--history":
                 if i + 1 < len(tokens):
                     try:
@@ -141,8 +182,12 @@ class ExportCommand(Command):
                 date_tokens.append(token)
             i += 1
 
-        if not do_daily and not do_meals:
-            print("\nUsage: export --daily|--meals [--history N] [start] [end]\n")
+        if not do_daily and not do_meals and top_nutrient is None:
+            print("\nUsage: export --daily|--meals|--top <nutrient> [N] [--meal NAME] [--history N] [start] [end]\n")
+            return
+
+        if top_meal is not None and top_nutrient is None:
+            print("Error: --meal only applies to --top (use --meals for per-meal totals)")
             return
 
         if history_days is not None and date_tokens:
@@ -184,7 +229,61 @@ class ExportCommand(Command):
         if do_meals:
             self._export_meals(log_df, full_date_strs, builder, date_col, codes_col)
 
+        if top_nutrient is not None:
+            self._export_top(log_df, builder, date_col, codes_col,
+                             top_nutrient, top_n, top_meal)
+
         print()
+
+    # ------------------------------------------------------------------
+    # Top-contributor export
+    # ------------------------------------------------------------------
+
+    def _export_top(self, log_df, builder, date_col, codes_col, nutrient, top_n, meal):
+        """
+        Write export_top_<nutrient>[_<meal>].csv in long format.
+
+        For each logged date, items are ranked by their contribution to the
+        nutrient (via the shared contributors helper, same values as `top`)
+        and the top N are written one row each.
+        """
+        import pandas as pd
+
+        columns = ["date", "rank", "code", "option", "section", nutrient,
+                   "servings", "pct_of_day", "day_total"]
+        records = []
+        days_written = 0
+
+        for _, row in log_df.sort_values(date_col).iterrows():
+            entry_date = str(row[date_col])
+            day_items, day_total = day_contributions(
+                builder, str(row.get(codes_col, "")), nutrient, meal, entry_date
+            )
+            if not day_items:
+                continue
+            days_written += 1
+            ranked = sorted(day_items.values(), key=lambda c: c.amount, reverse=True)
+            for rank, item in enumerate(ranked[:top_n], 1):
+                pct = round(item.amount / day_total * 100, 1) if day_total > 0 else ""
+                records.append({
+                    "date": entry_date,
+                    "rank": rank,
+                    "code": item.code,
+                    "option": item.option,
+                    "section": item.section,
+                    nutrient: round(item.amount, 1),
+                    "servings": round(item.servings, 2),
+                    "pct_of_day": pct,
+                    "day_total": round(day_total, 1),
+                })
+
+        suffix = f"_{_meal_filename(meal)}" if meal else ""
+        filename = f"export_top_{nutrient}{suffix}.csv"
+        pd.DataFrame(records, columns=columns).to_csv(
+            CHART_OUTPUT_FILE.parent / filename, index=False
+        )
+        print(f"  {filename}  {len(records)} rows "
+              f"(top {top_n} per day over {days_written} logged days)")
 
     # ------------------------------------------------------------------
     # Daily export

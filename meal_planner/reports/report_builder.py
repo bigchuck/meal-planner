@@ -3,7 +3,7 @@ Report builder for nutrient breakdowns.
 
 Generates detailed reports showing each item's contribution to daily totals.
 """
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 import pandas as pd
 
 from meal_planner.models import DailyTotals, NutrientRow
@@ -276,14 +276,79 @@ class Report:
             List of tuples: (meal_name, first_time, DailyTotals)
             Returns None if no time markers present
         """
+        segments = self._time_segments()
+        if segments is None:
+            return None
+
+        # Categorize segments into meals
+        meal_categories = {meal: [] for meal in MEAL_NAMES}
+
+        for time_item, row_indices in segments:
+            if not row_indices:
+                continue
+
+            time_str = time_item.get("time", "05:00")
+            meal_override = time_item.get("meal_override")
+
+            meal_name = categorize_time(time_str, meal_override)
+            if meal_name:
+                meal_categories[meal_name].append((time_str, row_indices))
+
+        # Build result with subtotals
+        result = []
+        canonical_order = MEAL_NAMES
+
+        for meal_name in canonical_order:
+            segments_for_meal = meal_categories[meal_name]
+            if not segments_for_meal:
+                continue
+
+            # Get first time for this meal
+            first_time = segments_for_meal[0][0]
+
+            # Calculate subtotals for all segments in this meal
+            meal_totals = DailyTotals()
+            for _, row_indices in segments_for_meal:
+                for row_idx in row_indices:
+                    meal_totals = meal_totals + self.rows[row_idx].totals
+
+            result.append((meal_name, first_time, meal_totals))
+
+        return result if result else None
+
+    def get_row_meals(self) -> List[Optional[str]]:
+        """
+        Meal name for each entry in self.rows, using the same time-marker
+        rules as get_meal_breakdown(). Entries are None when the report has
+        no time markers or a segment's time doesn't map to a meal.
+        """
+        row_meals: List[Optional[str]] = [None] * len(self.rows)
+        segments = self._time_segments()
+        if segments is None:
+            return row_meals
+        for time_item, row_indices in segments:
+            meal_name = categorize_time(
+                time_item.get("time", "05:00"), time_item.get("meal_override")
+            )
+            for row_idx in row_indices:
+                row_meals[row_idx] = meal_name
+        return row_meals
+
+    def _time_segments(self):
+        """
+        Split display order into (time_item, [row_indices]) segments.
+
+        Returns None if there are no time markers. Rows before the first
+        marker are assigned to a synthetic 05:00 (breakfast) marker.
+        """
         if not self.display:
             return None
-        
+
         # Check if any time markers exist
         has_time_markers = any(kind == "time" for kind, _ in self.display)
         if not has_time_markers:
             return None
-        
+
         # Group items by time segments
         segments = []  # List of (time_item_dict, [row_indices])
         current_time_item = None
@@ -308,41 +373,7 @@ class Report:
         if segments and segments[0][0] is None:
             segments[0] = ({"time": "05:00"}, segments[0][1])
         
-        # Categorize segments into meals
-        meal_categories = {meal: [] for meal in MEAL_NAMES}
-
-        for time_item, row_indices in segments:
-            if not row_indices:
-                continue
-            
-            time_str = time_item.get("time", "05:00")
-            meal_override = time_item.get("meal_override")
-            
-            meal_name = categorize_time(time_str, meal_override)
-            if meal_name:
-                meal_categories[meal_name].append((time_str, row_indices))
-        
-        # Build result with subtotals
-        result = []
-        canonical_order = MEAL_NAMES
-        
-        for meal_name in canonical_order:
-            segments_for_meal = meal_categories[meal_name]
-            if not segments_for_meal:
-                continue
-            
-            # Get first time for this meal
-            first_time = segments_for_meal[0][0]
-            
-            # Calculate subtotals for all segments in this meal
-            meal_totals = DailyTotals()
-            for _, row_indices in segments_for_meal:
-                for row_idx in row_indices:
-                    meal_totals = meal_totals + self.rows[row_idx].totals
-            
-            result.append((meal_name, first_time, meal_totals))
-        
-        return result if result else None
+        return segments
     
     def format_abbreviated(self) -> List[str]:
         """
